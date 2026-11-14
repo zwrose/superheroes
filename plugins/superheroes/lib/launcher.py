@@ -39,6 +39,7 @@ import config_dir  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
+import git_origin  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import host_model  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -2680,19 +2681,14 @@ def _place_refusal(
 # question open.
 _BASE_ABSENT_MARKER = "no commit found for sha"
 
-# The forms of a GitHub remote address: scp-like ssh, ssh URL, https URL; ``.git`` optional.
-_GITHUB_REMOTE_RE = re.compile(
-    r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
-    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
-)
-
 
 def _gh_commit_lookup(owner, repo, sha, env, timeout):
-    """Ask GitHub's commits endpoint for ``sha`` with ``gh``; the completed process, or None when
-    ``gh`` could not run or timed out. Tests replace it."""
+    """Ask GitHub's commits endpoint for ``sha`` with ``gh``, pinned to github.com whatever ``GH_HOST``
+    says; the completed process, or None when ``gh`` could not run or timed out. Tests replace it."""
     try:
         return subprocess.run(
-            ["gh", "api", "repos/%s/%s/commits/%s" % (owner, repo, sha), "--jq", ".sha"],
+            # axis: the commits read is on github.com whatever GH_HOST says — see bite-proof record i2452_git_origin
+            ["gh", "api", "--hostname", "github.com", "repos/%s/%s/commits/%s" % (owner, repo, sha), "--jq", ".sha"],
             capture_output=True,
             text=True,
             env=ll.scrub_env(env),
@@ -2718,12 +2714,11 @@ def _base_on_remote(repo_root, base, env):
     )
     if url is None or url.returncode != 0:
         return None
-    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
-    if matched is None:
+    slug = git_origin.github_slug(url.stdout)
+    if slug is None:
         return None
-    asked = _gh_commit_lookup(
-        matched.group("owner"), matched.group("repo"), base, env, _WORKTREE_GIT_TIMEOUT,
-    )
+    owner, repo = slug.split("/")
+    asked = _gh_commit_lookup(owner, repo, base, env, _WORKTREE_GIT_TIMEOUT)
     if asked is None:
         return None
     if asked.returncode == 0:
@@ -2744,7 +2739,8 @@ def _gh_branch_pulls(owner, repo, branch, env, timeout):
     try:
         return subprocess.run(
             [
-                "gh", "api",
+                # axis: the branch pull-request read is on github.com whatever GH_HOST says — see bite-proof record i2452_git_origin
+                "gh", "api", "--hostname", "github.com",
                 "repos/%s/%s/pulls?state=all&head=%s:%s&per_page=100"
                 % (owner, repo, owner, urllib.parse.quote(branch, safe="")),
             ],
@@ -2767,10 +2763,10 @@ def _adopted_branch_first_pr(repo_root, branch, env):
     )
     if url is None or url.returncode != 0:
         return None
-    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
-    if matched is None:
+    slug = git_origin.github_slug(url.stdout)
+    if slug is None:
         return None
-    owner, repo = matched.group("owner"), matched.group("repo")
+    owner, repo = slug.split("/")
     asked = _gh_branch_pulls(owner, repo, branch, env, _WORKTREE_GIT_TIMEOUT)
     if asked is None or asked.returncode != 0:
         return None
@@ -2789,10 +2785,7 @@ def _adopted_branch_first_pr(repo_root, branch, env):
             return None
         head_repo = head.get("repo")
         full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
-        if (
-            head.get("ref") != branch or not isinstance(full_name, str)
-            or full_name.lower() != ("%s/%s" % (owner, repo)).lower()
-        ):
+        if head.get("ref") != branch or not git_origin.same_repository(full_name, slug):
             return None
         stamp = _listing_created_ts(row)
         if stamp is None:
@@ -3604,10 +3597,6 @@ _CONTINUES_PR_REMEDY_UNREAD = (
 )
 # `git remote get-url origin` exits 2 for "No such remote 'origin'" (a missing directory exits 128).
 _GIT_NO_SUCH_REMOTE = 2
-# The hosts whose origins are read like github.com.
-_GITHUB_HOSTS = frozenset({"github.com", "www.github.com", "ssh.github.com"})
-_CONTINUES_PR_REPO_PART = re.compile(r"[A-Za-z0-9_.-]+")
-_CONTINUES_PR_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?P<rest>.*)$", re.DOTALL)
 _LOWER_HEX40 = re.compile(r"[0-9a-f]{40}")
 _OPEN_PULLS_PAGE_SIZE = 100
 _OPEN_PULLS_MAX_PAGES = 10
@@ -3626,32 +3615,6 @@ _SURFACE_NAME_AFTER = r"(?=$|[%s]|\.(?:$|[%s]))" % (_SURFACE_DELIMS, _SURFACE_DE
 _SURFACE_BRANCH_WORD = re.compile(r"(?i)\bbranch\b")
 _SURFACE_PR_BRANCH = re.compile(r"(?i)#(\d+)(?:['’]s)?\s+branch\b")
 _SURFACE_BRANCH_OF_PR = re.compile(r"(?i)\bbranch\s+of\s+(?:PR\s*)?#(\d+)")
-
-
-def _remote_host_and_path(url):
-    """The ``(host, path)`` of a git remote URL, or None for a form that is no host (a local path,
-    ``file://``). ``path`` is everything after the host, ``""`` when the host has none."""
-    # axis: a file:// URL is a local transport whatever its authority names (file://github.com/o/r is a path, not GitHub) — see bite-proof record i2446_continues_pr
-    if url[:7].lower() == "file://":
-        return None
-    matched = _CONTINUES_PR_URL_RE.match(url)
-    if matched is not None:
-        rest = matched.group("rest")
-        slash = rest.find("/")
-        authority = rest if slash < 0 else rest[:slash]
-        tail = "" if slash < 0 else rest[slash + 1:]
-        host = authority.rsplit("@", 1)[-1]
-        if ":" in host:
-            host, port = host.split(":", 1)
-            if port.isdigit():
-                return host, tail
-            return host, ""
-        return host, tail
-    colon = url.find(":")
-    slash = url.find("/")
-    if colon < 0 or (0 <= slash < colon):
-        return None
-    return url[:colon].rsplit("@", 1)[-1], url[colon + 1:]
 
 
 def _origin_github_repo(repo_root, env):
@@ -3673,27 +3636,14 @@ def _origin_github_repo(repo_root, env):
     # axis: an origin read that fails for any other reason (a missing directory exits 128) leaves the origin unread — see bite-proof record i2446_continues_pr
     if got.returncode != 0:
         return ("unread", None)
-    split = _remote_host_and_path((got.stdout or "").strip())
-    # axis: a local path or file URL has no host and no pull requests — see bite-proof record i2446_continues_pr
-    if split is None:
-        return ("skip", None)
-    host, path = split
-    # axis: an origin on a host other than github.com, www.github.com or ssh.github.com (an SSH host alias included) is skipped, not read — see bite-proof record i2446_continues_pr
-    if host.lower() not in _GITHUB_HOSTS:
-        return ("skip", None)
-    if path.startswith("/"):
-        path = path[1:]
-    if path.endswith("/"):
-        path = path[:-1]
-    if path.endswith(".git"):
-        path = path[:-4]
-    parts = path.split("/")
-    # axis: a github.com origin that does not name exactly owner/repo leaves the pull requests unread — see bite-proof record i2446_continues_pr
-    if len(parts) != 2 or not all(
-        _CONTINUES_PR_REPO_PART.fullmatch(part) and part.strip(".") for part in parts
-    ):
+    # The one classifier decides: a local path, a file:// URL, an SSH host alias or another host is no
+    # GitHub origin (skip); a GitHub origin that does not name exactly owner/repo is unread.
+    kind, slug = git_origin.classify(got.stdout or "")
+    if kind == git_origin.GITHUB:
+        return ("github", tuple(slug.split("/")))
+    if kind == git_origin.GITHUB_UNREADABLE:
         return ("unread", None)
-    return ("github", (parts[0], parts[1]))
+    return ("skip", None)
 
 
 def _gh_open_pulls_page(owner, repo, page, env, timeout):
@@ -3723,7 +3673,7 @@ def _open_pulls(repo_root, owner, repo, env, deadline=None):
     whose head repository is not this one (a fork, or a deleted fork) is skipped: its branch is not
     this repository's to push. ``deadline`` is the launch's monotonic deadline: each page's timeout
     is clipped to what is left of it, and a read that reaches it fails as ``deadline``."""
-    want = ("%s/%s" % (owner, repo)).lower()
+    want = "%s/%s" % (owner, repo)
     rows = []
     for page in range(1, _OPEN_PULLS_MAX_PAGES + 1):
         timeout = _WORKTREE_GIT_TIMEOUT
@@ -3777,7 +3727,7 @@ def _open_pulls(repo_root, owner, repo, env, deadline=None):
             else:
                 full_name = head_repo.get("full_name")
                 # axis: with no ids, a head repository that is not the origin's own leaves the list unread, since a renamed repository and a fork cannot be told apart — see bite-proof record i2446_continues_pr
-                if not isinstance(full_name, str) or full_name.lower() != want:
+                if not git_origin.same_repository(full_name, want):
                     return [], "row-shape"
             rows.append({"number": number, "branch": ref, "head": sha})
         # axis: a read whose decoding ran past the launch deadline fails as deadline, never as a complete list — see bite-proof record i2446_continues_pr
@@ -4044,8 +3994,8 @@ def _issue_comments(repo_root, issue, env):
     )
     if url is None or url.returncode != 0:
         return None
-    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
-    if matched is None:
+    slug = git_origin.github_slug(url.stdout)
+    if slug is None:
         return None
     try:
         number = int(issue)
@@ -4053,9 +4003,11 @@ def _issue_comments(repo_root, issue, env):
         return None
     import cloud_recover
 
-    return cloud_recover._issue_comments(
-        "%s/%s" % (matched.group("owner"), matched.group("repo")), number, 1, ll.scrub_env(env), None,
-    )
+    # The read is on github.com (the origin was classified as such), so a GH_HOST naming another host
+    # is not passed on.
+    gh_env = ll.scrub_env(env)
+    gh_env.pop("GH_HOST", None)
+    return cloud_recover._issue_comments(slug, number, 1, gh_env, None)
 
 
 # The paginated comments read; tests replace it.
