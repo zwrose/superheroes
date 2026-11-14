@@ -156,8 +156,8 @@ def session_entry(row, round_no, inputs):
     rulings = inputs[1] if isinstance(inputs, (list, tuple)) and len(inputs) > 1 else {}
     cited = review_record_session.finding_decided_by(rep, outcome, rulings) if isinstance(rep, dict) else None
     # axis: a pooled outcome carries the decision the record writer cites for it, so a restored kept repeat keeps that citation for the writer's re-check — see bite-proof record wo1_scope_ruling_2478
-    if isinstance(cited, dict) and not isinstance(family.get("decidedBy"), dict):
-        family["decidedBy"] = copy.deepcopy(cited)
+    if isinstance(cited, dict) and not isinstance(session_contract.decided_by_of(family), dict):
+        session_contract.copy_decided_by_field({"decidedBy": cited}, family)
     return _entry("session", key, row, outcome, round=decided, family=family,
                   grade=dict(grade) if isinstance(grade, dict) else None, **marked)
 

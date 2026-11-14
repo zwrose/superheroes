@@ -378,8 +378,8 @@ def test_t6_a_loop_run_counts_every_finding_taken_in_and_records_a_lowered_sever
     verified = []
     real_apply = verification.apply_verdicts
 
-    def apply_spy(findings, verdicts):
-        applied = real_apply(findings, verdicts)
+    def apply_spy(findings, verdicts, ruling_keys=()):
+        applied = real_apply(findings, verdicts, ruling_keys)
         verified.extend(applied["findings"])
         return applied
 
