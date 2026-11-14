@@ -29,6 +29,40 @@ DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING)
 _COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
 
 
+RESTS_ON_RULING_FIELD = "restsOnRuling"
+# a bare "out of scope" and "not in changed material" are code-scope refutations the verifier order permits: neither matches
+_RULING_PHRASE = re.compile(
+    r"\b(?:standing[\s-]+rulings?|ruled[\s-]+(?:(?:it|this)[\s-]+)?out[\s-]+of[\s-]+scope"
+    r"|out[\s-]+of[\s-]+scope[\s-]+rulings?|scope[\s-]+rows?)\b", re.IGNORECASE)
+
+
+def ruling_rest(text, ruling_keys=()):
+    """None when ``text`` does not rest on a scope ruling, else {"findingKey": <key or None>}: the key when exactly one
+    of ``ruling_keys`` (non-blank strings) appears in the text, None when two or more do or only the ruling phrase does."""
+    # axis: a verifier reason that names exactly one standing ruling's key rests on that ruling — see bite-proof record wo1_scope_ruling_2478
+    if not isinstance(text, str):
+        return None
+    keys = ruling_keys if isinstance(ruling_keys, (list, tuple, set, frozenset)) else ()
+    named = {k for k in keys if isinstance(k, str) and k.strip() and k in text}
+    if len(named) == 1:
+        return {"findingKey": next(iter(named))}
+    # axis: a verifier reason that speaks of a standing/out-of-scope ruling rests on a ruling even with no key — see bite-proof record wo1_scope_ruling_2478
+    if len(named) > 1 or _RULING_PHRASE.search(text):
+        return {"findingKey": None}
+    return None
+
+
+def rests_on_ruling(grade, reason=None):
+    """True when ``grade`` is a wrong grade resting on a scope ruling: it carries a `restsOnRuling` dict, or (a row
+    written before the mark) its reason, or ``reason``, speaks of a ruling. Never raises."""
+    # axis: only a wrong grade can rest on a ruling, and a marked one always does — see bite-proof record wo1_scope_ruling_2478
+    if not isinstance(grade, dict) or grade.get("verdict") != "wrong":
+        return False
+    if isinstance(grade.get(RESTS_ON_RULING_FIELD), dict):
+        return True
+    return ruling_rest(grade.get("reason")) is not None or ruling_rest(reason) is not None
+
+
 def has_stated_consequence(finding):
     """True only when finding is a dict whose consequence is a string with visible content."""
     if not isinstance(finding, dict):

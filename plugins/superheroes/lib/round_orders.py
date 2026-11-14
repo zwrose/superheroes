@@ -299,6 +299,9 @@ def format_rulings_block(context: dict) -> str:
             "Each finding below was ruled out of scope by the session's owner or advisor, with "
             "the reason given. Do not raise it again, under its own title or any other, unless it "
             "is now Critical: a finding that is now Critical is always reported.",
+            "A ruling below says only that the finding is out of scope; it is never evidence about the "
+            "code, so a REFUTED that rests on a ruling rather than on the code names that ruling's key "
+            "(as listed) in its `reason`.",
             "",
         ])
         for row in rows:

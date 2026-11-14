@@ -1799,7 +1799,8 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     session) lists it; this session's own earlier record never makes it carried. A finding moves to fixed only on a
     `fixed` entry for a carried finding, checked on `head`, whose fix commit is in `head`'s history (is_ancestor
     exactly True); a shown-wrong finding also needs its own verifier wrong grade and must not be listed shown-wrong
-    in ``other``.
+    in ``other``, unless its grade rested on a scope ruling rather than the code (`finding_outcomes.rests_on_ruling`):
+    then neither guard applies and a fixed check settles it.
     Every other case keeps its outcome, with the reason saying why. A finding is never removed. Returns the findings
     and one row per entry."""
     shown_before = {_key(i) for i in _record_findings(other) if i.get("outcome") == _SHOWN_WRONG}
@@ -1816,14 +1817,16 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
         # axis: a shown-wrong carried finding enters the same chain as a left-for-owner one, so a fixed check can overrule the grade — see bite-proof record i2338_carried_record
         shown_wrong = f.get("outcome") == _SHOWN_WRONG
         grade = f.get("grade")
+        # axis: a shown-wrong that rested on a scope ruling skips both unchanged guards, since it was never shown wrong on the code — see bite-proof record wo1_scope_ruling_2478
+        on_ruling = shown_wrong and finding_outcomes.rests_on_ruling(grade, f.get("reason"))
         # axis: an undecided carried finding is re-checked by the same chain as a left-for-owner one, never by anything weaker — see bite-proof record i2321_undecided_carried
         if f.get("outcome") != _LEFT_FOR_OWNER and not undecided and not shown_wrong:
             result, why = "unchanged", "not left for the owner"
         # axis: a shown-wrong finding moves only with this session's own verifier wrong grade, never one inherited by repeat or graded otherwise — see bite-proof record i2338_carried_record
-        elif shown_wrong and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
+        elif shown_wrong and not on_ruling and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
             result, why = "unchanged", "shown wrong without this session's verifier grade"
         # axis: a finding the earlier record of another session already lists shown-wrong is never moved — see bite-proof record i2338_carried_record
-        elif shown_wrong and _key(f) in shown_before:
+        elif shown_wrong and not on_ruling and _key(f) in shown_before:
             result, why = "unchanged", "shown wrong in the earlier record"
         elif settled == "applies":
             why = f"the check found it still applies: {evidence}"
@@ -1846,7 +1849,9 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
             result = "fixed"
             reason = (f"fixed after its review at {commit[:7]}: {evidence} "
                       f"(checked against the final commit {shown} when this record was written)")
-            if shown_wrong:
+            if on_ruling:
+                reason += "; the earlier shown-wrong rested on a scope ruling, not on the code, and the fixed check settles it"
+            elif shown_wrong:
                 reason += "; this session's verifier graded it shown wrong, and the fixed check overrules that grade"
             out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
         elif result == "kept":

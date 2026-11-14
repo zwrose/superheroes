@@ -53,8 +53,8 @@ def test_e1_verifier_drop_missing_staged_id_refused_at_fold(monkeypatch):
     RD._stage_findings(state, compiled)
     real_apply = RD.verification.apply_verdicts
 
-    def fake_apply(staged, verdicts):
-        out = real_apply(staged, verdicts)
+    def fake_apply(staged, verdicts, ruling_keys=()):
+        out = real_apply(staged, verdicts, ruling_keys)
         patched = dict(out)
         patched["drops"] = list(out["drops"]) + [{"id": None, "reason": "synthetic drop"}]
         return patched
