@@ -18,6 +18,20 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## 0.49.1
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.49.1. Each step names the note it comes from.
+
+- **After switching.** **A Python break-it test a seat returns that does not load because of an indentation error is now dropped from its finding at the fold, never run, committed or restored: the round records it under the new round key `breakItMalformed`, the decision kind is `break-it-test-malformed`, and a second-test or correction result that does not load is recorded with the new reason token `not-loadable` (in the round's `secondTest.noTest` and `testCorrection`).** Nothing is owed. See [Break-it: a seat's test that does not load is dropped, not run](#break-it-a-seats-test-that-does-not-load-is-dropped-not-run).
+
+### Break-it: a seat's test that does not load is dropped, not run
+
+- An attached Python test (a `break-it-test v1` block on a finding of any taxonomy but `break-it-test`, whose path ends `.py`) whose content raises `IndentationError` (`TabError` included) under `compile(content, path, "exec", dont_inherit=True)` is malformed seat output. The panel fold drops the block from its finding (the finding stands without it, carrying no `breakItRun` or `breakItRuns`), and the test is never run, owed as a commit in the fix report or restored. Each drop adds a row `{seat, title, file, line, path, error}` to the round's `breakItMalformed` (a second-test or correction row also carries `findingKey`), one `break-it-test-malformed` decision, and one `checked` line in the review record.
+- A second-test result that does not load is recorded in `secondTest.noTest` with the reason `not-loadable` and the held finding keeps its own test; a correction that does not load is recorded in `testCorrection` with the outcome `none` and the reason `not-loadable`, and the restored test stands. A result carrying a transit or scrub redaction stamp keeps its existing handling (`transit-redacted`, `redacted`) and is never dropped for load reasons.
+- Only indentation errors in Python tests are dropped. Any other syntax error, a per-area (`break-it-test`) finding's block and a test of any other language are run as before. A caller that reads a round's keys adds `breakItMalformed`, a caller that matches decision kinds adds `break-it-test-malformed`, and a caller that matches the `noTest` or `testCorrection` reasons adds `not-loadable`.
+
 ## 0.49.0
 
 ### Before you upgrade

@@ -3779,6 +3779,22 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
+def _malformed_test_row(seat, finding, block, error, **extra):
+    """One ``breakItMalformed`` row: the seat that returned a test that does not load, the finding it rode on
+    (title, file, line), the block's path and ``break_it.load_error``'s text; ``extra`` adds ``findingKey``."""
+    finding = finding if isinstance(finding, dict) else {}
+    return dict({"seat": seat, "title": finding.get("title"), "file": finding.get("file"),
+                 "line": finding.get("line"), "path": block["path"], "error": error}, **extra)
+
+
+def _malformed_test_decision(state, rows):
+    """The one ``break-it-test-malformed`` decision for ``rows``: the count and each block path."""
+    _decision(state, "break-it-test-malformed",
+              "%d break-it test(s) a seat returned do not load (indentation error) and were dropped from their "
+              "findings, never run, committed or restored: %s"
+              % (len(rows), ", ".join(row["path"] for row in rows)))
+
+
 def _record_adapter_provenance(state, artifact, phase):
     """Persist adapter trust disclosures for the receipt/resume path (#720).
 
@@ -4145,6 +4161,20 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in the session's own working copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
+    malformed_tests = []
+    for g in break_it_raw:
+        block, kind = break_it.carried_block(g)
+        if (kind != break_it.KIND_ATTACHED or g.get(break_it.TRANSIT_FIELD) is True
+                or g.get(break_it.REDACTED_FIELD) is True):
+            continue
+        load_error = break_it.load_error(block)
+        # axis: an attached Python test that does not load (an indentation error) is dropped from its finding before it is run, so the finding stands without it — see bite-proof record wo_a_2460_break_it_unloadable
+        if load_error is not None:
+            g["suggestion"] = None
+            malformed_tests.append(_malformed_test_row(seat_sources.get(id(g), break_it.ROLE), g, block, load_error))
+    if malformed_tests:
+        _record_round_wave(state, "breakItMalformed", malformed_tests, later)
+        _malformed_test_decision(state, malformed_tests)
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
     intercepted, runs, exempt, stamped = break_it.intercept(
         break_it_raw, repo_root, head,
@@ -4823,12 +4853,16 @@ def _fold_second_test(state, config, artifact, session_dir=None):
     held_ids = {row["finding"].get("id") for row in rows}
     unmatched = sorted(rid for rid in set(by_id) | duplicated if rid not in held_ids)
     repo_root, head = _break_it_scope(session_dir, state, config)
-    copies, no_test, ran = [], [], []
+    copies, no_test, ran, malformed_tests = [], [], [], []
     for row in rows:
         held = row["finding"]
         key = _finding_identity_key(held)
         result = by_id.get(held.get("id"))
         block = break_it.carried_block(result)[0] if result is not None else None
+        # axis: a second test that does not load (an indentation error) is no new test: a stamped result keeps its carry and not-run handling, an unstamped one leaves the held test in place — see bite-proof record wo_a_2460_break_it_unloadable
+        load_error = (break_it.load_error(block) if block is not None
+                      and result.get(break_it.TRANSIT_FIELD) is not True
+                      and result.get(break_it.REDACTED_FIELD) is not True else None)
         copy_ = dict(held)
         copy_[SECOND_TEST_FIELD] = True
         if held.get("id") in duplicated:
@@ -4837,6 +4871,11 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             no_test.append({"findingKey": key, "reason": "no-result"})
         elif block is None:
             no_test.append({"findingKey": key, "reason": "no-block"})
+        elif load_error is not None:
+            no_test.append({"findingKey": key, "reason": "not-loadable"})
+            malformed = _malformed_test_row(break_it.ROLE, held, block, load_error, findingKey=key)
+            malformed_tests.append(malformed)
+            _record_round_append(state, "breakItMalformed", malformed)
         else:
             copy_["suggestion"] = result.get("suggestion")
             if result.get(break_it.REDACTED_FIELD) is True:
@@ -4864,6 +4903,8 @@ def _fold_second_test(state, config, artifact, session_dir=None):
                 ran.append({"findingKey": key, "outcome": run.get("outcome")})
         copies.append(copy_)
     _record_second_test(state, ran=ran, noTest=no_test, unmatched=unmatched)
+    if malformed_tests:
+        _malformed_test_decision(state, malformed_tests)
     _stage_second_pass(state, copies)
 
 
@@ -7351,6 +7392,15 @@ def _reviewer_test_rows(state, key):
     return rows
 
 
+def _finding_site(state, key, fallback):
+    """``(title, file, line)`` of the finding ``key``, read from the first row that holds it (its live finding, then the
+    fix-batch and audit-target rows), else from ``fallback``, else all None."""
+    for row in _reviewer_test_rows(state, key) + [fallback]:
+        if isinstance(row, dict) and row.get("title") is not None:
+            return row.get("title"), row.get("file"), row.get("line")
+    return None, None, None
+
+
 def _rewrite_reviewer_test_row(row, content, correction):
     """The per-row rewrite of the test reviewer's version: ``content`` (None leaves the test alone) into
     the carried block's body and ``reviewerTest``, ``correction`` into ``testCorrection``."""
@@ -7560,11 +7610,12 @@ def _fold_test_correction(state, config, artifact):
         if rid in by_id:
             duplicated.add(rid)
         by_id[rid] = result
-    landed, none, transit = [], [], []
+    landed, none, transit, malformed_tests = [], [], [], []
     for item in pending["items"]:
         key = item["findingKey"]
         result = by_id.get(key)
         block = break_it.carried_block(result)[0] if result is not None else None
+        load_error = break_it.load_error(block) if block is not None else None
         if key in duplicated:
             reason = "duplicate-id"
         elif result is None:
@@ -7578,6 +7629,14 @@ def _fold_test_correction(state, config, artifact):
             reason = break_it.REASON_TRANSIT_REDACTED
         elif result.get(break_it.REDACTED_FIELD) is True:
             reason = "redacted"
+        elif load_error is not None:
+            # axis: a correction that does not load (an indentation error) is no correction, checked after the stamps (a stamped one keeps its reason) and before `unchanged` — see bite-proof record wo_a_2460_break_it_unloadable
+            reason = "not-loadable"
+            held_title, held_file, held_line = _finding_site(state, key, result)
+            malformed = _malformed_test_row(break_it.ROLE, {"title": held_title, "file": held_file, "line": held_line},
+                                            block, load_error, findingKey=key)
+            malformed_tests.append(malformed)
+            _record_round_append(state, "breakItMalformed", malformed)
         elif block["content"] == item["reviewerTest"]:
             reason = "unchanged"
         else:
@@ -7595,6 +7654,8 @@ def _fold_test_correction(state, config, artifact):
             landed.append({"findingKey": key, "path": item["path"], "content": block["content"],
                            "sha256": _sha256(block["content"]), "weakened": False})
         _record_round_append(state, "testCorrection", entry)
+    if malformed_tests:
+        _malformed_test_decision(state, malformed_tests)
     if none:
         _decision(state, "break-it-correction-none",
                   "the test reviewer returned no correction, so its restored test stands: %s%s"

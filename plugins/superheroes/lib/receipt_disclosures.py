@@ -100,6 +100,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
+    "breakItMalformed": dict_list,
     "breakItKept": dict_list,
     "verifyVia": verify_via_shape,
 }
