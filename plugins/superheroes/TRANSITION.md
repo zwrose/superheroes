@@ -18,6 +18,22 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## 0.50.0
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.50.0. Each step names the note it comes from.
+
+- **After switching.** **`stack_merge.py merge` now refuses `stack-not-linear` before any request to GitHub when the stack's base has a merge queue (or the queue read fails) and a layer carries a merge commit, and `linearity-unreadable` when the layers cannot be read; an advisor straightens the stack first.** See [Stacks: straighten once at merge time for a merge-queue base](#stacks-straighten-once-at-merge-time-for-a-merge-queue-base).
+
+### Stacks: straighten once at merge time for a merge-queue base
+
+- A merge queue drops a stack whose layers carry merge commits, and builders keep merging to stay current, so an advisor now straightens the stack once at merge time when the base has a queue (any method) or the queue read fails: it rebases every layer onto the main commit the vetted bottom already contains, proves each layer's tree is unchanged, and pushes once, atomically. The recipe is `skills/showrunner/reference/merge-train.md` § Merging a stack, item 4. Builders still never rebase or force-push.
+- Two helpers carry it: `lib/merge_queue.py read --repo <o/r> --branch <base>` answers `queue` and `source` (a failed read answers `queue: true`), and `lib/stack_linear.py` has `check` (exit 0 only when the stack is linear) and `prove` (exit 0 only when every layer's tree is unchanged and no merge commit remains; it prints the `repin` lines and the one atomic `push` argv).
+- New reason tokens: `stack-not-linear` and `linearity-unreadable` from `stack_merge.py merge`, and from `stack_linear.py prove` the refusals `tree-changed`, `merge-commit-remains`, `not-on-layer-below`, `base-not-contained`, `history-shallow`, `git-failed` and `bad-argument`.
+- `stack_merge.py merge` now reads the stack's membership, the base's merge queue and each layer's commits inside its one 420-second budget. A cloud session's GraphQL refusal counts as a queue, so a cloud advisor always straightens a stack whose layers carry merge commits.
+- The straightening's force-push rides an owner's standing Canon grant only: a consuming project whose Canon holds no such entry asks its own word for that force-push, as for any force-push.
+
 ## 0.49.0
 
 ### Before you upgrade
@@ -92,7 +108,7 @@ A project's own allow rules can still hold a plain `bash <path>` call for approv
 
 - `skills/showrunner/reference/merge-train.md` § A merge train's "green" gains a paragraph, "When a merge is reported done without waiting". Where the base branch requires pull requests to be up to date (one of the section's two protection reads reports `true` and neither read failed; the classic read's 404 "Branch not protected" is an answer, any other failure is not) and `git rev-parse --verify <sha>^{tree}` prints the same tree for the merged commit and for the merged PR's head whose green the merge relied on (a stack: its top layer's head), the advisor reports the merge done and goes on without waiting for the post-merge run. The run still runs; a red one is still a red train, fixed by the same recipe, and the advisor reads its result at its next pass. A merge through a merge queue keeps the wait.
 - A failed protection read, which still counts as requiring up-to-date PRs when bringing PRs current, keeps the wait here; so do no up-to-date requirement, a failing `rev-parse`, and two different trees.
-- Showrunner duty 6's sentence "A merge train's "green" includes post-merge `main` CI" names the exception in one clause and points at that section; § Merging a stack item 6 points at it too.
+- Showrunner duty 6's sentence "A merge train's "green" includes post-merge `main` CI" names the exception in one clause and points at that section; § Merging a stack item 7 points at it too.
 
 ### Leftover rule: the refusal names a shared acceptance
 
