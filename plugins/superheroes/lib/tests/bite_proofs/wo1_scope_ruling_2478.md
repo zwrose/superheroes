@@ -398,6 +398,33 @@ FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_
 
 ---
 
+## E8 — the pooled citation: `session_entry` (`repeat_marks.py`), added by the review's fix of finding v0
+
+Axis: a pooled scope-ruling outcome carries the decision the record writer cites for it in its family snapshot, so a
+kept repeat restored from it keeps `decidedBy` for the writer's re-check. Typed by the build session at review-code's
+`apply-fixes` step.
+
+**Neutralization:** `    if isinstance(cited, dict) and not isinstance(family.get("decidedBy"), dict):` became
+`    if False and isinstance(cited, dict) and not isinstance(family.get("decidedBy"), dict):`.
+
+**Raw red** (the whole new file):
+
+```
+..............................................F...                       [100%]
+E   KeyError: 'decidedBy'
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:300: KeyError: 'decidedBy'
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e4_a_pooled_scope_ruling_carries_its_cited_decision_so_a_kept_repeat_restores_it
+1 failed, 49 passed in 0.46s
+```
+
+**Restore:** the inverse edit, back to `    if isinstance(cited, dict) and not isinstance(family.get("decidedBy"), dict):`.
+**Restore receipt:** `git diff --stat` after the restore lists only the intended fix (`repeat_marks.py` 9 +/-,
+`review_record_session.py` 7 +/-, the test file +17).
+
+**Raw green:** `50 passed in 0.46s`.
+
+---
+
 ## Final state
 
 `git status --porcelain` over the six library files shows them modified (`M`) by the intended change only; the full new test

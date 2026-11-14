@@ -290,6 +290,23 @@ def test_e3_a_record_finding_shown_wrong_on_a_ruling_pools_with_its_grade_and_re
     assert "grade" not in RM.record_entry(dict(X, findingKey="rr1:z", outcome="craft", grade={"verdict": "wrong", "reason": "r"}))
 
 
+def test_e4_a_pooled_scope_ruling_carries_its_cited_decision_so_a_kept_repeat_restores_it():
+    # axis: session_entry snapshots the decision the record writer cites for a scope-ruling outcome into the pooled
+    # family, which _record_kept_disposition restores onto a kept repeat's row (review finding v0, round 1)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    row = refuted_row(drop_grade(ON_RULING))
+    entry_ = RM.session_entry(row, 2, ({"fk-1": row}, {KEY: ruling_row()}, {}))
+    assert entry_["outcome"] == "ruling"
+    assert entry_["family"]["decidedBy"] == OWNER
+    assert entry_["family"]["decidedBy"] is not OWNER  # a copy, never the rulings log's own object
+    # healthy siblings: a code refutation pools shown-wrong with no citation, and an unfollowable ruling cites none
+    code = refuted_row(drop_grade(ON_CODE))
+    code_entry = RM.session_entry(code, 2, ({"fk-1": code}, {KEY: ruling_row()}, {}))
+    assert code_entry["outcome"] == "shown-wrong" and "decidedBy" not in code_entry["family"]
+    bare = RM.session_entry(row, 2, ({"fk-1": row}, {KEY: ruling_row(decidedBy=None)}, {}))
+    assert bare["outcome"] == "left-for-owner" and "decidedBy" not in bare["family"]
+
+
 # ---- healthy siblings of DoD-1 ----------------------------------------------------------------------------------------
 
 def test_f1_a_refuted_on_the_code_is_unmarked_and_reads_shown_wrong_as_today():

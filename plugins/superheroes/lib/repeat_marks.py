@@ -152,8 +152,13 @@ def session_entry(row, round_no, inputs):
     # axis: the pool entry carries the marker of the row the decision stands on, so an in-session repeat of an open-at-end finding reads open — see bite-proof record wo1_open_at_end_2445
     marked = {session_contract.OPEN_AT_LOOP_END_FIELD: True} \
         if isinstance(rep, dict) and "repeatKept" not in rep and _open_at_end(rep, outcome) else {}
-    return _entry("session", key, row, outcome, round=decided,
-                  family=copy.deepcopy(session_contract.disposition_family_snapshot(row)),
+    family = copy.deepcopy(session_contract.disposition_family_snapshot(row))
+    rulings = inputs[1] if isinstance(inputs, (list, tuple)) and len(inputs) > 1 else {}
+    cited = review_record_session.finding_decided_by(rep, outcome, rulings) if isinstance(rep, dict) else None
+    # axis: a pooled outcome carries the decision the record writer cites for it, so a restored kept repeat keeps that citation for the writer's re-check — see bite-proof record wo1_scope_ruling_2478
+    if isinstance(cited, dict) and not isinstance(family.get("decidedBy"), dict):
+        family["decidedBy"] = copy.deepcopy(cited)
+    return _entry("session", key, row, outcome, round=decided, family=family,
                   grade=dict(grade) if isinstance(grade, dict) else None, **marked)
 
 

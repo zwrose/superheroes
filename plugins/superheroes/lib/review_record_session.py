@@ -730,9 +730,10 @@ def _refuted_on_ruling(rep, why, rulings):
                      f"{at}); the verifier's reason: {why}"), rep
 
 
-def _finding_decided_by(rep, outcome, rulings):
+def finding_decided_by(rep, outcome, rulings):
     """`_decided_by`, except that a `ruling` read from a refuted row resting on a scope ruling cites that ruling's
-    own decision (copied), so the record writer re-checks it."""
+    own decision (copied), so the record writer re-checks it. The repeat pool (`repeat_marks.session_entry`) reads
+    the same citation, so a restored kept repeat keeps it."""
     if outcome == _RULING and rep.get("disposition") == "refuted" and not _valid_repeat_kept(rep):
         row = _scope_ruling_for(rep.get("grade"), rulings)[1]
         if row is not None:
@@ -1074,7 +1075,7 @@ def _findings_and_merges(state):
                 and sc.open_at_loop_end(rep)):
             held[sc.OPEN_AT_LOOP_END_FIELD] = True
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
-                    "decidedBy": _finding_decided_by(rep, outcome, rulings) if rep is not None else None,
+                    "decidedBy": finding_decided_by(rep, outcome, rulings) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail")), **held})
