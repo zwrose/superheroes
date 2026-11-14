@@ -18,6 +18,12 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed.** A codex review seat's last attempt now has its own silence limit, 1,800 seconds (`CODEX_LAST_ATTEMPT_SILENCE_WATCHDOG_SECONDS`; earlier attempts keep 390 s): a last attempt that has neither written output nor had a command in flight for that long is ended with the same `attempt-ended` record a watchdog end already carries (`timedOut: false`, `signalSource: "silence-watchdog"`, `silenceWatchdog: {silentSeconds, thresholdSeconds, killAt}`), and the seat forfeits as before; a review run's `run-opened` record gains `lastAttemptSilenceWatchdogSeconds`, and a run opened before the upgrade keeps no limit on its last attempt. Under the default per-attempt ceilings (900 s, the test role at most 1,800 s) a last attempt reaches its ceiling first, so the limit acts only under a longer ceiling.
+
 ## 0.49.0
 
 ### Before you upgrade
