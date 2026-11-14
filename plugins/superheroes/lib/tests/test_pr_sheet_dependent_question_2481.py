@@ -272,6 +272,31 @@ def test_g12_a_dashed_form_of_the_cards_own_number_is_always_refused(text, found
     assert problems_of(records, advisor) == [line(C1435, "option a", found)]
 
 
+def test_g13_an_option_less_card_text_no_pointer_matches_is_still_a_dependent_question():
+    # Axis: on an option-less card the recommendation is scanned, and a dependent match no pointer match overlaps is reported alone.
+    # Bites on: the recommendation of an option-less card left out of the scan, or the overlap skip applied to every match.
+    records, advisor = bundle(BIG)
+    with_pointer_item("Nothing else.", recommendation={"text": "Accept only if you pick b for item 12", "reason": "It is small."})(advisor)
+    assert problems_of(records, advisor) == [line(("items accepting", POINTER_TITLE), "recommendation", "only if you pick b for item")]
+
+
+def test_g13_text_the_pointer_check_refuses_is_reported_by_it_alone():
+    # Axis: on an option-less card a dependent match overlapping a pointer match is left to the pointer problem.
+    # Bites on: the overlap skip missing, which adds a dependent-question problem beside the pointer problem.
+    records, advisor = bundle(BIG)
+    with_pointer_item("Nothing else.", recommendation={"text": "Accept collector item 1435", "reason": "It is small."})(advisor)
+    assert problems_of(records, advisor) == [POINTER_PROBLEM.format(title=POINTER_TITLE, found="collector item 1435")]
+
+
+def test_g13_a_dependent_match_beside_a_pointer_match_is_still_reported_after_it():
+    # Axis: the skip drops only the overlapping match; a separate dependent match in the same text is reported, pointer problems first.
+    # Bites on: the overlap skip dropping every dependent match of a text that holds a pointer match.
+    records, advisor = bundle(BIG)
+    with_pointer_item("Nothing else.", recommendation={"text": "Accept", "reason": "Covered by list item 1435, the other question."})(advisor)
+    assert problems_of(records, advisor) == [POINTER_PROBLEM.format(title=POINTER_TITLE, found="list item 1435"),
+                                             line(("items accepting", POINTER_TITLE), "recommendation", "the other question")]
+
+
 def test_the_pointer_refusal_is_unchanged():
     # Axis: an option-less card that points to a list item gets exactly the pointer problem and nothing else.
     # Bites on: the pointer problems changed or joined by a dependent-question line.

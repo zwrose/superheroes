@@ -9,8 +9,9 @@ Command prefix for every run (worktree root), `-k` as per entry:
 Restore receipts are the restored lines, quoted back by a Grep-tool read after each inverse Edit.
 
 Guarded-element set (declared by the order): G1 the scan's refusal; G2 option label and consequence are scanned; G3 recommendation text and reason are scanned;
-G4 D1; G5 D2; G6 D3; G7 D4; G8 D5; G9 D6; G10 D7 (another on-sheet collector number); G11 D7's PR exemption; G12 D8 (own number allowed). No others.
-Row ids carry the element tags (`g01` to `g12`), so `-k gNN` selects an element's rows.
+G4 D1; G5 D2; G6 D3; G7 D4; G8 D5; G9 D6; G10 D7 (another on-sheet collector number); G11 D7's PR exemption; G12 D8 (own number allowed); G13 the overlap skip on option-less cards (a dependent match overlapping a pointer match is left to the pointer check). No others.
+Row ids carry the element tags (`g01` to `g13`), so `-k gNN` selects an element's rows.
+G13 was added by amendment WO-1b. That amendment added one docstring line (near `pr_sheet.py:131`) and four lines inside `_dependencies` (`:942-946`), and restored the spacing of `pointing = [`, so the `pr_sheet.py` line numbers quoted in G2 to G12 below are those of the original proof: lines above `_dependencies` (`_DEPENDS` at G4 to G9, `_AS_PR` at G11) are one higher for the docstring line, G2, G3 and G10 (`:934`, `:935`, `:938`) are now `:935`, `:936`, `:939`, and lines below the insertion are five higher (G11's `:950` is `:955`; G12's `:945` is `:950`; G1's `:1389`/`:1390` is `:1394`/`:1395`).
 
 Disclosures:
 - Captures are the runner's output with uv's one `UV_NATIVE_TLS` deprecation warning line dropped. Nothing was redacted. Each capture is far under the 32 KiB ceiling; the `DID NOT RAISE Refusal` failure bodies repeat per row and are quoted once per distinct body where they repeat.
@@ -19,7 +20,8 @@ Disclosures:
 - G4: the second D1 row (`g04-d1-if-you-chose-for-the-other`) is red on the matched text, not on a missing refusal: with D1 off, D6 still matches `the other card`, so the refusal is raised with `the other card` in place of `if you chose a for the other`.
 - G8: the `-k` was `"g08 or g01_the_field or g12"` (a wider selector than the order's per-element `-k`), so its red also shows the field case and the dashed own-number row; the `g08` row is the one that carries the element.
 - G12: the two `g12-ok-` rows are the ones that bite. The dashed control rows (`test_g12_a_dashed_form_...`) stay green under the neutralization, as designed: a dashed reference is refused with or without the exemption.
-- The order's final scoped run (eight files) is red: see "Whole scoped run" at the end. It is a finding, not a bite-proof half.
+- The original order's final scoped run (eight files) was red on two existing pointer rows; the G13 amendment resolves that. See "Whole scoped run" at the end for the original red run and the final green run.
+- G13: the red and green were run with one command over both files, `test_pr_sheet_dependent_question_2481.py` and `test_pr_sheet.py`, selected with `-k "g13 or test_a_pointer"`. `test_g13_an_option_less_card_text_no_pointer_matches_is_still_a_dependent_question` (3(a)) stays green under the neutralization, as designed: it has no pointer match, so the skip never fires; it pins that the recommendation stays scanned and that a non-overlapping match is reported.
 
 ## G1: the dependent-question problems reach the Refusal
 
@@ -313,11 +315,51 @@ FAILED ...::test_a_healthy_card_still_builds[g12-ok-the-cards-own-number-after-c
 4 passed, 43 deselected in 0.69s
 ```
 
+## G13: the overlap skip on option-less cards
+
+- **Guarded element / axis:** `pr_sheet.py:945`, `if any(hit.start() < end and start < hit.end() for start, end in pointers):` followed by `continue` (the `pointers` spans are built at `:943`, empty when the card has options). Axis: on a card with no options, a `_DEPENDS` match whose `[start, end)` span overlaps a `_POINTER` match in the same text is left out of the dependent-question problems, because the pointer problem already names that text; a match that does not overlap is still reported; a card with options is never skipped.
+- **Neutralization:** `if any(hit.start() < end and ...` became `if False and any(hit.start() < end and ...` (the overlap test never holds).
+- **Raw red** (`-k "g13 or test_a_pointer"`, both files; detectors unedited):
+
+```
+.FF.FF...                                                                [100%]
+E   assert ['items accep... ask it then'] == ['items accep... own options']
+      Left contains one more item: "dependent-question: items accepting: card 'Disclosures' recommendation depends on another question ('collector item 1...o as one card whose options name each combination, or hold this card until the other question is ruled and ask it then"
+/home/user/wt-2481/plugins/superheroes/lib/tests/test_pr_sheet_dependent_question_2481.py:288: assert ['items accep... ask it then'] == ['items accep... own options']
+E   assert ['items accep... ask it then'] == ['items accep... ask it then']
+      At index 1 diff: "dependent-question: items accepting: card 'Disclosures' recommendation depends on another question ('list item 1435'); a question must be answerable on its own: ... != "dependent-question: items accepting: card 'Disclosures' recommendation depends on another question ('the other question'); a question must be answerable on its own: ...
+/home/user/wt-2481/plugins/superheroes/lib/tests/test_pr_sheet_dependent_question_2481.py:296: assert ['items accep... ask it then'] == ['items accep... ask it then']
+E   assert (2 == 1)
+     +  where 2 = len(["items accepting: card 'Disclosures' sends the owner to a list item ('collector item 1435') instead of carrying that ... as one card whose options name each combination, or hold this card until the other question is ruled and ask it then"])
+/home/user/wt-2481/plugins/superheroes/lib/tests/test_pr_sheet.py:2375: assert (2 == 1)
+E   assert (2 == 1)
+     +  where 2 = len(["items accepting: card 'Disclosures' sends the owner to a list item ('list item 1435') instead of carrying that decis... as one card whose options name each combination, or hold this card until the other question is ruled and ask it then"])
+/home/user/wt-2481/plugins/superheroes/lib/tests/test_pr_sheet.py:2375: assert (2 == 1)
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_dependent_question_2481.py::test_g13_text_the_pointer_check_refuses_is_reported_by_it_alone
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_dependent_question_2481.py::test_g13_a_dependent_match_beside_a_pointer_match_is_still_reported_after_it
+FAILED plugins/superheroes/lib/tests/test_pr_sheet.py::test_a_pointer_is_found_wherever_an_option_less_card_shows_text[in-the-recommendation-text]
+FAILED plugins/superheroes/lib/tests/test_pr_sheet.py::test_a_pointer_is_found_wherever_an_option_less_card_shows_text[in-the-recommendation-reason]
+4 failed, 5 passed, 590 deselected in 1.04s
+```
+
+(The runner's "Full output truncated" line and the `UV_NATIVE_TLS` warning are dropped, and the two long `At index 1 diff` lines are shortened with `...` where marked; nothing was redacted.)
+
+- **Restore:** the inverse Edit, `if False and any(` back to `if any(`.
+- **Restore receipt:** a Grep read printed `945:            if any(hit.start() < end and start < hit.end() for start, end in pointers):`.
+- **Raw green** (same `-k`, same files):
+
+```
+.........                                                                [100%]
+9 passed, 590 deselected in 1.35s
+```
+
 ## Elements in no class
 
-None. G1 to G12 each have their own neutralization and red. Unproven elements: none.
+None. G1 to G13 each have their own neutralization and red. Unproven elements: none.
 
-## Whole scoped run (the order's eight-file command): RED, two existing tests
+## Whole scoped run (the order's eight-file command)
+
+### Original run, before the G13 amendment: RED, two existing tests
 
 Command: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_pr_sheet.py plugins/superheroes/lib/tests/test_pr_sheet_spec.py plugins/superheroes/lib/tests/test_pr_sheet_fixed_above_2332.py plugins/superheroes/lib/tests/test_pr_sheet_assignment_accounting_2332.py plugins/superheroes/lib/tests/test_review_template_pr.py plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py plugins/superheroes/lib/tests/test_sheet_schema.py plugins/superheroes/lib/tests/test_pr_sheet_dependent_question_2481.py -q -p no:cacheprovider --tb=line`
 
@@ -334,3 +376,16 @@ FAILED plugins/superheroes/lib/tests/test_pr_sheet.py::test_a_pointer_is_found_w
 ```
 
 Cause: `POINTER_PLACES` in `test_pr_sheet.py` (lines 2360-2361) gives an option-less items card a recommendation `{"text": "Accept collector item 1435", ...}` and `{"text": "Accept", "reason": "Covered by list item 1435."}`. The new scan reads the recommendation of every card, an option-less one included, so `collector item 1435` and `list item 1435` (D4) add a `dependent-question` problem beside the pointer problem, and those tests expect exactly one problem. The build session stopped here: no test, fixture or pattern was edited.
+
+### Final run, after the G13 amendment (WO-1b): GREEN
+
+The same command, run once at the end of the amendment:
+
+```
+........................................................................ [  5%]
+(rows elided here: 18 progress lines, every one dots only)
+.....................................................                    [100%]
+1349 passed in 143.74s (0:02:23)
+```
+
+The two pointer rows that were red now pass with no existing test, fixture or pattern edited: the amendment changed `_dependencies` in `pr_sheet.py` only. `validate_skills.py` printed `✓ skills meet token-shape rules` and `validate_stubs.py` printed `✓ all STUB markers carry an issue reference`.

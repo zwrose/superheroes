@@ -127,7 +127,8 @@ over each card's option labels and consequences and its recommendation's text an
 recognizing: a choice made on another card or item ("only if you pick b on ..."), "depending on your answer" or "the ruling ...",
 "the same choice as ...", a collector, decision or list item, or a card or question, named by number, a bare dashed reference
 such as 1435-1, "the other card" or "the other question", and the number of another collector item on the same sheet unless it
-is written as a PR (#N, PR N). A card's own collector number is not another question.
+is written as a PR (#N, PR N). A card's own collector number is not another question. On a card with no options, text the
+list-item pointer check already refuses is reported by that check alone.
 
 A spec PR has no review record (review-crew never reviews a spec), so its sheet is built from the spec's own artifacts, chosen
 only by the input's spec key: an input without it still needs --record, so a code PR missing its record still refuses. The
@@ -938,7 +939,11 @@ def _dependencies(card, own, numbers):
     bare = re.compile(r"(?<!\d)(?<!\d-)(?:" + "|".join(str(n) for n in others) + r")(?!\d)(?!-\d)") if others else None
     found_in = []
     for field, text in fields:
+        # Axis: on a card with no options, text the list-item pointer check already refuses (a _DEPENDS span overlapping a _POINTER span) is left to that check.
+        pointers = [] if card["options"] else [(p.start(), p.end()) for p in _POINTER.finditer(text)]
         for hit in _DEPENDS.finditer(text):
+            if any(hit.start() < end and start < hit.end() for start, end in pointers):
+                continue
             if hit.group("numbered") and own is not None:
                 digits = re.search(r"(\d+)(-\d+)?", hit.group(0))
                 # Axis: a card's own collector number, written without a dash part, is not another question; D8.
@@ -1378,7 +1383,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
         places.append("closesSpec")
         owners.append(None)
-    pointing =[f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
+    pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
     numbers = {it["number"] for it in advisor.get("collectorItems", [])}
