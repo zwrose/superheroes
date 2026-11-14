@@ -21,6 +21,7 @@ DECISION_KINDS = (
     "break-it-kept",
     "break-it-restore-failed",
     "break-it-run",
+    "break-it-test-malformed",
     "break-it-test-mismatch",
     "break-it-test-restored",
     "cannot-certify",

@@ -3779,6 +3779,22 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
+def _malformed_test_row(seat, finding, block, error, **extra):
+    """One ``breakItMalformed`` row: the seat that returned a test that does not load, the finding it rode on
+    (title, file, line), the block's path and ``break_it.load_error``'s text; ``extra`` adds ``findingKey``."""
+    finding = finding if isinstance(finding, dict) else {}
+    return dict({"seat": seat, "title": finding.get("title"), "file": finding.get("file"),
+                 "line": finding.get("line"), "path": block["path"], "error": error}, **extra)
+
+
+def _malformed_test_decision(state, rows):
+    """The one ``break-it-test-malformed`` decision for ``rows``: the count and each block path."""
+    _decision(state, "break-it-test-malformed",
+              "%d break-it test(s) a seat returned do not load (indentation error) and were dropped from their "
+              "findings, never run, committed or restored: %s"
+              % (len(rows), ", ".join(row["path"] for row in rows)))
+
+
 def _record_adapter_provenance(state, artifact, phase):
     """Persist adapter trust disclosures for the receipt/resume path (#720).
 
@@ -4145,6 +4161,20 @@ def _fold_panel(state, config, artifact, session_dir=None):
     incomplete = bool(missing_dims)
     # axis: the break-it tests run in the session's own working copy BEFORE compile; compiling `raw` would drop a not-yet-existing test file as out of scope
     repo_root, head = _break_it_scope(session_dir, state, config)
+    malformed_tests = []
+    for g in break_it_raw:
+        block, kind = break_it.carried_block(g)
+        if (kind != break_it.KIND_ATTACHED or g.get(break_it.TRANSIT_FIELD) is True
+                or g.get(break_it.REDACTED_FIELD) is True):
+            continue
+        load_error = break_it.load_error(block)
+        # axis: an attached Python test that does not load (an indentation error) is dropped from its finding before it is run, so the finding stands without it — see bite-proof record wo_a_2460_break_it_unloadable
+        if load_error is not None:
+            g["suggestion"] = None
+            malformed_tests.append(_malformed_test_row(seat_sources.get(id(g), break_it.ROLE), g, block, load_error))
+    if malformed_tests:
+        _record_round_wave(state, "breakItMalformed", malformed_tests, later)
+        _malformed_test_decision(state, malformed_tests)
     # axis: a break-it python run executes under the project's own interpreter launcher, read from the calibrated `breakItInterpreter` key when set, else from the verify command, never a PATH python — see bite-proof records wo_3_1910_break_it_interpreter and wo_1_1961_break_it_interpreter_key
     intercepted, runs, exempt, stamped = break_it.intercept(
         break_it_raw, repo_root, head,
@@ -4823,12 +4853,16 @@ def _fold_second_test(state, config, artifact, session_dir=None):
     held_ids = {row["finding"].get("id") for row in rows}
     unmatched = sorted(rid for rid in set(by_id) | duplicated if rid not in held_ids)
     repo_root, head = _break_it_scope(session_dir, state, config)
-    copies, no_test, ran = [], [], []
+    copies, no_test, ran, malformed_tests = [], [], [], []
     for row in rows:
         held = row["finding"]
         key = _finding_identity_key(held)
         result = by_id.get(held.get("id"))
         block = break_it.carried_block(result)[0] if result is not None else None
+        # axis: a second test that does not load (an indentation error) is no new test: a stamped result keeps its carry and not-run handling, an unstamped one leaves the held test in place — see bite-proof record wo_a_2460_break_it_unloadable
+        load_error = (break_it.load_error(block) if block is not None
+                      and result.get(break_it.TRANSIT_FIELD) is not True
+                      and result.get(break_it.REDACTED_FIELD) is not True else None)
         copy_ = dict(held)
         copy_[SECOND_TEST_FIELD] = True
         if held.get("id") in duplicated:
@@ -4837,6 +4871,11 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             no_test.append({"findingKey": key, "reason": "no-result"})
         elif block is None:
             no_test.append({"findingKey": key, "reason": "no-block"})
+        elif load_error is not None:
+            no_test.append({"findingKey": key, "reason": "not-loadable"})
+            malformed = _malformed_test_row(break_it.ROLE, held, block, load_error, findingKey=key)
+            malformed_tests.append(malformed)
+            _record_round_append(state, "breakItMalformed", malformed)
         else:
             copy_["suggestion"] = result.get("suggestion")
             if result.get(break_it.REDACTED_FIELD) is True:
@@ -4864,6 +4903,8 @@ def _fold_second_test(state, config, artifact, session_dir=None):
                 ran.append({"findingKey": key, "outcome": run.get("outcome")})
         copies.append(copy_)
     _record_second_test(state, ran=ran, noTest=no_test, unmatched=unmatched)
+    if malformed_tests:
+        _malformed_test_decision(state, malformed_tests)
     _stage_second_pass(state, copies)
 
 
@@ -7351,6 +7392,15 @@ def _reviewer_test_rows(state, key):
     return rows
 
 
+def _finding_site(state, key, fallback):
+    """``(title, file, line)`` of the finding ``key``, read from the first row that holds it (its live finding, then the
+    fix-batch and audit-target rows), else from ``fallback``, else all None."""
+    for row in _reviewer_test_rows(state, key) + [fallback]:
+        if isinstance(row, dict) and row.get("title") is not None:
+            return row.get("title"), row.get("file"), row.get("line")
+    return None, None, None
+
+
 def _rewrite_reviewer_test_row(row, content, correction):
     """The per-row rewrite of the test reviewer's version: ``content`` (None leaves the test alone) into
     the carried block's body and ``reviewerTest``, ``correction`` into ``testCorrection``."""
@@ -7560,11 +7610,12 @@ def _fold_test_correction(state, config, artifact):
         if rid in by_id:
             duplicated.add(rid)
         by_id[rid] = result
-    landed, none, transit = [], [], []
+    landed, none, transit, malformed_tests = [], [], [], []
     for item in pending["items"]:
         key = item["findingKey"]
         result = by_id.get(key)
         block = break_it.carried_block(result)[0] if result is not None else None
+        load_error = break_it.load_error(block) if block is not None else None
         if key in duplicated:
             reason = "duplicate-id"
         elif result is None:
@@ -7578,6 +7629,14 @@ def _fold_test_correction(state, config, artifact):
             reason = break_it.REASON_TRANSIT_REDACTED
         elif result.get(break_it.REDACTED_FIELD) is True:
             reason = "redacted"
+        elif load_error is not None:
+            # axis: a correction that does not load (an indentation error) is no correction, checked after the stamps (a stamped one keeps its reason) and before `unchanged` — see bite-proof record wo_a_2460_break_it_unloadable
+            reason = "not-loadable"
+            held_title, held_file, held_line = _finding_site(state, key, result)
+            malformed = _malformed_test_row(break_it.ROLE, {"title": held_title, "file": held_file, "line": held_line},
+                                            block, load_error, findingKey=key)
+            malformed_tests.append(malformed)
+            _record_round_append(state, "breakItMalformed", malformed)
         elif block["content"] == item["reviewerTest"]:
             reason = "unchanged"
         else:
@@ -7595,6 +7654,8 @@ def _fold_test_correction(state, config, artifact):
             landed.append({"findingKey": key, "path": item["path"], "content": block["content"],
                            "sha256": _sha256(block["content"]), "weakened": False})
         _record_round_append(state, "testCorrection", entry)
+    if malformed_tests:
+        _malformed_test_decision(state, malformed_tests)
     if none:
         _decision(state, "break-it-correction-none",
                   "the test reviewer returned no correction, so its restored test stands: %s%s"
@@ -12077,7 +12138,8 @@ def _stage_apply_fixes_step(session_dir, state, pending):
     if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:
         pr_body_stage.stage(session_dir)
     snapshot = _staged_pr_body_sha256(session_dir)
-    if snapshot is not None:
+    # axis: a snapshot already held belongs to this same step re-emitted (a new step pops it on entry), so the body edit made since the first emission still counts at the fold
+    if snapshot is not None and "_prBodyAtStep" not in state:
         state["_prBodyAtStep"] = snapshot
     fields = _apply_fixes_payload_fields(session_dir, state, pending["round"], pending["attempt"])
     pending["payload"] = dict(pending.get("payload") or {}, **fields)
@@ -12654,6 +12716,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
 # fixer work from it. `break-it-change` runs the corrected test, puts it on the staged finding and its
 # ledger entry in place of the carried block, records the run beside the first, and clears the pending
 # verifier orders so the next `next` re-emits them at a fresh attempt from the changed copies.
+#
+# The same verb is accepted at a fix step that is not restore-only: the test is then changed on every row
+# that holds the finding (the fix batch, the audit target, the live finding and the ledger entry), the
+# pending fix step is dropped and re-emitted at a fresh attempt from the changed rows, and the step's start
+# heads and PR-body snapshot are kept.
 
 BREAK_IT_CHANGE_NOT_AT_VERIFIERS = "break-it-change-not-at-verifiers"
 BREAK_IT_CHANGE_FINDING_UNKNOWN = "break-it-change-finding-unknown"
@@ -12676,6 +12743,20 @@ def _break_it_change_target(state, ref):
         key = _finding_identity_key(finding)
         if key and ref in (numbered["id"], key):
             return numbered["id"], finding, key
+    return None, None, None
+
+
+def _break_it_change_fix_target(state, ref):
+    """``(row id or key, row, finding key)`` of the ``_fixBatch`` row the fix report's resolver maps ``ref``
+    to; ``(None, None, None)`` when it maps none (an id two rows share maps none; the finding key does)."""
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list) or not isinstance(ref, str) or not ref:
+        return None, None, None
+    key = _slice_finding_resolver(batch).get(ref)
+    for row in batch:
+        if key and isinstance(row, dict) and _finding_identity_key(row) == key:
+            rid = row.get("id")
+            return (rid if isinstance(rid, str) and rid else key), row, key
     return None, None, None
 
 
@@ -12737,32 +12818,40 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         return refusal
     rnd = state.get("round")
     pending = state.get("pending")
-    # axis: the verb changes a test only while the verifiers' orders are the open step; at any other step the copies it rewrites are no longer the ones a verifier reads
-    if state.get("step") != round_phases.P_VERIFIERS or state.get("terminal"):
+    step = state.get("step")
+    at_fix_step = (step == P_APPLY_FIXES and not isinstance(state.get(TEST_RESTORE_FIELD), dict)
+                   and not isinstance(state.get(TEST_CORRECTION_PENDING_FIELD), dict))
+    # axis: the verb changes a test only while the verifiers' orders or a fix step (not a restore-only one) are the open step; at any other step the copies it rewrites are not the ones a reader of the test takes
+    if not (step == round_phases.P_VERIFIERS or at_fix_step) or state.get("terminal"):
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NOT_AT_VERIFIERS,
-                           phase=state.get("step"), rnd=rnd)
-    staged_id, staged, key = _break_it_change_target(state, finding_ref)
+                           phase=step, rnd=rnd)
+    phase = P_APPLY_FIXES if at_fix_step else P_VERIFIERS
+    if at_fix_step:
+        # axis: at a fix step the finding is named the way the fix report names it, through the slice's resolver; never by the positional verifier ids
+        staged_id, staged, key = _break_it_change_fix_target(state, finding_ref)
+    else:
+        staged_id, staged, key = _break_it_change_target(state, finding_ref)
     if staged is None:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_FINDING_UNKNOWN,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     block, _kind = break_it.carried_block(staged)
     if not isinstance(staged.get(break_it.RUN_FIELD), dict) or block is None:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NO_TEST,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     if not isinstance(why, str) or not why.strip():
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_WHY_MISSING,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     why = why.strip()
     try:
         with open(content_file, "rb") as fh:
             content = fh.read().decode("utf-8")
     except (OSError, ValueError, TypeError):
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNREADABLE,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
     if sha == block["sha256"]:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNCHANGED,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     config = state["config"]
     changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": sha}
     repo_root, head = _break_it_scope(session_dir, state, config)
@@ -12771,7 +12860,12 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         repo_root, head, changed, scratch=session_dir, interpreter=break_it.resolve_interpreter(config))
     text = _break_it_block_text(changed, content)
     # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
-    _rewrite_break_it_copy(staged, text, record, why)
+    if at_fix_step:
+        # axis: at a fix step every row that holds the finding takes the one change, so the fix batch, the audit target and the live finding never differ
+        for row in _reviewer_test_rows(state, key):
+            _rewrite_break_it_copy(row, text, record, why)
+    else:
+        _rewrite_break_it_copy(staged, text, record, why)
     _carry_break_it_change_to_ledger(state, key, text, record, why)
     _record_round_append(state, "breakItRuns", dict(
         record, title=staged.get("title"), file=staged.get("file"),
@@ -12780,11 +12874,11 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
               "the break-it test of %s (%s) changed: %s; the new run %s"
               % (staged_id, key, why, record.get("outcome")))
     superseded = pending.get("attempt") if isinstance(pending, dict) else None
-    # axis: the verifiers' orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies
-    if isinstance(pending, dict) and pending.get("phase") == P_VERIFIERS:
+    # axis: the orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies; a fix step keeps its start heads, since commits already made in it still count
+    if isinstance(pending, dict) and pending.get("phase") == phase:
         state["pending"] = None
     journal_entry = _journal_entry_for_commit(
-        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=P_VERIFIERS, round=rnd,
+        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=phase, round=rnd,
         attempt=superseded, supersededAttempt=superseded, finding=staged_id, findingKey=key,
         contentSha256=sha, runOutcome=record.get("outcome"))
     try:
@@ -12793,7 +12887,7 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=P_VERIFIERS,
+        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=phase,
                                         rnd=rnd, attempt=superseded)
     return {"ok": True, "finding": staged_id, "run": record}
 
