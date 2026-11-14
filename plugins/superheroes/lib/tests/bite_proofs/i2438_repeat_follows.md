@@ -1,6 +1,6 @@
 # Bite-proof record — a kept repeat follows its earlier finding's current outcome (#2438)
 
-Detector file: `plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one production file (`plugins/superheroes/lib/review_record.py` or `plugins/superheroes/lib/review_record_session.py`), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2438 -m pytest '<exact node id>' -q`, one test node each (a parametrized function whose every case guards the same line runs as the one function and says so); output captured whole; the `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. No secret, token, URL or personal data appears in any capture, so nothing is redacted. Entries 1 to 17 are the seventeen guarded elements the order declared, none grouped. The restore receipt of each entry is the restored line, quoted from a `grep -n` run on its own after the inverse edit; the green run follows it.
+Detector file: `plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one production file (`plugins/superheroes/lib/review_record.py` or `plugins/superheroes/lib/review_record_session.py`), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2438 -m pytest '<exact node id>' -q`, one test node each (a parametrized function whose every case guards the same line runs as the one function and says so); output captured whole; the `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. No secret, token, URL or personal data appears in any capture, so nothing is redacted. Entries 1 to 17 are the seventeen guarded elements the order declared, none grouped. The restore receipt of entries 1 to 8 is the restored line, quoted from a `grep -n` run on its own after the inverse edit; the green run follows it. Entries 9 to 17 use the whole-file `git diff` receipt (`git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, run as its own plain command after the inverse edit, printing nothing) because the line-search receipt was refused by a permission check.
 
 The detectors the entries name are the tests that carry a `# bite-proof:` line in the detector file. Line numbers are those of the committed first pass (`0cba97ba`).
 
@@ -665,7 +665,7 @@ FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::
 ```
 
 **Restore:** the inverse edit put `changed = dict(f)` back (the edit tool reported success).
-**Restore receipt:** NOT PRODUCED. The `grep -n` that was to quote the restored line was refused ("This command requires approval", refusedBy permission) and was not retried in any form. The green run below passed, which is the only evidence the restore held; the orchestrator's final `git diff 0cba97baf1c41e2b6914bceee13502f3915ba0a3 -- <the two production files>` is the mechanical receipt.
+**Restore receipt:** the earlier dispatch's `grep -n` was refused (refusedBy permission) and was not retried in any form. The receipt is now the whole-file one: `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, run on its own after the file was restored, printed nothing (empty output, exit 0).
 
 **Raw green** (exit 0):
 
@@ -674,7 +674,381 @@ FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::
 3 passed in 0.33s
 ```
 
-## Not run
+## 10. Eligibility: the outcome still equals `kept.outcome` (`review_record.py:1898`, `f.get("outcome") != kept.get("outcome")`)
 
-Entries 10 to 17 (eligibility: outcome still equals `kept.outcome`; eligibility: `decidedBy`; eligibility: a carried check names the repeat; eligibility: the earlier finding reads `fixed`; the verdict read from `kept.verdict`; a repeat that already reads `fixed` is skipped; the chain fixed point; the placement after `_recheck_carried`) were not run: the order stopped at the refusal named under entry 9. They carry no red and no green, so none of them is proven by this record.
+- **Axis:** a repeat whose outcome is no longer the one its kept mark holds is left as the follow found it.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E6-outcome-is-no-longer-the-kept-one]`, the one case, run alone.
+- **Neutralization:** `            if (i in handled or not isinstance(kept, dict) or f.get("outcome") != kept.get("outcome")` became `            if (i in handled or not isinstance(kept, dict)` (the clause removed, the continuation lines unchanged).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E6-outcome-is-no-longer-the-kept-one] _
+
+over = {'outcome': 'craft', 'repeatOf': {'findingKey': 'rr1:71df46e158ff0278476bc8e3c9417b66', 'id': 'f-1', 'fixHolds': None, 'kept': {'outcome': 'left-for-owner', 'verdict': 'wrong'}}}
+checks = []
+
+    @pytest.mark.parametrize("over, checks", [
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept(LFO, "wrong"))), [], id="E6-outcome-is-no-longer-the-kept-one"),
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept("craft", "wrong")),
+                          decidedBy={"kind": "canon", "ref": "c1"}), [], id="E7-carries-a-decidedBy"),
+        pytest.param({}, [APPLIES], id="E8-a-carried-check-names-the-repeat"),
+        pytest.param(dict(repeatOf=mark()), [], id="E9-no-kept-mark"),
+    ])
+    def test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it(over, checks):
+        # axis: only a repeat still at its kept outcome, with no cited decision, no carried check naming it and a kept mark is read
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat(**over)
+        rec = build([X_FIXED, given], checks)
+        r = by_id(rec)["f-2"]
+>       assert r["outcome"] == given["outcome"]
+E       AssertionError: assert 'fixed' == 'craft'
+E         
+E         - craft
+E         + fixed
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E6-outcome-is-no-longer-the-kept-one]
+1 failed in 0.32s
+```
+
+**Restore:** the inverse edit put `or f.get("outcome") != kept.get("outcome")` back on the line.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.28s
+```
+
+## 11. Eligibility: `decidedBy` (`review_record.py:1899`, `session_contract.decided_by_of(f) is not None`)
+
+- **Axis:** a repeat that cites a decision is left as the follow found it.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E7-carries-a-decidedBy]`, the one case, run alone.
+- **Neutralization:** `                    or f.get("outcome") == _FIXED or session_contract.decided_by_of(f) is not None` became `                    or f.get("outcome") == _FIXED`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E7-carries-a-decidedBy] _
+
+over = {'outcome': 'craft', 'repeatOf': {'findingKey': 'rr1:71df46e158ff0278476bc8e3c9417b66', 'id': 'f-1', 'fixHolds': None, 'kept': {'outcome': 'craft', 'verdict': 'wrong'}}, 'decidedBy': {'kind': 'canon', 'ref': 'c1'}}
+checks = []
+
+    @pytest.mark.parametrize("over, checks", [
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept(LFO, "wrong"))), [], id="E6-outcome-is-no-longer-the-kept-one"),
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept("craft", "wrong")),
+                          decidedBy={"kind": "canon", "ref": "c1"}), [], id="E7-carries-a-decidedBy"),
+        pytest.param({}, [APPLIES], id="E8-a-carried-check-names-the-repeat"),
+        pytest.param(dict(repeatOf=mark()), [], id="E9-no-kept-mark"),
+    ])
+    def test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it(over, checks):
+        # axis: only a repeat still at its kept outcome, with no cited decision, no carried check naming it and a kept mark is read
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat(**over)
+        rec = build([X_FIXED, given], checks)
+        r = by_id(rec)["f-2"]
+>       assert r["outcome"] == given["outcome"]
+E       AssertionError: assert 'fixed' == 'craft'
+E         
+E         - craft
+E         + fixed
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E7-carries-a-decidedBy]
+1 failed in 0.35s
+```
+
+**Restore:** the inverse edit put `or session_contract.decided_by_of(f) is not None` back after `or f.get("outcome") == _FIXED`.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.33s
+```
+
+## 12. Eligibility: a carried check names the repeat (`review_record.py:1900`, `any(c["key"] in (...) for c in checks)`)
+
+- **Axis:** a repeat that a carried check names (by finding key or id) is left to `_recheck_carried`'s decision, not followed.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E8-a-carried-check-names-the-repeat]`, the one case, run alone.
+- **Neutralization:** `                    or any(c["key"] in (f.get(session_contract.FINDING_KEY_FIELD), f.get("id")) for c in checks)):` became `                    or False):`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E8-a-carried-check-names-the-repeat] _
+
+over = {}
+checks = [{'key': 'f-2', 'settled': 'applies', 'commit': None, 'checkedHead': None, ...}]
+
+    @pytest.mark.parametrize("over, checks", [
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept(LFO, "wrong"))), [], id="E6-outcome-is-no-longer-the-kept-one"),
+        pytest.param(dict(outcome="craft", repeatOf=mark(kept=kept("craft", "wrong")),
+                          decidedBy={"kind": "canon", "ref": "c1"}), [], id="E7-carries-a-decidedBy"),
+        pytest.param({}, [APPLIES], id="E8-a-carried-check-names-the-repeat"),
+        pytest.param(dict(repeatOf=mark()), [], id="E9-no-kept-mark"),
+    ])
+    def test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it(over, checks):
+        # axis: only a repeat still at its kept outcome, with no cited decision, no carried check naming it and a kept mark is read
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat(**over)
+        rec = build([X_FIXED, given], checks)
+        r = by_id(rec)["f-2"]
+>       assert r["outcome"] == given["outcome"]
+E       AssertionError: assert 'fixed' == 'left-for-owner'
+E         
+E         - left-for-owner
+E         + fixed
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t5_e6_to_e9_an_ineligible_repeat_is_left_as_the_follow_found_it[E8-a-carried-check-names-the-repeat]
+1 failed in 0.27s
+```
+
+**Restore:** the inverse edit put the `any(c["key"] in (...) for c in checks)` clause back in place of `False`.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.28s
+```
+
+## 13. Eligibility: the earlier finding reads `fixed` (`review_record.py:1904`, `g.get("outcome") != _FIXED`)
+
+- **Axis:** every earlier outcome other than `fixed` leaves the repeat as it is; here the earlier finding is still `left-for-owner`.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t4_e1_to_e5_a_repeat_whose_earlier_finding_does_not_read_fixed_is_unchanged[E1-earlier-still-left-for-owner]`, the one case, run alone.
+- **Neutralization:** `            if g is None or g is f or g.get("outcome") != _FIXED:` became `            if g is None or g is f:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t4_e1_to_e5_a_repeat_whose_earlier_finding_does_not_read_fixed_is_unchanged[E1-earlier-still-left-for-owner] _
+
+earlier = {'id': 'f-1', 'title': 'Unchecked index', 'severity': 'Important', 'file': 'a.py', ...}
+checks = [], kw = {}, cards = ['f-1']
+
+    @pytest.mark.parametrize("earlier, checks, kw, cards", [
+        pytest.param(X, [], {}, ["f-1"], id="E1-earlier-still-left-for-owner"),
+        pytest.param(dict(X, outcome=None, reason="still open"), [], {}, ["f-2"], id="E2-earlier-open"),
+        pytest.param(dict(X, outcome="craft", reason="a craft call"), [], {}, ["f-2"], id="E3-earlier-craft"),
+        pytest.param(dict(X, outcome="ruling", reason="the owner ruled it out of scope"), [], {}, ["f-2"],
+                     id="E3-earlier-ruling"),
+        pytest.param(X, [entry(settled="applies")], {}, ["f-1"], id="E4-check-applies"),
+        pytest.param(X, [entry(settled="unsettled")], {}, ["f-1"], id="E4-check-unsettled"),
+        pytest.param(X, [entry(checkedHead=THIRD)], {}, ["f-1"], id="E4-check-on-another-head"),
+        pytest.param(X, [entry()], {"ancestor": False}, ["f-1"], id="E4-fix-not-in-history"),
+        pytest.param(None, [], {}, ["f-2"], id="E5-earlier-not-in-the-record"),
+    ])
+    def test_t4_e1_to_e5_a_repeat_whose_earlier_finding_does_not_read_fixed_is_unchanged(earlier, checks, kw, cards):
+        # axis: the follow runs only when the earlier finding reads fixed in this record; every other case leaves the repeat and its card
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat()
+        rec = build([given] if earlier is None else [earlier, given], checks, **kw)
+        r = by_id(rec)["f-2"]
+>       assert (r["outcome"], r["reason"], r["repeatOf"]) == (LFO, OLD, given["repeatOf"])
+E       AssertionError: assert ('fixed', 're...t': 'wrong'}}) == ('left-for-ow...t': 'wrong'}})
+E         
+E         At index 0 diff: 'fixed' != 'left-for-owner'
+E         Use -v to get more diff
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:150: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t4_e1_to_e5_a_repeat_whose_earlier_finding_does_not_read_fixed_is_unchanged[E1-earlier-still-left-for-owner]
+1 failed in 0.28s
+```
+
+**Restore:** the inverse edit put `or g.get("outcome") != _FIXED` back on the line.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.27s
+```
+
+## 14. The verdict is read from `kept.verdict`, never from `grade` (`review_record.py:1907`)
+
+- **Axis:** the verdict that decides the follow is the one in the kept mark; a repeat whose kept verdict is none but whose `grade` says `wrong` keeps its outcome.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t5_e11_the_verdict_is_read_from_the_kept_mark_never_from_the_grade`.
+- **Neutralization:** `            verdict, old = kept.get("verdict"), f.get("reason")` became `            verdict, old = (f.get("grade") or {}).get("verdict"), f.get("reason")`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_t5_e11_the_verdict_is_read_from_the_kept_mark_never_from_the_grade ____
+
+    def test_t5_e11_the_verdict_is_read_from_the_kept_mark_never_from_the_grade():
+        # axis: the repeat's own grade is not read at write time; a wrong grade beside a kept verdict of none keeps the outcome
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat(verdict=None, grade={"verdict": "wrong", "reason": "the cited line does not exist"})
+        rec = build([X_FIXED, given])
+        r = by_id(rec)["f-2"]
+>       assert r["outcome"] == LFO
+E       AssertionError: assert 'fixed' == 'left-for-owner'
+E         
+E         - left-for-owner
+E         + fixed
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:183: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t5_e11_the_verdict_is_read_from_the_kept_mark_never_from_the_grade
+1 failed in 0.29s
+```
+
+**Restore:** the inverse edit put `kept.get("verdict")` back.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.28s
+```
+
+## 15. A repeat that already reads `fixed` is skipped (`review_record.py:1899`, `f.get("outcome") == _FIXED`)
+
+- **Axis:** a repeat already at `fixed` has nothing to follow, so its reason and its `repeatOf` are not rewritten.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t5_e13_a_repeat_that_already_reads_fixed_keeps_its_reason`.
+- **Neutralization:** `                    or f.get("outcome") == _FIXED or session_contract.decided_by_of(f) is not None` became `                    or session_contract.decided_by_of(f) is not None`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_t5_e13_a_repeat_that_already_reads_fixed_keeps_its_reason ________
+
+    def test_t5_e13_a_repeat_that_already_reads_fixed_keeps_its_reason():
+        # axis: a repeat already at fixed has nothing to follow, so its reason is not rewritten
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        given = repeat("fixed", reason="repeat of f-1; keeps its earlier outcome (fixed); the verifier found the fix still holds")
+        rec = build([X_FIXED, given])
+        r = by_id(rec)["f-2"]
+>       assert r["outcome"] == "fixed" and r["reason"] == given["reason"] and r["repeatOf"] == given["repeatOf"]
+E       AssertionError: assert ('fixed' == 'fixed'
+E         
+E           fixed and 'repeat of f-...x still holds' == 'repeat of f-...x still holds'
+E         
+E         - repeat of f-1; keeps its earlier outcome (fixed); the verifier found the fix still holds
+E         + repeat of f-1, which is now fixed; this session's verifier graded the repeat wrong, so the fix holds and it reads fixed; earlier: repeat of f-1; keeps its earlier outcome (fixed); the verifier found the fix still holds)
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:194: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t5_e13_a_repeat_that_already_reads_fixed_keeps_its_reason
+1 failed in 0.31s
+```
+
+**Restore:** the inverse edit put `or f.get("outcome") == _FIXED` back before the `decidedBy` clause.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```
+
+## 16. The chain fixed point (`review_record.py:1891` and `:1916`, the `while moved` re-pass)
+
+- **Axis:** a repeat of a repeat of a fixed finding follows once the repeat it repeats has moved, whatever their order in the list; the re-pass is what reaches the later one.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t6_a_chain_of_kept_repeats_settles_to_a_fixed_point`.
+- **Neutralization:** `                moved = True` (in the `if follows:` branch, line 1916) became `                moved = False`, so the loop never makes a second pass.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_t6_a_chain_of_kept_repeats_settles_to_a_fixed_point ___________
+
+    def test_t6_a_chain_of_kept_repeats_settles_to_a_fixed_point():
+        # axis: a repeat of a repeat of a fixed finding follows once the repeat it repeats has moved, whatever their order
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        first = repeat(fid="f-2", title="Same mistake again", line=12)
+        second = repeat(fid="f-3", title="Third sighting", line=15, of=rr._key(first))
+        rec = build([X_FIXED, second, first])
+        rows = by_id(rec)
+>       assert (rows["f-2"]["outcome"], rows["f-3"]["outcome"]) == ("fixed", "fixed")
+E       AssertionError: assert ('fixed', 'left-for-owner') == ('fixed', 'fixed')
+E         
+E         At index 1 diff: 'left-for-owner' != 'fixed'
+E         Use -v to get more diff
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:206: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t6_a_chain_of_kept_repeats_settles_to_a_fixed_point
+1 failed in 0.47s
+```
+
+**Restore:** the inverse edit put `moved = True` back (the first inverse-edit attempt named a wrong neighbouring line and the edit tool refused it with "String to replace not found"; the file was unchanged by it; the second attempt, anchored on the following `else:` line, applied).
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.34s
+```
+
+## 17. The placement after `_recheck_carried` in `build_record` (`review_record.py:2008-2012`)
+
+- **Axis:** a kept repeat follows its earlier finding only after the carried re-check has settled it, so a carried fix reaches the repeat.
+- **Detector:** `test_review_record_repeat_follows_2438.py::test_t1_a_carried_fixed_check_on_the_earlier_finding_moves_its_wrong_graded_kept_repeat`.
+- **Neutralization:** two edit-tool edits: the line `    findings = _follow_repeats(findings, a["carriedChecks"])` was removed from before `findings = _drop_stale_open_marker(findings)` and inserted, unchanged, immediately before `findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], fc["sha"],` (the call moved above `_recheck_carried`).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t1_a_carried_fixed_check_on_the_earlier_finding_moves_its_wrong_graded_kept_repeat _
+
+    def test_t1_a_carried_fixed_check_on_the_earlier_finding_moves_its_wrong_graded_kept_repeat():
+        # axis: the field case, a repeat raised in the returning session follows the carried earlier finding a fixed check moved
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+        assert rr._key(repeat()) != X_KEY
+        rec = build([X, repeat()], [entry()])
+        rows = by_id(rec)
+        assert rows["f-1"]["outcome"] == "fixed"
+        r = rows["f-2"]
+>       assert r["outcome"] == "fixed"
+E       AssertionError: assert 'left-for-owner' == 'fixed'
+E         
+E         - fixed
+E         + left-for-owner
+
+/home/user/wt-2438/plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py:73: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_repeat_follows_2438.py::test_t1_a_carried_fixed_check_on_the_earlier_finding_moves_its_wrong_graded_kept_repeat
+1 failed in 0.30s
+```
+
+**Restore:** the two inverse edits, in reverse order: the call line removed from above `_recheck_carried`, then put back above `findings = _drop_stale_open_marker(findings)`.
+**Restore receipt:** `git diff ab5c57e047f4121f13cc40e21e8e78c6a8b9018d -- plugins/superheroes/lib/review_record.py`, its own plain command, printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.30s
+```
 
