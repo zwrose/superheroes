@@ -1203,7 +1203,9 @@ def test_gh_branch_pulls_asks_for_pull_requests_in_every_state(monkeypatch):
 
     monkeypatch.setattr(L.subprocess, "run", record)
     L._gh_branch_pulls("o", "r", "feat/x", dict(os.environ), 5)
-    assert argvs == [["gh", "api", "repos/o/r/pulls?state=all&head=o:feat%2Fx&per_page=100"]]
+    assert argvs == [[
+        "gh", "api", "--hostname", "github.com", "repos/o/r/pulls?state=all&head=o:feat%2Fx&per_page=100",
+    ]]
 
 
 def test_the_first_pr_is_the_earliest_created_of_the_branchs_pull_requests(tmp_path, monkeypatch):
