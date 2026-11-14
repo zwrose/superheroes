@@ -1914,8 +1914,6 @@ def _follow_repeats(findings, checks):
                 new = REPEAT_FOLLOWS_FIXED.format(name=_name(g))
                 changed = dict(f, outcome=_FIXED, repeatOf=dict(mark, fixHolds=True, **{
                     REPEAT_KEPT_FIELD: dict(kept, outcome=_FIXED, verdict=verdict)}))
-                if "decidedBy" in f:
-                    changed["decidedBy"] = None
                 moved = True
                 members = {_key({"findingKey": m}) for m in kept.get("members") or ()}
                 for j, h in enumerate(out):
@@ -1928,8 +1926,7 @@ def _follow_repeats(findings, checks):
                     was = h.get("reason")
                     note = REPEAT_MEMBER_FOLLOWS.format(name=_name(f))
                     out[j] = by_key[_key(h)] = dict(
-                        h, outcome=_FIXED, reason=f"{note}; earlier: {was}" if isinstance(was, str) and was else note,
-                        **({"decidedBy": None} if "decidedBy" in h else {}))
+                        h, outcome=_FIXED, reason=f"{note}; earlier: {was}" if isinstance(was, str) and was else note)
             else:
                 # axis: any other verdict keeps the repeat's own outcome and says so, so its owner card stays — see bite-proof record i2438_repeat_follows
                 new = REPEAT_KEEPS_OWN.format(name=_name(g), verdict=verdict if verdict is not None else "none")
