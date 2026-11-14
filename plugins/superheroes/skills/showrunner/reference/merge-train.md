@@ -40,6 +40,9 @@ Read the requirement before the train's first merge, for the base branch (`main`
 (rulesets, every page) and `gh api repos/<owner>/<repo>/branches/main/protection --jq '.required_status_checks.strict'`
 (classic protection; a 404 "Branch not protected" answers "none"). Either one reporting `true`
 means the branch requires it. Any other failure of either read counts as requiring it.
+A third read, apart from those two, asks whether the base has a merge queue:
+`python3 -B <plugin root>/lib/merge_queue.py read --repo <owner/name> --branch <base>`. A stack's
+straightening depends on it (§ Merging a stack, item 4).
 
 **When a merge is reported done without waiting.** The advisor reports a merge done, and goes on
 with the train, without waiting for `main`'s post-merge run only when both of these hold:
@@ -127,7 +130,79 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    `lib/stack_check.py` invocation again; a non-zero exit **refuses** and stops the merge, returning
    the refusal `reason` from `lib/stack_check.py` (`REASON_*` constants).
 
-4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; the
+4. **Straighten the stack once, when its base has a merge queue.** Builders keep merging to stay
+   current and never force-push, so a stack's layers carry merge commits. A direct merge accepts
+   them and a merge queue drops them (`rubric/native-stacks.md` § *How a stack merges*). This item
+   runs after review, the vet and the stack's merge word, and after item 3's re-read. It is the
+   advisor's work, in a clean clone the advisor owns, never a builder's worktree. The steps, in order:
+
+   (a) **Read the base for a queue.** `python3 -B <plugin root>/lib/merge_queue.py read --repo
+   <owner/name> --branch <the stack's baseRefName>`. It makes two reads: the rulesets read
+   (`repos/{owner}/{repo}/rules/branches/{branch}`, every page, a row of type `merge_queue`) and the
+   GraphQL cross-check (`repository.mergeQueue(branch:)`, which catches a queue set in classic
+   branch protection). `queue: false` → skip this item; the merge-commit stack merges as today,
+   at item 5. `queue: true` (a rules row, a GraphQL queue, or a failed read) → straighten. A cloud
+   session's GraphQL refusal is a failed read, so a cloud advisor always straightens a stack whose
+   layers carry merge commits.
+
+   (b) **Check.** `python3 -B <plugin root>/lib/stack_linear.py check --repo <owner/name> --pr
+   <bottom> ... --pr <top>`, bottom to top. Exit 0 → the stack is already linear; go to item 5.
+   `stack-not-linear` → straighten. `linearity-unreadable` → stop and report; never merge on an
+   unreadable read.
+
+   (c) **Rebase on pinned shas.** Fetch the stack's branches. `<base>` is the main commit the vetted
+   bottom already contains: the newest main commit its history holds, never a newer main. Bottom:
+   `git rebase --no-rebase-merges --onto <base> <base> <vetted bottom head>`. Each layer above: `git
+   rebase --no-rebase-merges --onto <new head of the layer below> <vetted head of the layer below>
+   <vetted head of this layer>`. The flag is explicit because a clone with git's
+   `rebase.rebaseMerges` setting on would otherwise keep the merge commits. Every
+   rebase runs on a detached head, so no branch moves. Do not use `gh stack rebase` or `gh stack
+   push`: `gh stack rebase` fetches and rebases onto the newest trunk, and `gh stack push`
+   re-fetches and leases against the refreshed tracking refs, so a head that moved after the proof
+   could be overwritten. Both also need a locally tracked stack, which a lane-built stack is not.
+
+   (d) **A rebase conflict** aborts: `git rebase --abort`. Nothing was moved and every branch stays at
+   its vetted head. Such a conflict is one the vetted layer already resolved in a bring-current merge,
+   so a fix leg cannot clear it: its merge would find main already in the layer and do nothing. Never
+   send it to a fix leg, and never resolve it by hand. Rebuild that layer as one commit carrying its
+   vetted tree: `git commit-tree <vetted head>^{tree} -p <new head of the layer below> -m "<the layer's
+   PR title>"` (for the bottom layer, `-p <base>`), on no branch. The sha it prints is the layer's new
+   head. The layers above rebase onto it as in (c), and step (e)'s `prove` covers it as any layer.
+
+   (e) **Prove before pushing.** `python3 -B <plugin root>/lib/stack_linear.py prove --repo-root
+   <clone> --base <base> --layer <branch> <vetted head> <new head> <pr> ... --pr-body <pr> <file>
+   ...`, one `--layer` and one `--pr-body` per layer, bottom to top. Save each layer's current PR
+   body to a file first (`gh api repos/<o>/<r>/pulls/<n> --jq .body`). Any refusal stops, and
+   nothing is pushed. `tree-changed` means the rebase changed a
+   file: treat it as a content change, which falls to the "content changed" branch (the
+   unequal-digest branch of `skills/showrunner/reference/vet-receipt.md` spine field 1), never a push.
+   On `fixed-above-stale`, edit each named line in that layer's PR body to the `replacement` `prove`
+   printed (the rewritten head, whose files `prove` showed unchanged), record the swap with the
+   dated re-pin line, save the bodies again and re-run `prove`; nothing is pushed until it passes.
+   `fixed-above-unknown-layer` stops the straightening: the line names a PR outside this stack.
+
+   (f) **Push once.** Run the `push` argv that `prove` printed, as it is: one atomic push, every
+   lease pinned to the vetted head. It rides the owner's standing grant, recorded in the project's
+   Canon, for this straightening (`skills/showrunner/SKILL.md` duty 6), with the reason stated on
+   the stack's sheet. Without that Canon entry the push asks its own word, as any force-push does. A
+   refused lease (a head moved since the vet) fails the whole push: re-read and start over.
+
+   (g) **Re-pin and merge.** Re-pin each layer's receipt with the `repin` line `prove` printed
+   (old head, new head, equal tree hash). Wait for CI green on every new head, selected by workflow
+   name plus head sha. Republish the stack's sheet carrying its verdict forward
+   (`carriedForward.fromSheet`, `heads` the new heads): a tree-proven straightening is not a
+   material move. Then **re-read membership again** (item 3's re-read, repeated after the push). The
+   straightening moved every head, so the merge's `--sha` and the sheet comparison take the new
+   heads from this second re-read. Then merge with item 5's command: `gh stack merge`, since `gh pr
+   merge` refuses a stacked pull request, or `stack_merge.py merge` in a cloud session, which
+   re-checks linearity itself.
+
+   (h) **When the harness refuses `gh stack merge`** (a permission or classifier refusal, not a
+   GitHub refusal), hand over to the owner. Tell the owner in chat the exact command, the stack
+   number and the top layer's head sha, and that the stack is straightened and CI is green. The
+   owner runs it. Never retry in another form.
+
+5. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; the
    command merges the whole stack the sheet lists, and the target is its top layer. The argument is `[<stack-number> |
    <pr-number>]` per `gh stack merge --help` — with no argument the stack of the current branch is
    used — and a bare number is read first as a stack number, then as a pull request number, so
@@ -159,13 +234,14 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    there. Items 2 and 3 govern how the word, once given, is checked against the remote, and that word
    covers the whole stack the sheet lists. Neither licenses building a sheet on a prefix.
 
-5. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
+6. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
    layer locally with `--no-ff` and push that merge plainly, starting just above the change, which
    keeps every layer's own commits (`rubric/native-stacks.md` § *How a stack stays current*, the home
    of the mechanism). Never bring current a layer whose review loop is still open: the merge breaks
    that review session with `view-head-anchor-mismatch`, so wait for the loop to end. Do not use `gh pr update-branch`. The REST endpoint behind it was **observed**
    to refuse a stacked pull request with a **403**, which is a field observation on a public-preview
-   feature rather than a documented GitHub rule.
+   feature rather than a documented GitHub rule. The merge commits this leaves are removed once, at
+   merge time, by item 4's straightening when the base has a merge queue.
 
    A bring-current is a **mechanical operation**. Each moved head takes a fresh remote-head check, CI
    on the new sha, and a receipt re-pinned to that sha **and to the digest of the pull request's
@@ -204,9 +280,10 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    `digest-unavailable`** takes the branch the pin defines
    (`skills/showrunner/reference/vet-receipt.md` spine field 1). Never a hand-rebase or force-push of
    a layer under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md`
-   § *Anti-patterns*).
+   § *Anti-patterns*). Item 4's merge-time straightening is not that path: it runs after the
+   vet, in the advisor's own clone, and is tree-proven.
 
-6. **After the merge, report what merged** — each pull request number with the head sha that landed
+7. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own
    post-merge run** is green on the merged head, selected by workflow name plus head sha ([A merge
    train's "green" includes post-merge `main` CI](#a-merge-trains-green-includes-post-merge-main-ci),
@@ -218,7 +295,7 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    A merged pull request that a cloud lane built is then cleaned up as [Cleaning up a finished cloud
    lane](#cleaning-up-a-finished-cloud-lane) says.
 
-7. **What a vet checks per layer, and what it checks once per stack.** **Per layer:** its own DoD
+8. **What a vet checks per layer, and what it checks once per stack.** **Per layer:** its own DoD
    rows (the layer's DoD and order live in its own sub-issue — [Each layer is a
    sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)), its own review
    dispositions and receipts, its own CI on its own head, its base — for each
