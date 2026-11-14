@@ -890,7 +890,9 @@ def test_the_default_gh_call_asks_the_commits_endpoint(monkeypatch):
 
     monkeypatch.setattr(L.subprocess, "run", run)
     L._gh_commit_lookup("acme", "widgets", SHA, None, 7)
-    assert seen == [(["gh", "api", "repos/acme/widgets/commits/" + SHA, "--jq", ".sha"], 7)]
+    assert seen == [(
+        ["gh", "api", "--hostname", "github.com", "repos/acme/widgets/commits/" + SHA, "--jq", ".sha"], 7,
+    )]
 
 
 @pytest.mark.parametrize("url", [
