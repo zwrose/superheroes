@@ -12138,7 +12138,8 @@ def _stage_apply_fixes_step(session_dir, state, pending):
     if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:
         pr_body_stage.stage(session_dir)
     snapshot = _staged_pr_body_sha256(session_dir)
-    if snapshot is not None:
+    # axis: a snapshot already held belongs to this same step re-emitted (a new step pops it on entry), so the body edit made since the first emission still counts at the fold
+    if snapshot is not None and "_prBodyAtStep" not in state:
         state["_prBodyAtStep"] = snapshot
     fields = _apply_fixes_payload_fields(session_dir, state, pending["round"], pending["attempt"])
     pending["payload"] = dict(pending.get("payload") or {}, **fields)
@@ -12715,6 +12716,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
 # fixer work from it. `break-it-change` runs the corrected test, puts it on the staged finding and its
 # ledger entry in place of the carried block, records the run beside the first, and clears the pending
 # verifier orders so the next `next` re-emits them at a fresh attempt from the changed copies.
+#
+# The same verb is accepted at a fix step that is not restore-only: the test is then changed on every row
+# that holds the finding (the fix batch, the audit target, the live finding and the ledger entry), the
+# pending fix step is dropped and re-emitted at a fresh attempt from the changed rows, and the step's start
+# heads and PR-body snapshot are kept.
 
 BREAK_IT_CHANGE_NOT_AT_VERIFIERS = "break-it-change-not-at-verifiers"
 BREAK_IT_CHANGE_FINDING_UNKNOWN = "break-it-change-finding-unknown"
@@ -12737,6 +12743,20 @@ def _break_it_change_target(state, ref):
         key = _finding_identity_key(finding)
         if key and ref in (numbered["id"], key):
             return numbered["id"], finding, key
+    return None, None, None
+
+
+def _break_it_change_fix_target(state, ref):
+    """``(row id or key, row, finding key)`` of the ``_fixBatch`` row the fix report's resolver maps ``ref``
+    to; ``(None, None, None)`` when it maps none (an id two rows share maps none; the finding key does)."""
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list) or not isinstance(ref, str) or not ref:
+        return None, None, None
+    key = _slice_finding_resolver(batch).get(ref)
+    for row in batch:
+        if key and isinstance(row, dict) and _finding_identity_key(row) == key:
+            rid = row.get("id")
+            return (rid if isinstance(rid, str) and rid else key), row, key
     return None, None, None
 
 
@@ -12798,32 +12818,40 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         return refusal
     rnd = state.get("round")
     pending = state.get("pending")
-    # axis: the verb changes a test only while the verifiers' orders are the open step; at any other step the copies it rewrites are no longer the ones a verifier reads
-    if state.get("step") != round_phases.P_VERIFIERS or state.get("terminal"):
+    step = state.get("step")
+    at_fix_step = (step == P_APPLY_FIXES and not isinstance(state.get(TEST_RESTORE_FIELD), dict)
+                   and not isinstance(state.get(TEST_CORRECTION_PENDING_FIELD), dict))
+    # axis: the verb changes a test only while the verifiers' orders or a fix step (not a restore-only one) are the open step; at any other step the copies it rewrites are not the ones a reader of the test takes
+    if not (step == round_phases.P_VERIFIERS or at_fix_step) or state.get("terminal"):
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NOT_AT_VERIFIERS,
-                           phase=state.get("step"), rnd=rnd)
-    staged_id, staged, key = _break_it_change_target(state, finding_ref)
+                           phase=step, rnd=rnd)
+    phase = P_APPLY_FIXES if at_fix_step else P_VERIFIERS
+    if at_fix_step:
+        # axis: at a fix step the finding is named the way the fix report names it, through the slice's resolver; never by the positional verifier ids
+        staged_id, staged, key = _break_it_change_fix_target(state, finding_ref)
+    else:
+        staged_id, staged, key = _break_it_change_target(state, finding_ref)
     if staged is None:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_FINDING_UNKNOWN,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     block, _kind = break_it.carried_block(staged)
     if not isinstance(staged.get(break_it.RUN_FIELD), dict) or block is None:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_NO_TEST,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     if not isinstance(why, str) or not why.strip():
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_WHY_MISSING,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     why = why.strip()
     try:
         with open(content_file, "rb") as fh:
             content = fh.read().decode("utf-8")
     except (OSError, ValueError, TypeError):
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNREADABLE,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
     if sha == block["sha256"]:
         return _refuse_cmd(session_dir, BREAK_IT_CHANGE_CMD, BREAK_IT_CHANGE_CONTENT_UNCHANGED,
-                           phase=P_VERIFIERS, rnd=rnd)
+                           phase=phase, rnd=rnd)
     config = state["config"]
     changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": sha}
     repo_root, head = _break_it_scope(session_dir, state, config)
@@ -12832,7 +12860,12 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         repo_root, head, changed, scratch=session_dir, interpreter=break_it.resolve_interpreter(config))
     text = _break_it_block_text(changed, content)
     # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
-    _rewrite_break_it_copy(staged, text, record, why)
+    if at_fix_step:
+        # axis: at a fix step every row that holds the finding takes the one change, so the fix batch, the audit target and the live finding never differ
+        for row in _reviewer_test_rows(state, key):
+            _rewrite_break_it_copy(row, text, record, why)
+    else:
+        _rewrite_break_it_copy(staged, text, record, why)
     _carry_break_it_change_to_ledger(state, key, text, record, why)
     _record_round_append(state, "breakItRuns", dict(
         record, title=staged.get("title"), file=staged.get("file"),
@@ -12841,11 +12874,11 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
               "the break-it test of %s (%s) changed: %s; the new run %s"
               % (staged_id, key, why, record.get("outcome")))
     superseded = pending.get("attempt") if isinstance(pending, dict) else None
-    # axis: the verifiers' orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies
-    if isinstance(pending, dict) and pending.get("phase") == P_VERIFIERS:
+    # axis: the orders already out are dropped with the pending step, so the next `next` re-emits them from the changed copies; a fix step keeps its start heads, since commits already made in it still count
+    if isinstance(pending, dict) and pending.get("phase") == phase:
         state["pending"] = None
     journal_entry = _journal_entry_for_commit(
-        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=P_VERIFIERS, round=rnd,
+        session_dir, BREAK_IT_CHANGE_CMD, "changed", phase=phase, round=rnd,
         attempt=superseded, supersededAttempt=superseded, finding=staged_id, findingKey=key,
         contentSha256=sha, runOutcome=record.get("outcome"))
     try:
@@ -12854,7 +12887,7 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=P_VERIFIERS,
+        return _commit_refused_response(session_dir, BREAK_IT_CHANGE_CMD, exc, phase=phase,
                                         rnd=rnd, attempt=superseded)
     return {"ok": True, "finding": staged_id, "run": record}
 
