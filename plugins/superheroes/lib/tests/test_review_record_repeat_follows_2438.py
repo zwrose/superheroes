@@ -230,6 +230,8 @@ def test_t6_a_ring_of_kept_repeats_with_no_fixed_member_changes_nothing():
     pytest.param({"verdict": "wrong"}, id="no-outcome"),
     pytest.param({"outcome": "fixed", "verdict": "maybe"}, id="verdict-outside-the-grade-vocabulary"),
     pytest.param({"outcome": "fixed", "verdict": 3}, id="verdict-not-text"),
+    pytest.param({"outcome": "fixed", "verdict": None, "members": "m::t@L1"}, id="members-not-a-list"),
+    pytest.param({"outcome": "fixed", "verdict": None, "members": ["m::t@L1", " "]}, id="member-blank"),
 ])
 def test_t7_e12_a_malformed_kept_mark_is_refused_naming_it(bad):
     # axis: the kept mark is validated as an outcome of the vocabulary and a grade verdict or none
@@ -296,6 +298,31 @@ def test_t8_a_stale_kept_in_the_ledger_marks_is_dropped_when_the_row_has_no_vali
     assert stale[rr.REPEAT_KEPT_FIELD] == {"outcome": "fixed", "verdict": "wrong"}  # the supplied mark is never changed
 
 
+def test_t8_the_verdict_is_the_one_the_repeat_was_kept_on_never_a_grade_the_keep_restored():
+    # axis: a keep that restored an earlier wrong grade on the row still stamps the verdict its round's repeat mark holds
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+    ledger = kept_row(grade=GRADE)
+    marks = [{"id": "v0", "findingKey": OTHER_KEY, "source": "exact", "kept": True,
+              "grade": {"verdict": "confirmed", "reason": "it still reads past the end"}}]
+    def stamped(rows):
+        found, _ = rs._findings_and_merges({"findings": [], "dispositionLedger": [ledger],
+                                            "rounds": {"2": {"repeatMarks": rows}}})
+        return {f["findingKey"]: f for f in found}[OTHER_KEY]["repeatOf"][rr.REPEAT_KEPT_FIELD]
+    assert stamped(marks) == {"outcome": LFO, "verdict": "confirmed"}
+    # a mark row that was not kept, or names another finding, is not read
+    assert stamped([dict(marks[0], kept=False), dict(marks[0], findingKey="z.py::z@L1")]) == {"outcome": LFO, "verdict": "wrong"}
+
+
+def test_t8_a_kept_repeat_names_its_merged_members():
+    # axis: the kept mark lists the findings merged into the repeat, so the writer settles them with it
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
+    member = ledger_row("m::t@L1", id="m-1", title="m", file="m.py", line=1, consequence="c", disposition=None,
+                        mergedInto=OTHER_KEY)
+    found, _ = written(kept_row(), member)
+    assert found[OTHER_KEY]["repeatOf"][rr.REPEAT_KEPT_FIELD] == {"outcome": LFO, "verdict": None,
+                                                                  "members": ["m::t@L1"]}
+
+
 def test_t8_a_merged_member_of_a_kept_repeat_gets_no_kept_mark():
     # axis: the mark is stamped only on a finding that is its own representative, never on a member merged into one
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2438_repeat_follows.md
@@ -303,7 +330,8 @@ def test_t8_a_merged_member_of_a_kept_repeat_gets_no_kept_mark():
                         mergedInto=OTHER_KEY, repeatOf={"findingKey": KEY, "id": "f-1", "fixHolds": None})
     found, merged = written(kept_row(), member)
     assert merged == {"m::t@L1": OTHER_KEY}
-    assert found[OTHER_KEY]["repeatOf"][rr.REPEAT_KEPT_FIELD] == {"outcome": LFO, "verdict": None}
+    assert found[OTHER_KEY]["repeatOf"][rr.REPEAT_KEPT_FIELD] == {"outcome": LFO, "verdict": None,
+                                                                  "members": ["m::t@L1"]}
     assert found["m::t@L1"]["outcome"] == LFO
     assert rr.REPEAT_KEPT_FIELD not in found["m::t@L1"]["repeatOf"]
 

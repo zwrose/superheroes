@@ -1002,6 +1002,7 @@ def _findings_and_merges(state):
         raise Refusal(UNREADABLE, "findings")
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
     audit_answers = _latest_audit_place_answers(state)
+    kept_verdicts = _kept_mark_verdicts(state)
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
@@ -1021,7 +1022,9 @@ def _findings_and_merges(state):
             # axis: the kept mark is stamped only on a finding that is its own representative and carries a valid `repeatKept`, never on a merged member — see bite-proof record i2438_repeat_follows
             if rep is not None and sc.finding_identity_key(rep) == key and _valid_repeat_kept(rep):
                 grade = held.get("grade")
-                verdict = grade.get("verdict") if isinstance(grade, dict) else None
+                # axis: the verdict is the one the repeat was kept on (its round's repeat mark), never a grade the keep restored — see bite-proof record i2438_repeat_follows
+                verdict = kept_verdicts[key] if key in kept_verdicts else (
+                    grade.get("verdict") if isinstance(grade, dict) else None)
                 held["repeatOf"] = dict(held["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: {
                     "outcome": outcome, "verdict": verdict if verdict in review_record.GRADE_VERDICTS else None}})
         if "kindOfMistake" in held:
@@ -1048,7 +1051,27 @@ def _findings_and_merges(state):
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail")), **held})
+    for f in out:
+        kept = f["repeatOf"].get(review_record.REPEAT_KEPT_FIELD) if isinstance(f.get("repeatOf"), dict) else None
+        members = sorted(k for k, rep_key in merged.items() if rep_key == f["findingKey"])
+        if isinstance(kept, dict) and members:
+            # axis: a kept repeat names the findings merged into it, so the record writer settles them with it — see bite-proof record i2438_repeat_follows
+            f["repeatOf"] = dict(f["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: dict(kept, members=members)})
     return out, merged
+
+
+def _kept_mark_verdicts(state):
+    """``{finding key: grade verdict or None}`` from the latest kept row of every round's `repeatMarks`: the verdict each
+    repeat was kept on. Rounds are read in integer order; a row that is not a kept mark with a key is skipped."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    out = {}
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("repeatMarks") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else ():
+            if isinstance(row, dict) and row.get("kept") is True and isinstance(row.get("findingKey"), str):
+                grade = row.get("grade")
+                out[row["findingKey"]] = grade.get("verdict") if isinstance(grade, dict) else None
+    return out
 
 
 def decision_inputs(state):
