@@ -185,10 +185,18 @@ A repeat that is not kept is a new finding. A survivor routes as usual, to the f
 blocks. A finding the verifier refuted this round stays refuted with its own `wrong` grade, never
 goes to the fix, and gains only its `repeatOf` mark.
 
-A kept repeat never goes to the fix, never becomes an owner card, and is never dropped from the
-record. Its record entry shows the earlier outcome with a "repeat of …" reason. A kept
-`left-for-owner` repeat adds no second owner card: the earlier finding holds it. A refuted repeat
-of a fixed finding whose fix holds ends `fixed` and keeps its `wrong` grade.
+A kept repeat never goes to the fix, never becomes an owner card while its earlier finding holds
+it, and is never dropped from the record. Its record entry shows the earlier outcome with a
+"repeat of …" reason. A kept `left-for-owner` repeat adds no second owner card: the earlier finding
+holds it. A refuted repeat of a fixed finding whose fix holds ends `fixed` and keeps its `wrong`
+grade.
+
+A kept repeat follows its earlier finding's current outcome in the record. When that finding reads
+`fixed` by the time the record is written (fixed later in the session, or moved to fixed by a
+carried check that held), the repeat is decided by the table's `fixed` row on the grade it was kept
+with: `wrong` reads `fixed` (the fix holds); any other grade, or none, keeps its own outcome, and a
+kept `left-for-owner` repeat is then its own owner card, since nothing holds it. Every other earlier
+outcome leaves the repeat as kept.
 
 This section is the rule's one prose home; the module `repeat_marks` is its code home. Other docs
 link here.

@@ -100,6 +100,7 @@ ABANDONED_MISSING_LINE = "{name} did not run ({reason}; the review session was a
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
 _SHOWN_WRONG = rfs.OUTCOMES[1]
+_FIXED = rfs.OUTCOMES[0]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
@@ -136,6 +137,13 @@ _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registr
 
 # The words of the record's optional parts, their one home.
 GRADE_VERDICTS = ("confirmed", "plausible", "wrong")
+# The mark a kept repeat's `repeatOf` carries: the outcome this session kept it at and its own grade verdict then.
+REPEAT_KEPT_FIELD = "kept"
+REPEAT_FOLLOWS_FIXED = ("repeat of {name}, which is now fixed; this session's verifier graded the repeat wrong, "
+                        "so the fix holds and it reads fixed")
+REPEAT_KEEPS_OWN = ("repeat of {name}, which is now fixed; its own grade ({verdict}) does not show the fix holds "
+                    "for it, so it keeps its own outcome")
+REPEAT_MEMBER_FOLLOWS = "merged into {name}, a kept repeat that now reads fixed, so it reads fixed with it"
 RUN_STATUSES = ("ran", "timed-out", "not-started")
 # What the driver decided about a verify re-run; the record reads it and never works it out again.
 RERUN_DECISIONS = ("went-on", "head-moved", "tree-changed", "failed")
@@ -783,7 +791,16 @@ def _repeat_fault(g):
         return ".findingKey"
     if not _nb_or_none(g.get("id")):
         return ".id"
-    return None if _bool_or_none(g.get("fixHolds")) else ".fixHolds"
+    if not _bool_or_none(g.get("fixHolds")):
+        return ".fixHolds"
+    kept = g.get(REPEAT_KEPT_FIELD)
+    # axis: the kept mark, when present, is an outcome of the vocabulary and a grade verdict or none; an absent one is a record from before it — see bite-proof record i2438_repeat_follows
+    if REPEAT_KEPT_FIELD in g and not (isinstance(kept, dict) and kept.get("outcome") in rfs.OUTCOMES
+                                       and (kept.get("verdict") is None or kept.get("verdict") in GRADE_VERDICTS)
+                                       and isinstance(kept.get("members", []), list)
+                                       and all(_nb(m) for m in kept.get("members", []))):
+        return "." + REPEAT_KEPT_FIELD
+    return None
 
 
 def _place_fault(p):
@@ -1863,6 +1880,62 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     return out, rows
 
 
+def _follow_repeats(findings, checks):
+    """A finding this session kept as a repeat follows its earlier finding's current outcome in the same record.
+
+    When the earlier finding reads fixed (in the session, or moved there by `_recheck_carried`), the repeat is decided
+    by the one keep-or-new table (`repeat_marks.decide`) on the verdict its kept mark holds (this session's own grade
+    verdict of the repeat, never the finding's `grade`): `wrong` moves it to fixed with `fixHolds` true; any other
+    verdict keeps its own outcome and says why. Only a repeat whose outcome is still the kept snapshot, with no cited
+    decision and no carried check naming it, whose earlier finding is in this record, is read. Chains settle to a fixed
+    point. Returns a new list; no input finding is changed."""
+    import repeat_marks  # noqa: E402 — lazy: the closure of this module stays small
+    out, handled, moved = list(findings), set(), True
+    while moved:
+        moved = False
+        by_key = {_key(g): g for g in out}
+        for i, f in enumerate(out):
+            mark = f.get("repeatOf")
+            kept = mark.get(REPEAT_KEPT_FIELD) if isinstance(mark, dict) else None
+            # axis: only a repeat whose outcome is still the kept snapshot, with no cited decision, no carried check naming it and not yet fixed, follows its earlier finding — see bite-proof record i2438_repeat_follows
+            if (i in handled or not isinstance(kept, dict) or f.get("outcome") != kept.get("outcome")
+                    or f.get("outcome") == _FIXED or session_contract.decided_by_of(f) is not None
+                    or any(c["key"] in (f.get(session_contract.FINDING_KEY_FIELD), f.get("id")) for c in checks)):
+                continue
+            g = by_key.get(_repeat_key(f))
+            # axis: the earlier finding must be in this record and read fixed; every other earlier outcome leaves the repeat as it is — see bite-proof record i2438_repeat_follows
+            if g is None or g is f or g.get("outcome") != _FIXED:
+                continue
+            handled.add(i)
+            verdict, old = kept.get("verdict"), f.get("reason")
+            follows, _ = repeat_marks.decide(repeat_marks.FIXED, verdict, True)
+            if follows:
+                # axis: a wrong-graded repeat of a fixed earlier finding reads fixed, the fix holds, with the kept mark restamped — see bite-proof record i2438_repeat_follows
+                new = REPEAT_FOLLOWS_FIXED.format(name=_name(g))
+                changed = dict(f, outcome=_FIXED, repeatOf=dict(mark, fixHolds=True, **{
+                    REPEAT_KEPT_FIELD: dict(kept, outcome=_FIXED, verdict=verdict)}))
+                moved = True
+                members = {_key({"findingKey": m}) for m in kept.get("members") or ()}
+                for j, h in enumerate(out):
+                    # axis: a finding merged into the moved repeat, still at the kept outcome with no cited decision and no carried check naming it, reads fixed with it — see bite-proof record i2438_repeat_follows
+                    if (j in handled or j == i or _key(h) not in members or h.get("outcome") != kept.get("outcome")
+                            or session_contract.decided_by_of(h) is not None
+                            or any(c["key"] in (h.get(session_contract.FINDING_KEY_FIELD), h.get("id")) for c in checks)):
+                        continue
+                    handled.add(j)
+                    was = h.get("reason")
+                    note = REPEAT_MEMBER_FOLLOWS.format(name=_name(f))
+                    out[j] = by_key[_key(h)] = dict(
+                        h, outcome=_FIXED, reason=f"{note}; earlier: {was}" if isinstance(was, str) and was else note)
+            else:
+                # axis: any other verdict keeps the repeat's own outcome and says so, so its owner card stays — see bite-proof record i2438_repeat_follows
+                new = REPEAT_KEEPS_OWN.format(name=_name(g), verdict=verdict if verdict is not None else "none")
+                changed = dict(f)
+            changed["reason"] = f"{new}; earlier: {old}" if isinstance(old, str) and old else new
+            out[i] = by_key[_key(f)] = changed
+    return out
+
+
 def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
@@ -1948,6 +2021,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], fc["sha"],
                                               lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head),
                                               earlier_other)
+    # axis: a kept repeat follows its earlier finding only after the carried re-check has settled it, so a carried fix reaches the repeat — see bite-proof record i2438_repeat_follows
+    findings = _follow_repeats(findings, a["carriedChecks"])
     findings = _drop_stale_open_marker(findings)
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
