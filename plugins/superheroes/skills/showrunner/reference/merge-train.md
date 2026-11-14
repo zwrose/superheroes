@@ -214,6 +214,26 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    layers if one member fails. Merge semantics, the bare-number ambiguity, per-pull-request
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
+
+   **On a merge-queue base, queue a stack only when the queue has a free build slot for every
+   layer.** A queue builds a stack's upper layers only in the bottom layer's pass and only from free
+   build slots, so a stack queued without room for every layer merges its bottom alone and the queue
+   drops the layers above it (GitHub documents that all pull requests above a removed one are removed
+   too). Immediately before the command, after item 3's re-read, run `python3 -B <plugin
+   root>/lib/merge_queue.py slots --repo <owner/name> --branch <the stack's baseRefName> --layers
+   <the number of layers the sheet lists>`. Exit 0 → merge. `slots-short` → hold the stack: do not
+   queue it, say why (the result's `detail`: the limit, the entries already queued, the free count
+   and the layer count), and while it waits queue no single pull request onto that base, so the
+   slots drain; re-run `slots` when the queue's entries have merged. `slots-unreadable` → hold the
+   stack and report the `detail`; never queue on a read that failed. Any other non-zero exit
+   (`bad-argument`) is not merged either, and the result's `reason` is reported. The check runs on
+   every base (a base with no queue answers exit 0 with `queue: false`), so the advisor never has
+   to decide first whether the base has a queue. The stack's word is unchanged by a hold: the merge
+   goes ahead once `slots` exits 0, after item 3's re-read again. In a cloud session
+   `stack_merge.py merge` makes this check itself (it refuses `queue-slots-short` and
+   `queue-slots-unreadable`), so a cloud advisor hands a queue-base stack to a seat that can read
+   GraphQL.
+
    In a cloud session the equivalent is `python3 -B <plugin-root>/lib/stack_merge.py merge --repo
    <owner/name> --top <top layer> --sha <its head from item 3's re-read>`. A non-zero exit is not
    merged, and the train reports the result's `reason`. The default wait is 420 seconds in all,
@@ -304,6 +324,35 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    entries of the whole stack equal the layers the advisor planned and the stack's sheet lists, that
    no member is unexpected, and that the stack's `baseRefName` matches the planned or owner-approved
    base.
+
+9. **When the queue ejects a layer.** A merge queue can remove a layer from a stack it took, and the
+   layers above a removed one go with it. The recovery, in order:
+
+   (1) **Read what happened.** Which layers merged, which were removed from the queue, and each
+   removed layer's new base and head. GitHub retargets a removed layer to the stack's base and
+   rebases it, so its head moves.
+
+   (2) **Identity check, for every removed layer.** Recompute the pull request's diff digest
+   (`skills/showrunner/reference/vet-receipt.md` spine field 1). **Equal digest** → the layer is
+   unchanged; go on. **Unequal, or `digest-unavailable`** → run `git range-diff --remerge-diff
+   <base-before>..<head-before> <base-after>..<head-after>` and grade each changed hunk as item 6
+   grades a bring-current: a mechanically non-semantic hunk takes CI and a disclosure line, and a
+   behaviour-bearing or unclear hunk takes the reviewer floor. A layer GitHub left conflicting goes
+   back to its builder for a bring-current merge (item 6) and then takes this identity check.
+
+   (3) **Fresh CI** on every moved head, selected by workflow name plus head sha.
+
+   (4) **Re-pin** each moved layer's receipt to its new head with a dated line.
+
+   (5) **Carry the sheet forward.** Republish the stack's sheet with `carriedForward.fromSheet` and
+   `heads` the new heads when the identity check found no material consequence; otherwise republish
+   it unsigned (item 6's material-consequence line).
+
+   (6) **Re-read membership** (item 3) and **re-run `slots`** (item 5) on the remaining layers.
+
+   (7) **Re-queue with `gh stack merge`.** `gh pr merge --match-head-commit` refuses a removed
+   stacked layer, and `gh stack merge` pins no head, so the membership re-read immediately before
+   it is the only head check: compare every head to the re-pinned heads and refuse on a mismatch.
 
 ## Merging a spec PR
 
