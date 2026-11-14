@@ -2,7 +2,7 @@
 
 Per-guard bite proof for `plugins/superheroes/lib/stack_linear.py`: each `# axis:` clause is neutralized in source by a targeted `Edit`, the proving tests must go red, the clause is restored by the inverse edit, and the whole file goes green again.
 
-**Register:** 66 guards, one per `# axis:` line in the file (the order declared no set, so this is the enumeration of every independently neutralizable clause; the order gap is flagged in the return). Line numbers are those of the restored file.
+**Register:** 61 guards, one per `# axis:` line in the file (the order declared no set, so this is the enumeration of every independently neutralizable clause; the order gap is flagged in the return). Line numbers are those of the restored file.
 
 **Provenance:** claude (Claude Sonnet 5.5).
 
