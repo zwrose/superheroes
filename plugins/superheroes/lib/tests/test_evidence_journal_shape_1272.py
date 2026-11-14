@@ -37,7 +37,10 @@ def _run_dir_with_non_object_journal_line(tmp_path, order_path, monkeypatch):
     fed_prompt = (
         engine_dispatch.ANTIHIJACK_PREAMBLE + notice + base_prompt + "\n\n"
         + review_findings_schema.example_prompt_block("nonce-journal-shape") + "\n\n"
-        + engine_adapter.REVIEW_RESULT_CONTRACT("findings")
+        + engine_dispatch.engine_result_channel.review_result_contract_from_schema(
+            engine_dispatch.engine_result_channel.declared_schema(
+                "codex", engine_dispatch.engine_result_channel.RUN_KIND_REVIEW, "findings"),
+            delivery=engine_dispatch.engine_result_channel.RESULT_DELIVERY_ARGV)
     )
     findings_text = json.dumps({"findings": []})
     stdout = TRI._codex_event_stream(findings_text, action_items=1)
