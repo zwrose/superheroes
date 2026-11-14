@@ -333,6 +333,11 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
   on your list", a collector number) instead of carrying that decision's options. It is a best-effort
   pattern scan, so the rule binds the advisor whether or not the scan catches a wording.
+- A question stands on its own (`skills/showrunner/reference/owner-decisions.md` § The per-item
+  spine). The builder refuses, with the token `dependent-question`, a card whose option or
+  recommendation text depends on another card or collector item ("a if 1435-1 is fix-before-merge",
+  "only if you pick b on the other card", another collector number on the sheet). It is a best-effort
+  pattern scan too, and a card's question and context may still say what came before.
 
 Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
