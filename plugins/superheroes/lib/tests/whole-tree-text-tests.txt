@@ -11,6 +11,7 @@ plugins/superheroes/lib/tests/test_heartbeat_docs_drift.py
 plugins/superheroes/lib/tests/test_invocation_hygiene.py
 plugins/superheroes/lib/tests/test_model_tier_wiring.py
 plugins/superheroes/lib/tests/test_no_fixer_phase_c1l9a.py
+plugins/superheroes/lib/tests/test_one_result_contract_2450.py
 plugins/superheroes/lib/tests/test_presence_flag_retired.py
 plugins/superheroes/lib/tests/test_review_code_recipes_no_compound_delete.py
 plugins/superheroes/lib/tests/test_review_only_removed_c1l3.py
