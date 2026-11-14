@@ -345,16 +345,17 @@ def _shape(text, expect_items):
     return None
 
 
-def _mask_path_spans(text):
+def _mask_path_spans(text, sentence_final=False):
     """Blank (same length) every path span: a maximal run of ``[A-Za-z0-9_.~/-]`` holding a ``/``
-    or ending in a known extension once its sentence-final periods are set aside (``budget2.md.``).
-    Only the run is blanked, never the whole whitespace token."""
+    or ending in a known extension. Only the run is blanked, never the whole whitespace token.
+    With ``sentence_final`` (the budget read), a filename's sentence-final periods are set aside
+    before the extension test (``budget2.md.``) and left in place."""
     def blank(m):
         run = m.group(0)
         if "/" in run:
             return " " * len(run)
-        # axis: a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
-        core = run.rstrip(".")
+        # axis: for the budget read, a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
+        core = run.rstrip(".") if sentence_final else run
         if core.lower().endswith(EXTENSIONS):
             return " " * len(core) + run[len(core):]
         return run
@@ -363,7 +364,7 @@ def _mask_path_spans(text):
 
 def _budget_ok(text):
     # axis: a budget keyword inside a path span does not satisfy the budget rule — see bite-proof record i2452_order_lint
-    masked = _mask_path_spans(text)
+    masked = _mask_path_spans(text, sentence_final=True)
     return bool(_BUDGET_AT.search(masked) or _BUDGET.search(masked))
 
 
