@@ -173,6 +173,14 @@ HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-b
 # #2375: chosen as at least twice the longest idle silence seen in clean codex review attempts (183 s),
 # rounded up to a 30 s step, and below the shortest idle silence seen in a stalled attempt (630 s).
 CODEX_SILENCE_WATCHDOG_SECONDS = 390
+# #2437: the last attempt's own silence limit. The 390 s limit above never arms on the last attempt,
+# so a stalled last attempt sat silent to its full cap (stalled last attempts on record: 1,490 s,
+# 2,410 s and 2,550 s; stalled earlier attempts: 526, 630, 711 and 819 s). The census behind #2375
+# (879 attempts) found no attempt silent past 390 s that went on to answer, but answered silences
+# on record since then reach 601 s (vet 879 of PR #2423), about 1,170 s and 1,585 s (the #2439
+# receipt), so silence alone does not separate a stall from a quiet working attempt. This limit
+# sits above every answered silence on record, with margin (1,585 s + 215 s, on a 30 s step).
+CODEX_LAST_ATTEMPT_SILENCE_WATCHDOG_SECONDS = 1800
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
@@ -3780,12 +3788,17 @@ def _size_or_none(path):
 
 
 def _silence_watchdog_threshold(opened, attempt):
-    """The armed watchdog threshold in seconds, or None when it is off (#2375 I4). Never raises."""
+    """The armed watchdog threshold in seconds, or None when it is off (#2375 I4, #2437). Never raises."""
     try:
-        seconds = opened.get("silenceWatchdogSeconds")  # axis: the threshold is the one recorded at run open
-        # axis: armed only for a codex review run, never on the final attempt, with a finite positive number
+        if attempt < MAX_ATTEMPTS:
+            seconds = opened.get("silenceWatchdogSeconds")  # axis: an earlier attempt reads the earlier limit recorded at run open
+        elif attempt == MAX_ATTEMPTS:
+            seconds = opened.get("lastAttemptSilenceWatchdogSeconds")  # axis: the last attempt reads its own limit, never the earlier one
+        else:
+            return None
+        # axis: armed only for a codex review run, with a finite positive number
         if (opened.get("engine") == "codex" and opened.get("runKind") == RUN_KIND_REVIEW
-                and attempt < MAX_ATTEMPTS and isinstance(seconds, (int, float))
+                and isinstance(seconds, (int, float))
                 and not isinstance(seconds, bool) and math.isfinite(seconds) and seconds > 0):
             return seconds
     except Exception:
@@ -6166,6 +6179,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "timeout": timeout,
         "retryTimeout": retry_timeout,
         "silenceWatchdogSeconds": CODEX_SILENCE_WATCHDOG_SECONDS if engine == "codex" else None,
+        "lastAttemptSilenceWatchdogSeconds": CODEX_LAST_ATTEMPT_SILENCE_WATCHDOG_SECONDS if engine == "codex" else None,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": view_path,
