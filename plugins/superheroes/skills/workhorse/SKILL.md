@@ -540,6 +540,18 @@ attaches to the calibrated verify and any local full-suite run alike. **A handba
 suite receipt is still pending says so**, reports that the calibrated verify passed, and makes no
 test-pass claim.
 
+**A change that edits plugin Markdown runs the whole-tree text tests before it pushes.** When the
+project is the superheroes source repository and the change edits any Markdown file under the plugin
+(skills and their reference files, rubric, agents, reference, hosts, theme, templates,
+`TRANSITION.md`), run the plugin's whole-tree text tests before every push that carries such an edit.
+These are the test files that read plugin Markdown by pattern rather than by name, so no order names
+them and no test of an edited file reaches them, and CI would be the first to fail them. Their one
+home is the pytest argument file `plugins/superheroes/lib/tests/whole-tree-text-tests.txt`; run the
+set by that file, never by a copied list:
+`scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest @plugins/superheroes/lib/tests/whole-tree-text-tests.txt -q -n auto`,
+from the repository root. Record the run in the build record's receipts: the command, the head it ran
+on, the pass count and the run time. A red run is fixed before the push, never left for CI.
+
 **The verify step may run harness-backgrounded and polled in-turn** — the already-sanctioned shape
 for long local work — because the host's foreground command-timeout cap bounds a **single call**, not
 the step; what stays forbidden is unchanged, `&`/setsid/nohup and ending the turn to wait.
