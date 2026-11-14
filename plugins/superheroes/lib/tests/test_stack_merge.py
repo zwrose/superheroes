@@ -40,6 +40,11 @@ def _gh_on_path(monkeypatch):
     monkeypatch.setattr(sm.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
 
 
+@pytest.fixture(autouse=True)
+def _linear_gate_off(monkeypatch):
+    monkeypatch.setattr(sm, "_linear_gate", lambda **kw: None)
+
+
 def _make_run(handlers):
     """Fake run keyed by argv. A list is consumed in order; its last entry then repeats."""
     calls = []

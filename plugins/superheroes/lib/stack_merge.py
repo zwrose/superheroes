@@ -8,15 +8,30 @@ result says merged only when a response GitHub returned for this request carries
 `status == "merged"` — every other outcome is a refusal with a reason token. The helper
 never adopts or polls a merge request it did not start (a refused PUT is never followed by a
 poll), and leaves `merge_action` at GitHub's default (a merge queue when the base branch
-has one, otherwise a direct merge). Exit code 0 only when GitHub reports `merged`."""
+has one, otherwise a direct merge). Exit code 0 only when GitHub reports `merged`.
+
+Before the PUT, `merge` checks linearity when the base branch has a merge queue: a queue drops a
+stack whose layers carry merge commits, so a queue base with a merge commit in any layer at or
+below the top is refused `stack-not-linear` with no request sent, and a stack whose layers, queue
+or commits cannot be read (or whose budget ran out) is refused `linearity-unreadable`. A base with
+no queue merges as before. The check, the PUT and the polling share the one invocation budget."""
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import merge_queue  # noqa: E402
+import stack_check  # noqa: E402
+import stack_linear  # noqa: E402
 
 GH_TIMEOUT = 120
 # One budget bounds a whole `merge` or `poll` invocation, the PUT included. 420 seconds
@@ -34,6 +49,8 @@ REASON_HEAD_MISMATCH = "head-mismatch"
 REASON_MERGE_FAILED = "merge-failed"
 REASON_MERGE_ENQUEUED = "merge-enqueued"
 REASON_POLL_TIMEOUT = "poll-timeout"
+REASON_STACK_NOT_LINEAR = "stack-not-linear"
+REASON_LINEARITY_UNREADABLE = "linearity-unreadable"
 
 STATUS_PENDING = "pending"
 STATUS_MERGED = "merged"
@@ -339,6 +356,81 @@ def _poll_loop(repo, top, sha, uuid, start, poll_timeout, poll_interval, timeout
                    detail=detail, uuid=uuid)
 
 
+def _layers_to_merge(membership):
+    """Return (base branch, layer numbers bottom to top) from an ok membership read, covering
+    the layers at or below the queried top, or None when the read cannot name them."""
+    stack = membership.get("stack")
+    queried = membership.get("queried")
+    members = membership.get("members")
+    if not (isinstance(stack, dict) and isinstance(queried, dict) and isinstance(members, list)):
+        return None
+    base = stack.get("baseRefName")
+    position = queried.get("position")
+    if not (isinstance(base, str) and base and _is_int(position)):
+        return None
+    layers = []
+    for member in members:
+        if not isinstance(member, dict):
+            return None
+        member_position = member.get("position")
+        number = member.get("number")
+        if not (_is_int(member_position) and _is_int(number)):
+            return None
+        # axis: only layers at or below the top merge — a member above it is ignored
+        if member_position <= position:
+            layers.append(number)
+    return base, layers
+
+
+def _linear_gate(*, repo, top, end, timeout, run, monotonic):
+    """Return None when the merge may be sent, or (reason, detail) when it must be refused: a
+    base with a merge queue and a merge commit in a layer at or below the top is not linear, and
+    anything this check cannot read is unreadable. One budget, `end`, bounds every read."""
+    left = end - monotonic()
+    # axis: the budget is already spent before the gate — no read is made and the merge is refused
+    if left <= 0:
+        return (REASON_LINEARITY_UNREADABLE,
+                "the invocation budget ran out before the stack's linearity could be read")
+
+    # axis: the membership read is bounded by the time left — its call timeout and its deadline
+    membership = stack_check.read_membership(pr=top, repo=repo, timeout=min(timeout, left),
+                                             deadline=left, run=run)
+    # axis: a membership read that is not ok (not linked, unreadable) is linearity-unreadable
+    if not membership.get("ok"):
+        return (REASON_LINEARITY_UNREADABLE, "stack membership: %s: %s" % (
+            membership.get("reason"), membership.get("detail")))
+
+    named = _layers_to_merge(membership)
+    # axis: no layer at or below the top can be named — nothing was checked, so unreadable
+    if named is None or not named[1]:
+        return (REASON_LINEARITY_UNREADABLE,
+                "stack membership names no layer at or below pull request %d" % top)
+    base, layers = named
+
+    # axis: the merge-queue read shares the invocation deadline
+    queue = merge_queue.read(repo=repo, branch=base, timeout=timeout, deadline_at=end,
+                             run=run, monotonic=monotonic)
+    # axis: a merge-queue read that is not ok is linearity-unreadable
+    if not queue.get("ok"):
+        return (REASON_LINEARITY_UNREADABLE, "merge queue: %s: %s" % (
+            queue.get("reason"), queue.get("detail")))
+    # axis: a base with no queue passes — only a successful no-queue answer lets the merge go unchecked
+    if queue.get("queue") is False:
+        return None
+
+    # axis: the commit read shares the invocation deadline
+    linear = stack_linear.check_rest(repo=repo, prs=layers, timeout=timeout, deadline_at=end,
+                                     run=run, monotonic=monotonic)
+    # axis: a complete linear read lets the merge go
+    if linear.get("ok") is True:
+        return None
+    # axis: a merge commit in a layer on a queue base is stack-not-linear
+    if linear.get("reason") == stack_linear.REASON_STACK_NOT_LINEAR:
+        return (REASON_STACK_NOT_LINEAR, linear.get("detail"))
+    # axis: a commit read that is not ok and not stack-not-linear is linearity-unreadable
+    return (REASON_LINEARITY_UNREADABLE, "%s: %s" % (linear.get("reason"), linear.get("detail")))
+
+
 def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
           poll_interval=DEFAULT_POLL_INTERVAL, timeout=GH_TIMEOUT,
           run=None, sleep=None, monotonic=None):
@@ -356,11 +448,27 @@ def merge(*, repo, top, sha, poll_timeout=DEFAULT_POLL_TIMEOUT,
     if not shutil.which("gh"):
         return _result(repo, top, sha, reason=REASON_GH_UNAVAILABLE, detail="gh not on PATH")
 
-    # axis: the budget starts before the PUT, so the PUT and the polling share one deadline
+    # axis: the budget starts before the linearity gate, so the gate, the PUT and the polling
+    # share one deadline
     start = monotonic()
+    end = start + poll_timeout
+
+    refused = _linear_gate(repo=repo, top=top, end=end, timeout=timeout, run=run,
+                           monotonic=monotonic)
+    # axis: the gate runs before the PUT — a refusal sends no merge request
+    if refused is not None:
+        reason, detail = refused
+        return _result(repo, top, sha, reason=reason, detail=detail)
+
+    put_left = end - monotonic()
+    # axis: the budget ran out between the gate and the PUT — the PUT is not sent
+    if put_left <= 0:
+        return _result(repo, top, sha, reason=REASON_LINEARITY_UNREADABLE,
+                       detail="the invocation budget ran out before the merge request was sent")
     try:
+        # axis: the PUT's call timeout is capped by the time left after the gate
         proc = run(_put_argv(repo, top, sha), capture_output=True, text=True,
-                   timeout=min(timeout, poll_timeout))
+                   timeout=min(timeout, put_left))
     except (OSError, subprocess.TimeoutExpired) as exc:
         # axis: run raises OSError or TimeoutExpired on the PUT
         return _result(repo, top, sha, reason=REASON_MERGE_REQUEST_REFUSED,
