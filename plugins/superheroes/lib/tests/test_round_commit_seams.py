@@ -440,7 +440,10 @@ def _decorated_review_fed_prompt(base_prompt, view_meta, echo_nonce="nonce-1",
   sep = "\n\n"
   if expected_result_kind == "findings":
     fed_prompt += sep + _RFS.example_prompt_block(echo_nonce)
-  fed_prompt += sep + _EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+  _erc = ED.engine_result_channel
+  fed_prompt += sep + _erc.review_result_contract_from_schema(
+      _erc.declared_schema("codex", _erc.RUN_KIND_REVIEW, expected_result_kind),
+      delivery=_erc.RESULT_DELIVERY_ARGV)
   return fed_prompt
 
 

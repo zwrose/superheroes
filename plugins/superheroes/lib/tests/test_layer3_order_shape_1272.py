@@ -84,6 +84,16 @@ def test_l3_d1_control_other_phase_payload_contract_unchanged():
     assert "Required keys:" in panel_text
 
 
+def test_l3_d1_stdout_channel_panel_order_carries_no_payload_contract():
+    # axis: a stdout-channel panel order states no contract of its own (#2450); the host-seat order above keeps its one
+    placeholders = dict(_panel_placeholders(), CHANNEL="stdout")
+    ctx = _base_context(host_seat=False, placeholders=placeholders)
+    text, reason = RO.render_order(RP.P_PANEL, "seat", ctx)
+    assert reason is None, reason
+    assert _PAYLOAD_HEADING not in text
+    assert RO.STDOUT_RESULT_DEFERRAL in text
+
+
 def test_l3_d2_edge4_expect_items_still_fires_ambiguous_arm(tmp_path):
     # axis: non-empty expect_items keeps the existing ambiguous arm unchanged
     repo = str(tmp_path)

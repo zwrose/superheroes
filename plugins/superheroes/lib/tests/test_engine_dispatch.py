@@ -203,6 +203,14 @@ _ERC = importlib.util.spec_from_file_location(
 ERC = importlib.util.module_from_spec(_ERC)
 _ERC.loader.exec_module(ERC)
 
+def _codex_native_contract(kind=None):
+    """The one result contract a codex review fed prompt ends with (argv delivery, #2450)."""
+    return ERC.review_result_contract_from_schema(
+        ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, kind),
+        delivery=ERC.RESULT_DELIVERY_ARGV,
+    )
+
+
 _SV = importlib.util.spec_from_file_location(
     "sanitized_view", os.path.join(_HERE, "..", "sanitized_view.py"))
 _SV_MOD = importlib.util.module_from_spec(_SV)
@@ -1131,9 +1139,10 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
     assert notice_at > 0
     assert body_at > notice_at
     assert "abc123fake" in text[notice_at:body_at]
-    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    contract = _codex_native_contract(None)
     assert contract in text
     assert text.endswith(contract)
+    assert text.count("Review result contract") == 1
     assert _FINDINGS_EXAMPLE_STABLE_MARKER not in text
 
 
@@ -4706,8 +4715,9 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
     res = ED.dispatch_review(**dispatch_kwargs)
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
-    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+    contract = _codex_native_contract(expected_result_kind)
     prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert prompt_text.count("Review result contract") == 1
     if expect_findings_block:
         echo_nonce = opened.get("echoNonce")
         assert isinstance(echo_nonce, str) and echo_nonce
@@ -4725,7 +4735,7 @@ def test_review_dispatch_fed_prompt_includes_schema_example_block(
 
 
 def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp_path):
-    """#1145 WO-B: unpinned dispatch fedPrompt carries all-four-kinds contract."""
+    """#1145 WO-B / #2450: unpinned dispatch fedPrompt carries the one native all-kinds contract."""
     # axis: unpinned fedPrompt must name every REVIEW_RESULT_KINDS member, never findings example
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
@@ -4737,9 +4747,10 @@ def test_review_dispatch_fed_prompt_result_contract_unpinned_lists_all_kinds(tmp
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
     prompt_text = opened["fedPrompt"]
-    contract = EA.REVIEW_RESULT_CONTRACT(None)
+    contract = _codex_native_contract(None)
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
+    assert prompt_text.count("Review result contract") == 1
     assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
     for kind in EA.REVIEW_RESULT_KINDS:
         assert "`%s`" % kind in contract
@@ -4764,9 +4775,10 @@ def test_review_dispatch_fed_prompt_result_contract_pinned_non_findings(
     records, _ = ED._journal_read(res["runDir"])
     opened = next(r for r in records if r.get("kind") == "run-opened")
     prompt_text = opened["fedPrompt"]
-    contract = EA.REVIEW_RESULT_CONTRACT(expected_result_kind)
+    contract = _codex_native_contract(expected_result_kind)
     assert contract in prompt_text
     assert prompt_text.endswith(contract)
+    assert prompt_text.count("Review result contract") == 1
     assert "`%s`" % expected_result_kind in contract
     assert _FINDINGS_EXAMPLE_STABLE_MARKER not in prompt_text
 
@@ -4796,29 +4808,6 @@ def test_review_dispatch_fed_prompt_blocks_never_abut(tmp_path):
         for match in re.finditer("Review result contract", prompt_text):
             pos = match.start()
             assert pos >= 2 and prompt_text[pos - 2:pos] == "\n\n"
-
-
-def test_review_result_contract_kind_names_derive_from_review_result_kinds():
-    """#1145 WO-B: contract renderer enumerates REVIEW_RESULT_KINDS, not a hand-written list."""
-    # axis: unpinned contract text must cite every tuple member so a fifth kind cannot drift stale
-    unpinned = EA.REVIEW_RESULT_CONTRACT(None)
-    for kind in EA.REVIEW_RESULT_KINDS:
-        assert "`%s`" % kind in unpinned
-    pinned = EA.REVIEW_RESULT_CONTRACT("findings")
-    assert "`findings`" in pinned
-    for other in EA.REVIEW_RESULT_KINDS:
-        if other == "findings":
-            continue
-        assert "`%s`" % other not in pinned
-
-
-def test_review_result_contract_unknown_kind_renders_unpinned():
-    """#1145 WO-B: invalid expected_result_kind never normalizes to findings-specific text."""
-    # axis: unexpected kind values render all-four contract, never findings-only branch
-    contract = EA.REVIEW_RESULT_CONTRACT("not-a-kind")
-    for kind in EA.REVIEW_RESULT_KINDS:
-        assert "`%s`" % kind in contract
-    assert "resultKind" not in contract
 
 
 # --- #1145 WO-C: per-dispatch echo nonce lifecycle ---
@@ -12945,13 +12934,12 @@ def test_codex_review_open_appends_native_schema_contract(tmp_path):
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     prompt_text = opened["fedPrompt"]
-    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW)
-    native_contract = ERC.review_result_contract_from_schema(schema)
-    legacy_contract = EA.REVIEW_RESULT_CONTRACT(None)
+    native_contract = _codex_native_contract(None)
     assert native_contract in prompt_text
-    assert legacy_contract in prompt_text
-    assert prompt_text.endswith(legacy_contract)
-    assert prompt_text.index(native_contract) < prompt_text.index(legacy_contract)
+    assert prompt_text.endswith(native_contract)
+    # The legacy stdout contract (#2450) is gone: one result contract, the native one.
+    assert "graded stdout" not in prompt_text
+    assert prompt_text.count("Review result contract") == 1
 
 
 def test_cursor_review_open_fed_prompt_omits_stdout_contract(tmp_path):
@@ -12971,7 +12959,6 @@ def test_cursor_review_open_fed_prompt_omits_stdout_contract(tmp_path):
     opened = next(r for r in records if r.get("kind") == "run-opened")
     prompt_text = opened["fedPrompt"]
     assert "graded stdout" not in prompt_text
-    assert EA.REVIEW_RESULT_CONTRACT(opened.get("expectedResultKind")) not in prompt_text
     schema = ERC.declared_schema("cursor", ERC.RUN_KIND_REVIEW)
     native_contract = ERC.review_result_contract_from_schema(
         schema, delivery=ERC.RESULT_DELIVERY_PROMPT)
@@ -14591,7 +14578,8 @@ def test_cursor_fed_prompt_has_one_output_instruction(tmp_path):
         max_wait=0,
     )
     codex_review_fed = _review_opened_record(codex_review["runDir"])["fedPrompt"]
-    assert EA.REVIEW_RESULT_CONTRACT(None) in codex_review_fed
+    assert _codex_native_contract(None) in codex_review_fed
+    assert "graded stdout" not in codex_review_fed
 
     codex_write = _dispatch_write(
         tmp_path, FakeRunner([]), cwd=wt, max_wait=0,

@@ -18,12 +18,11 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
-## 0.49.1
+## Unreleased
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts 0.49.1. Each step names the note it comes from.
-
+- **After switching.** **Nothing is owed.** A codex review seat's last attempt now has its own silence limit, 1,800 seconds (`CODEX_LAST_ATTEMPT_SILENCE_WATCHDOG_SECONDS`; earlier attempts keep 390 s): a last attempt that has neither written output nor had a command in flight for that long is ended with the same `attempt-ended` record a watchdog end already carries (`timedOut: false`, `signalSource: "silence-watchdog"`, `silenceWatchdog: {silentSeconds, thresholdSeconds, killAt}`), and the seat forfeits as before; a review run's `run-opened` record gains `lastAttemptSilenceWatchdogSeconds`, and a run opened before the upgrade keeps no limit on its last attempt. Under the default per-attempt ceilings (900 s, the test role at most 1,800 s) a last attempt reaches its ceiling first, so the limit acts only under a longer ceiling.
 - **After switching.** **A Python break-it test a seat returns that does not load because of an indentation error is now dropped from its finding at the fold, never run, committed or restored: the round records it under the new round key `breakItMalformed`, the decision kind is `break-it-test-malformed`, and a second-test or correction result that does not load is recorded with the new reason token `not-loadable` (in the round's `secondTest.noTest` and `testCorrection`).** Nothing is owed. See [Break-it: a seat's test that does not load is dropped, not run](#break-it-a-seats-test-that-does-not-load-is-dropped-not-run).
 - **After switching.** **`break-it-change` is accepted at a fix step (an `apply-fixes` step that is not restore-only) as well as while the verifiers' orders are out; at any other step it still refuses `break-it-change-not-at-verifiers`, a token whose meaning is neither the verifiers nor a fix step.** Nothing is owed. See [Break-it: the test change at a fix step](#break-it-the-test-change-at-a-fix-step).
 

@@ -133,8 +133,8 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - The `suggestion` field may be `null` for Minor/Nit when no clean fix is obvious.
 - Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review (summarize the rest as a count), real-consequence Nits uncapped; Important/Critical uncapped.
 - If you find yourself reporting >10 Minors, dedupe — they're often facets of the same underlying issue.
-- **Confidence.** Every finding carries the rubric's `confidence` (High/Low) — your self-assessment after the Chain-of-Verification. A **Low** Critical or Important MUST name exactly what is uncertain in its `evidence` line (e.g., "Low: could not confirm the project treats this directory as the pure-logic layer"). Confidence may be omitted on Minor/Nit (treated as High).
-- **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
+- **Confidence.** Every finding carries the rubric's `confidence` (High/Low) — your self-assessment after the Chain-of-Verification. A **Low** Critical or Important MUST name exactly what is uncertain in its `evidence` line (e.g., "Low: could not confirm the project treats this directory as the pure-logic layer"). Confidence may be null on Minor/Nit (treated as High).
+- **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Set it to `false` otherwise.
 
 ## Examples of Good vs Bad Findings
 
