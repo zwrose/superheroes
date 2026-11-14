@@ -389,3 +389,21 @@ The same command, run once at the end of the amendment:
 ```
 
 The two pointer rows that were red now pass with no existing test, fixture or pattern edited: the amendment changed `_dependencies` in `pr_sheet.py` only. `validate_skills.py` printed `✓ skills meet token-shape rules` and `validate_stubs.py` printed `✓ all STUB markers carry an issue reference`.
+
+## Review fix, round 1: token boundaries on D1's target and on D7
+
+The review found that D1's target words had no trailing word boundary ("If you choose a for itemized receipts" matched
+`... for item`) and that D7 checked only adjacent digits (1501 matched inside `SKU1501`). The fix bounds D1's target
+(`(?:other|...|collector)\b|\d+\b`) and makes D7 match whole tokens (`(?<!\w)(?<!\d-)` before, `(?!\w)(?!-\d)` after). Three
+accepted rows guard it, written before the fix and red on the code before it, with the detector unedited
+(`-k healthy` over the new test file):
+
+```
+FAILED ...::test_a_healthy_card_still_builds[ok-a-target-word-inside-a-longer-word]
+FAILED ...::test_a_healthy_card_still_builds[ok-another-collector-number-inside-an-identifier]
+FAILED ...::test_a_healthy_card_still_builds[ok-another-collector-number-before-a-letter]
+3 failed, 13 passed, 37 deselected in 0.68s
+```
+
+Green after the fix, over the new file and the six sheet test files: `1002 passed in 19.89s`. The line numbers quoted in
+G1 to G13 above are those of the commit each entry was recorded on; the fix moved none of the guarded elements' text.

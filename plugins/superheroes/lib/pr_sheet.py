@@ -228,7 +228,7 @@ _DEPENDS = re.compile(
     # D1 a choice made somewhere else
     r"\b(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\s+(?:pick|picked|choose|chose|chosen|answer|answered|rule|ruled"
     r"|select|selected|go\s+with|went\s+with)\s+\S+\s+(?:on|for|in|at|to)\s+(?:(?:the|that|your)\s+)?"
-    r"(?:other|previous|next|earlier|later|first|second|above|below|card|question|decision|item|collector|\d)"
+    r"(?:(?:other|previous|next|earlier|later|first|second|above|below|card|question|decision|item|collector)\b|\d+\b)"
     # D2 depending on an answer
     r"|\b(?:depending|depends|dependent|contingent|conditional)\s+on\s+(?:your|the|how\s+you|what\s+you|which)\b[^.;]{0,40}?"
     r"\b(?:answer|answered|ruling|ruled|pick|picked|choice|chose|choose|decision|decide)\b"
@@ -935,8 +935,9 @@ def _dependencies(card, own, numbers):
     fields = [(f"option {o['id']}", o[k]) for o in card["options"] for k in ("label", "consequence")]
     fields += [("recommendation", rec[k]) for k in ("text", "reason") if k in rec]
     others = sorted((n for n in numbers if n != own), reverse=True)
-    # Axis: another collector number on the sheet, written bare (not part of a longer or dashed number); D7.
-    bare = re.compile(r"(?<!\d)(?<!\d-)(?:" + "|".join(str(n) for n in others) + r")(?!\d)(?!-\d)") if others else None
+    # Axis: another collector number on the sheet, written bare (a whole token: not part of a longer number, a word or
+    # an identifier such as SKU1501, and not dashed to another number); D7.
+    bare = re.compile(r"(?<!\w)(?<!\d-)(?:" + "|".join(str(n) for n in others) + r")(?!\w)(?!-\d)") if others else None
     found_in = []
     for field, text in fields:
         # Axis: on a card with no options, text the list-item pointer check already refuses (a _DEPENDS span overlapping a _POINTER span) is left to that check.
