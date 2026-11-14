@@ -4620,7 +4620,11 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     staged = verification.stage_ids(state.get("_toVerify") or [])
     # axis: the ids this attempt minted are kept, so a ruling id reused by a later attempt is ambiguous, never bound to the earlier finding — #2157
     _record_staged_id_bindings(state, state.get("_toVerify") or [], staged, "verifiers")
-    applied = verification.apply_verdicts(staged, verdicts)
+    # the keys of the standing rulings, as the orders listed them: a REFUTED naming one rests on that ruling, not on the code
+    standing = [r for r in _standing_rulings_for_orders(state)[0] if isinstance(r.get("findingKey"), str)]
+    # axis: the fold hands apply_verdicts the standing rulings' keys and reasons, so a REFUTED naming or quoting one is marked — see bite-proof record wo1_scope_ruling_2478
+    applied = verification.apply_verdicts(staged, verdicts, [r["findingKey"] for r in standing],
+                                          {r["findingKey"]: r.get("reason") for r in standing})
     second_pass = state.get("_secondTestPass") is True
     sweep_pass = state.get("_sweepPass") is True
     survivors = list(applied["findings"])
@@ -5287,7 +5291,8 @@ def _repeat_changed(state, session_dir, entry):
 
 def _grade_verdict(finding):
     grade = finding.get(GRADE_FIELD) if isinstance(finding, dict) else None
-    return grade.get("verdict") if isinstance(grade, dict) else None
+    # axis: a wrong grade resting on a scope ruling is no code refutation, so a repeat reads it as no verdict — see bite-proof record wo1_scope_ruling_2478
+    return finding_outcomes.counted_verdict(grade)
 
 
 def _repeat_plan(state, grouping, session_dir, exact_only=None):

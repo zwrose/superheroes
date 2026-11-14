@@ -153,8 +153,12 @@ def _passed_run(finding):
     return isinstance(record, dict) and record.get("outcome") == break_it.OUTCOME_PASSED
 
 
-def apply_verdicts(findings, verdicts):
+def apply_verdicts(findings, verdicts, ruling_keys=(), ruling_reasons=None):
     """Consume per-finding verification verdicts; fail-closed on ambiguity.
+
+    A REFUTED whose reason or evidence rests on a scope ruling (`finding_outcomes.ruling_rest`, over ``ruling_keys`` and
+    ``ruling_reasons``, the keys and reasons of the standing rulings the orders listed) still drops, and its wrong grade
+    carries `restsOnRuling`: it was never shown wrong on the code.
 
     A finding whose break-it test passed, whose verdict says (`pathReached` exactly False) the test never reached
     the path the finding names, and that has not had its one more test (`secondTest`) is HELD: it goes to
@@ -215,6 +219,9 @@ def apply_verdicts(findings, verdicts):
             continue
         # axis: a REFUTED resting on a check that did not execute is kept unverified, never dropped — see bite-proof record wo_1_1981_not_executed
         if verdict == "REFUTED" and isinstance(reason, str) and reason.strip() and not unrun:
+            # axis: a REFUTED graded wrong on a scope ruling carries the mark, never reading as a code refutation — see bite-proof record wo1_scope_ruling_2478
+            rest = finding_outcomes.ruling_rest("%s\n%s" % (reason, evidence if isinstance(evidence, str) else ""),
+                                              ruling_keys, ruling_reasons)
             drops.append({
                 "id": fid,
                 "file": f.get("file"),
@@ -222,7 +229,8 @@ def apply_verdicts(findings, verdicts):
                 "reason": reason.strip(),
                 "was_blocking_tagged": circuit_breaker.is_blocking(f.get("severity")),
                 # axis: a REFUTED that executed and gave a reason is graded wrong — see bite-proof record c1l7_wo_b_verifier_grade
-                "grade": {"verdict": "wrong", "reason": reason.strip()},
+                "grade": dict({"verdict": "wrong", "reason": reason.strip()},
+                              **({finding_outcomes.RESTS_ON_RULING_FIELD: rest} if rest is not None else {})),
             })
             continue
         # A verdict is HONORED only when it is a valid CONFIRMED/PLAUSIBLE. Everything

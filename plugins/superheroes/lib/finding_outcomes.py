@@ -29,6 +29,74 @@ DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING)
 _COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
 
 
+RESTS_ON_RULING_FIELD = "restsOnRuling"
+# fail-safe: any ruling/rulings/ruled word, an accepted/supplied/standing/conservative/owner's/advisor's rule, or a scope row.
+# A bare "out of scope" and "not in changed material" are code-scope refutations the verifier order permits: neither matches
+_RULING_PHRASE = re.compile(
+    r"\b(?:rulings?|ruled|scope[\s-]+rows?"
+    r"|(?:accepted|supplied|standing|conservative|owner(?:['’]s)?|advisor(?:['’]s)?)(?:\s+[\w'’-]+){0,2}\s+rules?)\b",
+    re.IGNORECASE)
+_QUOTED = re.compile(r'"([^"]*)"|“([^”]*)”|`([^`]*)`')
+_QUOTE_MIN = 12
+
+
+def _whole_key(key, text):
+    """True when ``key`` is in ``text`` and is neither the start nor the end of a longer key (`…@L1` is not found inside
+    `…@L12`, and `a.py::…` is not found inside `src/a.py::…`)."""
+    # axis: a key counts only with a boundary on both sides, so a shorter path's ruling is never read inside a longer path — see bite-proof record wo1_scope_ruling_2478
+    return re.search(r"(?<![A-Za-z0-9_@/.:-])" + re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text) is not None
+
+
+def _quoted_ruling_keys(text, ruling_reasons):
+    """The keys of the rulings whose reason holds a quoted span (at least `_QUOTE_MIN` characters) of ``text``."""
+    if not isinstance(ruling_reasons, dict):
+        return set()
+    reasons = {k: " ".join(v.split()) for k, v in ruling_reasons.items() if isinstance(k, str) and k.strip() and isinstance(v, str)}
+    spans = {" ".join(s.split()) for m in _QUOTED.finditer(text) for s in m.groups() if s}
+    return {k for k, v in reasons.items() for s in spans if len(s) >= _QUOTE_MIN and s in v}
+
+
+def ruling_rest(text, ruling_keys=(), ruling_reasons=None):
+    """None when ``text`` does not rest on a scope ruling, else {"findingKey": <key or None>}. A key (one of ``ruling_keys``,
+    non-blank strings) appearing whole in the text names its ruling, and only when no quoted span points at a different ruling.
+    A quoted span of the text (at least `_QUOTE_MIN` characters) that sits in a ruling's reason (``ruling_reasons``: key to
+    reason) marks the text as resting on a ruling but never names one: it gives {"findingKey": None}, as do two whole keys and
+    the ruling wording alone."""
+    # axis: a verifier reason that names exactly one standing ruling's key whole rests on that ruling, unless a quoted span points at another — see bite-proof record wo1_scope_ruling_2478
+    if not isinstance(text, str):
+        return None
+    keys = ruling_keys if isinstance(ruling_keys, (list, tuple, set, frozenset)) else ()
+    named = {k for k in keys if isinstance(k, str) and k.strip() and _whole_key(k, text)}
+    # axis: a quoted span that sits in a ruling's reason marks the text as resting on a ruling but never names one — see bite-proof record wo1_scope_ruling_2478 (E15)
+    quoted = _quoted_ruling_keys(text, ruling_reasons)
+    if len(named) == 1 and not quoted - named:
+        return {"findingKey": next(iter(named))}
+    # axis: a verifier reason that speaks of a standing/out-of-scope ruling rests on a ruling even with no key — see bite-proof record wo1_scope_ruling_2478
+    if named or quoted or _RULING_PHRASE.search(text):
+        return {"findingKey": None}
+    return None
+
+
+def rests_on_ruling(grade, reason=None):
+    """True when ``grade`` is a wrong grade resting on a scope ruling: it carries a `restsOnRuling` dict, or (a row
+    written before the mark) its reason, or ``reason``, speaks of a ruling. Never raises."""
+    # axis: only a wrong grade can rest on a ruling, and a marked one always does — see bite-proof record wo1_scope_ruling_2478
+    if not isinstance(grade, dict) or grade.get("verdict") != "wrong":
+        return False
+    if isinstance(grade.get(RESTS_ON_RULING_FIELD), dict):
+        return True
+    return ruling_rest(grade.get("reason")) is not None or ruling_rest(reason) is not None
+
+
+def counted_verdict(grade):
+    """The verdict a repeat's grade counts for: None for a wrong grade resting on a scope ruling (no code refutation),
+    else the grade's own verdict (None for a non-dict). The one reader every repeat site uses."""
+    # axis: a ruling-resting wrong grade counts as no verdict at every repeat reader — see bite-proof record wo1_scope_ruling_2478
+    if rests_on_ruling(grade):
+        return None
+    return grade.get("verdict") if isinstance(grade, dict) else None
+
+
 def has_stated_consequence(finding):
     """True only when finding is a dict whose consequence is a string with visible content."""
     if not isinstance(finding, dict):

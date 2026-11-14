@@ -584,7 +584,12 @@ An entry may also carry `decidedBy`, the decision the ruling rests on:
 `sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`; for `owner-ruling` it is
 `{"url": <non-blank string>, "words": <non-blank string>}`. A `decidedBy` of any other shape
 is refused with `ruling-decided-by-malformed`. `rule` only records it in `rulingsLog`; it does not
-decide the finding's outcome — the end of the loop does (§ Dispositions).
+decide the finding's outcome — the end of the loop does (§ Dispositions). An out-of-scope entry cites
+its source in `decidedBy`: a verifier refutation that rests on an out-of-scope ruling (its `reason`
+names the ruling's key, or speaks of the standing ruling; the drop's grade carries `restsOnRuling`)
+reads `ruling` in the record only when that ruling carries `decidedBy`, with that `decidedBy`, and
+otherwise is left for the owner. It is never `shown-wrong`: the ruling says only that the finding is
+out of scope, never that the code is right.
 
 On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
 dispositions for out-of-scope rows, and refreshes gate guidance for a fix batch not yet set.

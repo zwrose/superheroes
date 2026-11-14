@@ -17,6 +17,7 @@ phase's planned seats whose result never landed, each as a reviewer that did not
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import countable_lines  # noqa: E402
 import decision_kinds  # noqa: E402
 import diff_scope  # noqa: E402
 import dispatch_outcome  # noqa: E402
+import finding_outcomes  # noqa: E402
 import payload_contracts  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
@@ -698,6 +700,47 @@ def _decided_by(rep, outcome):
     return held if outcome is not None and isinstance(held, dict) else None
 
 
+def _scope_ruling_for(grade, rulings):
+    """``(key, ruling row or None, why not)``: the out-of-scope ruling a wrong grade resting on a scope ruling names
+    (its `restsOnRuling.findingKey`), and why that ruling cannot be followed when it is None. Followable only when it is
+    in ``rulings``, is an out-of-scope ruling and cites a decision (`decidedBy` a dict): provenance alone is not one."""
+    mark = grade.get(finding_outcomes.RESTS_ON_RULING_FIELD) if isinstance(grade, dict) else None
+    key = mark.get("findingKey") if isinstance(mark, dict) else None
+    if not (isinstance(key, str) and key.strip()):
+        return None, None, "the verifier named no ruling row"
+    row = rulings.get(key) if isinstance(rulings, dict) else None
+    if not (isinstance(row, dict) and row.get("ruling") == "out-of-scope"):
+        return key, None, f"no out-of-scope ruling is on record for {key}"
+    # axis: a ruling row that cites no decision (an advisor message, a paraphrase) is not followable, so its refutation is left for the owner — see bite-proof record wo1_scope_ruling_2478
+    if not isinstance(sc.decided_by_of(row), dict):
+        return key, None, f"the ruling on {key} cites no decision"
+    return key, row, None
+
+
+def _refuted_on_ruling(rep, why, rulings):
+    """`_decide`'s result for a refuted row whose wrong grade rests on a scope ruling: the ruling when it can be
+    followed, else left for the owner. Never shown wrong: the finding was not refuted on the code."""
+    key, row, cannot = _scope_ruling_for(rep.get("grade"), rulings)
+    if row is None:
+        return _LEFT_FOR_OWNER, (f"refuted only on a scope ruling whose source cannot be followed ({cannot}); "
+                                 f"the verifier's reason: {why}"), rep
+    prov = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
+    by, at = _text(prov.get("ruledBy")) or "unrecorded", _text(prov.get("ruledAt")) or "unrecorded"
+    return _RULING, (f"refuted only on the out-of-scope ruling on {key} ({_text(row.get('reason'))}; ruled by {by}, "
+                     f"{at}); the verifier's reason: {why}"), rep
+
+
+def finding_decided_by(rep, outcome, rulings):
+    """`_decided_by`, except that a `ruling` read from a refuted row resting on a scope ruling cites that ruling's
+    own decision (copied), so the record writer re-checks it. The repeat pool (`repeat_marks.session_entry`) reads
+    the same citation, so a restored kept repeat keeps it."""
+    if outcome == _RULING and rep.get("disposition") == "refuted" and not _valid_repeat_kept(rep):
+        row = _scope_ruling_for(rep.get("grade"), rulings)[1]
+        if row is not None:
+            return copy.deepcopy(sc.decided_by_of(row))
+    return _decided_by(rep, outcome)
+
+
 def _valid_repeat_kept(rep):
     """True when ``rep`` carries a `repeatKept` mark `_decide` reads (an outcome in the vocabulary and a reason)."""
     kept = rep.get("repeatKept") if isinstance(rep, dict) else None
@@ -759,6 +802,9 @@ def _decide(own, by_key, rulings, exempt=None, ungraded=frozenset()):
         grade = rep.get("grade")
         # axis: a refuted row reads shown-wrong only on the verifier's own wrong grade, never on the disposition alone — see bite-proof record c1l7_wo_a_verifier_grade
         if isinstance(grade, dict) and grade.get("verdict") == "wrong":
+            # axis: a wrong grade resting on a scope ruling reads as that ruling (its decision cited) or left for the owner, never shown-wrong — see bite-proof record wo1_scope_ruling_2478
+            if finding_outcomes.rests_on_ruling(grade, why):
+                return _refuted_on_ruling(rep, why, rulings)
             return _SHOWN_WRONG, why, rep
         if (why or "").startswith("author-justified"):
             return _LEFT_FOR_OWNER, why, rep
@@ -1024,7 +1070,7 @@ def _findings_and_merges(state):
                 grade = held.get("grade")
                 # axis: the verdict is the one the repeat was kept on (its round's repeat mark), never a grade the keep restored — see bite-proof record i2438_repeat_follows
                 verdict = kept_verdicts[key] if key in kept_verdicts else (
-                    grade.get("verdict") if isinstance(grade, dict) else None)
+                    finding_outcomes.counted_verdict(grade))
                 held["repeatOf"] = dict(held["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: {
                     "outcome": outcome, "verdict": verdict if verdict in review_record.GRADE_VERDICTS else None}})
         if "kindOfMistake" in held:
@@ -1047,7 +1093,7 @@ def _findings_and_merges(state):
                 and sc.open_at_loop_end(rep)):
             held[sc.OPEN_AT_LOOP_END_FIELD] = True
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
-                    "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
+                    "decidedBy": finding_decided_by(rep, outcome, rulings) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail")), **held})
@@ -1070,7 +1116,8 @@ def _kept_mark_verdicts(state):
         for row in rows if isinstance(rows, list) else ():
             if isinstance(row, dict) and row.get("kept") is True and isinstance(row.get("findingKey"), str):
                 grade = row.get("grade")
-                out[row["findingKey"]] = grade.get("verdict") if isinstance(grade, dict) else None
+                # axis: a kept repeat whose grade rests on a scope ruling was kept on no verdict, so it never follows a fixed earlier finding — see bite-proof record wo1_scope_ruling_2478
+                out[row["findingKey"]] = finding_outcomes.counted_verdict(grade)
     return out
 
 
