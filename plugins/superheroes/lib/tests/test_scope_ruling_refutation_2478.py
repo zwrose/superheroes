@@ -29,7 +29,8 @@ import round_orders  # noqa: E402
 import verification as V  # noqa: E402
 
 from test_review_record_carried_recheck import FIX, X, X_KEY, account, entry, readers  # noqa: E402
-from test_review_record_session import HEAD  # noqa: E402
+from test_review_record_repeat_follows_2438 import OTHER_KEY, kept_row  # noqa: E402
+from test_review_record_session import HEAD, KEY as EARLIER, ledger_row  # noqa: E402
 
 PROOF = "plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md"
 KEY = "rk:src/foo.py:12:unchecked-index"
@@ -78,7 +79,8 @@ def test_a1_a_text_naming_exactly_one_live_ruling_key_rests_on_that_ruling():
     "the standing ruling covers this", "Standing Rulings cover this", "standing-ruling covers this",
     "this was ruled out of scope", "the owner ruled it out of scope", "they ruled this out of scope",
     "the out of scope ruling applies", "the out-of-scope rulings apply", "it sits on an out-of-scope row",
-    "it matches the scope rows", "an OUT  OF  SCOPE   ruling"])
+    "it matches the scope rows", "an OUT  OF  SCOPE   ruling",
+    "a ruling on tabs"])  # any ruling word is fail-safe: it reads as resting on a ruling (was pinned as not-a-ruling in WO-1)
 def test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key(text):
     # axis: ruling_rest phrase match (E2)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
@@ -86,9 +88,29 @@ def test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key(text):
 
 
 @pytest.mark.parametrize("text", [
+    pytest.param("this follows the accepted ruling", id="accepted-ruling"),
+    pytest.param("per the supplied ruling the finding is out", id="supplied-ruling"),
+    pytest.param("this follows the accepted conservative rule", id="accepted-conservative-rule"),
+    pytest.param('the finding was ruled "out of scope" by the owner', id="ruled-straight-quotes"),
+    pytest.param("the finding was ruled “out of scope” by the owner", id="ruled-curly-quotes"),
+    pytest.param("the standing rule covers it", id="standing-rule"),
+    pytest.param("the owner's rule covers it", id="owners-rule"),
+    pytest.param("the advisor rules apply", id="advisor-rules"),
+    pytest.param("the owner’s rule covers it", id="owners-rule-curly-apostrophe"),
+    pytest.param('it was ruled "not for this change" earlier', id="ruled-quoted-other-words"),
+])
+def test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key(text):
+    # axis: the widened ruling wording (E10): a ruling/ruled word, or an accepted/supplied/standing/conservative/owner/advisor rule
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    assert FO.ruling_rest(text) == {"findingKey": None}
+
+
+@pytest.mark.parametrize("text", [
     "not in changed material; out of scope of this diff", "this is out of scope", "the change is not in changed material",
-    "the index is checked at foo.py:12", "a ruling on tabs", "scoped rows"])
+    "the index is checked at foo.py:12", "scoped rows", "the rule of three applies to the loop", "a rules engine rejects it",
+    "the index is checked at foo.py:12, quoted: `if i < len(xs)`"])
 def test_a3_a_code_scope_refutation_is_not_a_ruling(text):
+    # axis: a code-scope refutation that mentions no ruling word stays not-a-ruling, so the widened wording is no blanket
     assert FO.ruling_rest(text) is None
 
 
@@ -96,12 +118,70 @@ def test_a3_a_code_scope_refutation_is_not_a_ruling(text):
     (None, (KEY,)), (7, (KEY,)), ([], (KEY,)), (ON_CODE, None), (ON_CODE, 5), (ON_CODE, ["", "  ", None, 3, b"x"]),
     (f"has {KEY}", ["", "  ", None, 3]), (f"has {KEY}", "not a list")])
 def test_a4_bad_text_and_bad_keys_never_raise_and_are_ignored(text, keys):
+    # axis: non-str text and blank or non-str keys never raise and attribute nothing (E-a)
     assert FO.ruling_rest(text, keys) is None
 
 
 def test_a5_a_key_that_is_not_a_live_ruling_key_leaves_the_phrase_to_decide():
+    # axis: only a live ruling key attributes; any other key in the text is a phrase question (E-b)
     assert FO.ruling_rest(f"{KEY} alone", ["rk:another"]) is None
     assert FO.ruling_rest(f"{KEY} under the standing ruling", ["rk:another"]) == {"findingKey": None}
+
+
+# ---- the quoted-reason attribution (E11) and the whole-key match (E12) ----------------------------------------------
+
+QUOTE = "belongs to the follow-up"
+OTHER = "rk:src/bar.py:3:other"
+
+
+@pytest.mark.parametrize("text", [
+    pytest.param(f'the verifier saw it is "{QUOTE}" and left it', id="straight-double"),
+    pytest.param(f"the verifier saw it is “{QUOTE}” and left it", id="curly-double"),
+    pytest.param(f"the verifier saw it is `{QUOTE}` and left it", id="backtick"),
+    pytest.param('the verifier saw it is "belongs   to\nthe  follow-up" and left it', id="whitespace-normalised"),
+])
+def test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling(text):
+    # axis: a quoted span of at least 12 characters found in exactly one live ruling's reason attributes to that ruling's key (E11)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    reasons = {KEY: "this " + QUOTE + ", per the owner", OTHER: "an unrelated reason"}
+    assert FO.ruling_rest(text, (), reasons) == {"findingKey": KEY}
+    assert FO.ruling_rest(text, [KEY, OTHER], reasons) == {"findingKey": KEY}
+
+
+def test_a8_a_quoted_span_in_two_rulings_reasons_names_no_single_key_and_a_short_or_absent_span_attributes_nothing():
+    # axis: a span found in two reasons is ambiguous (key None); a span under 12 characters or in no reason attributes nothing (E11)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    reasons = {KEY: "this " + QUOTE, OTHER: "also " + QUOTE + " here"}
+    assert FO.ruling_rest(f'it is "{QUOTE}"', (), reasons) == {"findingKey": None}
+    only_one = {KEY: "this " + QUOTE, OTHER: "something else entirely"}
+    assert FO.ruling_rest(f'it is "{QUOTE}"', (), only_one) == {"findingKey": KEY}
+    assert FO.ruling_rest('it is "belongs to"', (), only_one) is None  # 10 characters
+    assert FO.ruling_rest('it is "something that no reason holds"', (), only_one) is None
+    assert FO.ruling_rest(f"it is {QUOTE} with no quotes at all", (), only_one) is None
+    # the key and a quote that name two different rulings are two rulings
+    assert FO.ruling_rest(f'{OTHER} says "{QUOTE}"', [OTHER], only_one) == {"findingKey": None}
+
+
+@pytest.mark.parametrize("reasons", [None, "not a map", ["x"], {KEY: None}, {KEY: 5}, {None: QUOTE}, {"": QUOTE}, {"  ": QUOTE}])
+def test_a9_bad_ruling_reasons_never_raise_and_are_ignored(reasons):
+    # axis: ruling_reasons that is not a dict, or holds non-string keys or reasons, is ignored and never raises (E-a)
+    assert FO.ruling_rest(f'it is "{QUOTE}"', (), reasons) is None
+
+
+def test_a10_a_key_counts_only_whole_so_a_key_is_not_found_inside_a_longer_key():
+    # axis: whole-key matching: `...@L1` is not found inside `...@L12` (E12)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    short, long_ = "a.py::t@L1", "a.py::t@L12"
+    assert FO.ruling_rest(f"see {long_} for why", [short, long_]) == {"findingKey": long_}
+    assert FO.ruling_rest(f"see {long_} for why", [short]) is None
+    assert FO.ruling_rest(f"see {short} for why", [short, long_]) == {"findingKey": short}
+    # a key at the end of a sentence or clause, or in brackets or quotes, is still whole
+    for text in (f"see {short}.", f"see {short}, then", f"({short})", f"'{short}'", f"{short}: no", short):
+        assert FO.ruling_rest(text, [short]) == {"findingKey": short}, text
+    # a key that a longer key continues is not whole; a prefix of another key that appears whole counts with it
+    for tail in ("3", "x", "_", "-9", ".5", "@L2", "/y", ":7"):
+        assert FO.ruling_rest(f"see {short}{tail}", [short]) is None, tail
+    assert FO.ruling_rest(f"see {short} and {long_}", [short, long_]) == {"findingKey": None}
 
 
 def test_a6_rests_on_ruling_reads_the_mark_or_the_old_phrase_and_only_on_a_wrong_grade():
@@ -140,6 +220,7 @@ def test_b1_a_refuted_naming_a_standing_ruling_key_is_marked_and_the_record_read
 
 
 def test_b2_the_mark_on_a_drop_reaches_the_ledger_row_and_the_live_row_intact():
+    # axis: _record_grade writes the marked grade to the live row and a copy to the ledger row, mark intact (E3)
     grade = drop_grade(ON_RULING)
     state = {"dispositionLedger": [], "round": 1,
              "findings": [{"findingKey": "fk-1", "id": "f-1", "title": "Unchecked index", "file": "a.py", "line": 3}]}
@@ -149,11 +230,57 @@ def test_b2_the_mark_on_a_drop_reaches_the_ledger_row_and_the_live_row_intact():
     assert state["dispositionLedger"][0]["grade"] is not grade
 
 
-def test_b3_the_fold_passes_the_keys_of_the_live_standing_rulings_as_the_orders_rendered_them():
-    state = {"rulingsLog": [dict(ruling_row(), source="rule")], "dispositionLedger": [], "findings": []}
-    rows, failure = RD._standing_rulings_for_orders(state)
-    assert failure is None
-    assert [r["findingKey"] for r in rows] == [KEY]
+FOLD_CFG = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex",
+            "seatMap": {"hostFamily": "anthropic"}}  # a native `claude` seat folds without a vendor claim
+STAGED = {"title": "staged bug", "severity": "Important", "file": "f.py", "line": 3, "consequence": "it reads past the end"}
+QUOTED_RULING_REASON = "belongs to the follow-up"  # the standing ruling's reason, as the orders list it
+
+
+def fold(verifier_reason):
+    """Drive `_fold_verifiers` on a minimal driver state: one standing `rule` out-of-scope ruling on KEY, one staged finding,
+    and a REFUTED verdict with ``verifier_reason``. Returns ``(state, the staged finding's key)``."""
+    state = RD.new_state(FOLD_CFG)
+    state["rulingsLog"] = [dict(ruling_row(), source="rule", reason=QUOTED_RULING_REASON)]
+    compiled, _ = RD.mechanical_compile([dict(STAGED)], None)
+    RD._stage_findings(state, compiled)
+    RD._fold_verifiers(state, state["config"], {"verdicts": [{"id": "v0", "verdict": "REFUTED", "reason": verifier_reason}]})
+    return state, RD._finding_identity_key(compiled[0])
+
+
+def ledger_grade(state, key):
+    (row,) = [e for e in state["dispositionLedger"] if e.get("findingKey") == key]
+    return row["grade"]
+
+
+def test_b3_the_fold_marks_a_refuted_that_names_only_the_standing_rulings_key_with_no_phrase():
+    # axis: _fold_verifiers hands apply_verdicts the live standing rulings' keys, so a bare key in the reason marks the drop (E13)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    rows, failure = RD._standing_rulings_for_orders({"rulingsLog": [dict(ruling_row(), source="rule")],
+                                                     "dispositionLedger": [], "findings": []})
+    assert failure is None and [r["findingKey"] for r in rows] == [KEY]  # the premise: the key is listed as the orders list it
+    reason = f"{KEY} covers this finding"
+    assert FO.ruling_rest(reason) is None  # no phrase: only the key can mark it
+    state, key = fold(reason)
+    (drop,) = state["rounds"]["1"]["verify"]["drops"]
+    assert drop["grade"] == {"verdict": "wrong", "reason": reason, "restsOnRuling": {"findingKey": KEY}}
+    assert ledger_grade(state, key) == drop["grade"]
+    assert [e["disposition"] for e in state["dispositionLedger"] if e.get("findingKey") == key] == ["refuted"]
+
+
+def test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_and_leaves_a_code_refutation_unmarked():
+    # axis: _fold_verifiers hands apply_verdicts the live standing rulings' reasons, so a quoted reason marks the drop (E13)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    reason = f'the cited code is fine; the finding "{QUOTED_RULING_REASON}" and is not raised here'
+    assert FO.ruling_rest(reason) is None  # no phrase and no key: only the quoted reason can mark it
+    state, key = fold(reason)
+    (drop,) = state["rounds"]["1"]["verify"]["drops"]
+    assert drop["grade"]["restsOnRuling"] == {"findingKey": KEY}
+    assert ledger_grade(state, key) == drop["grade"]
+    # healthy sibling: a refutation on the code, with a quoted span no ruling holds, stays unmarked
+    state, key = fold(ON_CODE)
+    (drop,) = state["rounds"]["1"]["verify"]["drops"]
+    assert drop["grade"] == {"verdict": "wrong", "reason": ON_CODE}
+    assert ledger_grade(state, key) == {"verdict": "wrong", "reason": ON_CODE}
 
 
 # ---- DoD-2: a ruling that cites no decision, or no key at all, is left for the owner ----------------------------
@@ -183,6 +310,7 @@ def test_c1_a_refutation_whose_ruling_cannot_be_followed_is_left_for_the_owner(g
 
 
 def test_c2_a_left_for_owner_refutation_carries_no_decision_and_a_non_dict_mark_falls_back_to_the_phrase():
+    # axis: a left-for-owner refutation carries no decidedBy; a non-dict mark is no mark and the phrase decides (E-c, E-d)
     grade = drop_grade("the standing ruling routes this to the follow-up")
     state = {"dispositionLedger": [refuted_row(grade)], "findings": [], "rulingsLog": [ruling_row()]}
     (found,), _ = RS._findings_and_merges(state)
@@ -210,8 +338,8 @@ def build(finding, prior):
 
 @pytest.mark.parametrize("finding", [
     pytest.param(W_RULING, id="old-shape-phrase"),
-    pytest.param(dict(W_RULING, grade={"verdict": "wrong", "reason": CODE_REASON, "restsOnRuling": {"findingKey": KEY}}),
-                 id="marked-grade"),
+    # built from W_CODE (a code-sounding reason on the finding and on the grade): only the mark can permit the move
+    pytest.param(dict(W_CODE, grade=dict(W_CODE["grade"], restsOnRuling={"findingKey": KEY})), id="marked-grade"),
 ])
 def test_d1_a_shown_wrong_that_rested_on_a_ruling_moves_to_fixed_though_the_earlier_record_lists_it_shown_wrong(finding):
     # axis: _recheck_carried skips both unchanged guards for a ruling-resting shown-wrong (E6)
@@ -237,12 +365,27 @@ def test_d2_a_shown_wrong_that_rested_on_the_code_stays_unchanged_under_the_same
 
 
 def test_d3_a_ruling_resting_shown_wrong_still_needs_the_fixed_check_to_hold():
+    # axis: the ruling-resting bypass skips only the unchanged guards, never the fixed check's own conditions (E6)
     no_history = rr.build_record(account([entry()], [W_RULING]), readers(ancestor=False), prior=record("s-0", W_RULING))
     (f,) = no_history["findings"]
     assert f["outcome"] == "shown-wrong"
     (row,) = no_history["carriedRechecks"]
     assert row["result"] == "kept" and row["why"] == f"its fix commit {FIX[:7]} is not in the final commit's history"
     assert rr.build_record(account([entry()], [W_RULING]), readers(), prior=None)["findings"][0]["outcome"] == "shown-wrong"
+
+
+def test_d4_an_older_row_with_no_mark_and_a_code_sounding_grade_reason_reads_the_ruling_from_its_refuted_reason():
+    # axis: _decide passes the row's refutedReason to the ruling check, so an unmarked older row whose refutedReason speaks of the ruling is no shown-wrong (E5)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    grade = {"verdict": "wrong", "reason": ON_CODE}
+    assert "restsOnRuling" not in grade and FO.ruling_rest(grade["reason"]) is None
+    row = dict(refuted_row(grade), refutedReason=ON_RULING)
+    outcome, reason, _rep = RS._decide(row, {"fk-1": row}, {KEY: ruling_row()})
+    assert outcome == "left-for-owner" and outcome != "shown-wrong"
+    assert reason == f"refuted only on a scope ruling whose source cannot be followed (the verifier named no ruling row); the verifier's reason: {ON_RULING}"
+    # healthy sibling: the same row with a code-sounding refutedReason is shown-wrong as today
+    plain = dict(refuted_row(grade), refutedReason=ON_CODE)
+    assert RS._decide(plain, {"fk-1": plain}, {KEY: ruling_row()})[:2] == ("shown-wrong", ON_CODE)
 
 
 # ---- repeat precedence ----------------------------------------------------------------------------------------------
@@ -281,6 +424,7 @@ def test_e2_an_earlier_shown_wrong_that_rests_on_a_ruling_reads_open_so_its_repe
 
 
 def test_e3_a_record_finding_shown_wrong_on_a_ruling_pools_with_its_grade_and_reads_open():
+    # axis: a record finding's shown-wrong pools with its grade, and decision_outcome reads a ruling-resting one as open (E7)
     on_ruling = RM.record_entry(dict(X, findingKey="rr1:x", outcome="shown-wrong", reason=ON_RULING,
                                      grade={"verdict": "wrong", "reason": ON_RULING}))
     assert RM.decision_outcome(on_ruling) is None
@@ -307,6 +451,54 @@ def test_e4_a_pooled_scope_ruling_carries_its_cited_decision_so_a_kept_repeat_re
     assert bare["outcome"] == "left-for-owner" and "decidedBy" not in bare["family"]
 
 
+def followed(grade, via_marks):
+    """The repeat OTHER_KEY, kept with ``grade``, of the earlier finding EARLIER (fixed in the session), after the session
+    writer's account (`_findings_and_merges`) and the record writer's follow (`_follow_repeats`). ``via_marks`` puts the grade on
+    the round's kept repeat mark (the ledger row holds none); else on the ledger row (no round mark)."""
+    state = {"findings": [], "dispositionLedger": [ledger_row(EARLIER), kept_row(**({} if via_marks else {"grade": grade}))],
+             "rounds": {"2": {"repeatMarks": [{"id": "v0", "findingKey": OTHER_KEY, "source": "exact", "kept": True,
+                                              "grade": grade}]}} if via_marks else {}}
+    found, _merged = RS._findings_and_merges(state)
+    (repeat_,) = [f for f in rr._follow_repeats(found, []) if f["findingKey"] == OTHER_KEY]
+    return repeat_
+
+
+@pytest.mark.parametrize("via_marks", [pytest.param(True, id="round-repeat-mark"), pytest.param(False, id="ledger-grade-fallback")])
+@pytest.mark.parametrize("grade", [
+    pytest.param(drop_grade(ON_RULING), id="marked-grade"),
+    pytest.param({"verdict": "wrong", "reason": ON_RULING}, id="old-shape-phrase"),
+])
+def test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier(grade, via_marks):
+    # axis: the kept mark's verdict is read through the ruling-aware reader at both session-writer sites (E9)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    r = followed(grade, via_marks)
+    assert r["repeatOf"][rr.REPEAT_KEPT_FIELD] == {"outcome": "left-for-owner", "verdict": None}
+    assert r["outcome"] == "left-for-owner" and r["outcome"] != "fixed"
+    assert r["repeatOf"].get("fixHolds") is not True
+    assert r["reason"].startswith(rr.REPEAT_KEEPS_OWN.format(name="f-1", verdict="none"))
+
+
+@pytest.mark.parametrize("via_marks", [pytest.param(True, id="round-repeat-mark"), pytest.param(False, id="ledger-grade-fallback")])
+def test_e6_healthy_sibling_a_kept_repeat_whose_wrong_grade_rests_on_the_code_still_follows_to_fixed_with_fixholds(via_marks):
+    # axis: a code-refutation wrong grade is unchanged at the kept-verdict readers, so the repeat follows its fixed earlier finding
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    r = followed(drop_grade(ON_CODE), via_marks)
+    assert r["repeatOf"][rr.REPEAT_KEPT_FIELD] == {"outcome": "fixed", "verdict": "wrong"}
+    assert r["outcome"] == "fixed" and r["repeatOf"]["fixHolds"] is True
+
+
+def test_e7_counted_verdict_is_the_raw_verdict_unless_a_wrong_grade_rests_on_a_ruling():
+    # axis: counted_verdict returns None only for a ruling-resting wrong grade; every other grade reads as its own verdict (E9)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    assert FO.counted_verdict(drop_grade(ON_RULING)) is None
+    assert FO.counted_verdict({"verdict": "wrong", "reason": ON_RULING}) is None
+    assert FO.counted_verdict(drop_grade(ON_CODE)) == "wrong"
+    for verdict in ("plausible", "confirmed"):
+        assert FO.counted_verdict({"verdict": verdict, "reason": ON_RULING}) == verdict
+    for odd in (None, "wrong", 3, [], {}, {"reason": ON_RULING}):
+        assert FO.counted_verdict(odd) is None
+
+
 # ---- healthy siblings of DoD-1 ----------------------------------------------------------------------------------------
 
 def test_f1_a_refuted_on_the_code_is_unmarked_and_reads_shown_wrong_as_today():
@@ -324,6 +516,7 @@ def test_f1_a_refuted_on_the_code_is_unmarked_and_reads_shown_wrong_as_today():
 
 
 def test_f2_the_evidence_text_counts_and_a_code_scope_refutation_is_not_a_ruling():
+    # axis: apply_verdicts reads the evidence text as well as the reason; a code-scope refutation stays unmarked (E3)
     staged = V.stage_ids([{"file": "a.py", "title": "T", "severity": "Important"}])
     done = V.apply_verdicts(staged, [{"id": "v0", "verdict": "REFUTED", "reason": "unreachable", "evidence": ON_RULING}], [KEY])
     assert done["drops"][0]["grade"]["restsOnRuling"] == {"findingKey": KEY}

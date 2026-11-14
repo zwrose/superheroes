@@ -30,20 +30,42 @@ _COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/is
 
 
 RESTS_ON_RULING_FIELD = "restsOnRuling"
-# a bare "out of scope" and "not in changed material" are code-scope refutations the verifier order permits: neither matches
+# fail-safe: any ruling/rulings/ruled word, an accepted/supplied/standing/conservative/owner's/advisor's rule, or a scope row.
+# A bare "out of scope" and "not in changed material" are code-scope refutations the verifier order permits: neither matches
 _RULING_PHRASE = re.compile(
-    r"\b(?:standing[\s-]+rulings?|ruled[\s-]+(?:(?:it|this)[\s-]+)?out[\s-]+of[\s-]+scope"
-    r"|out[\s-]+of[\s-]+scope[\s-]+rulings?|scope[\s-]+rows?)\b", re.IGNORECASE)
+    r"\b(?:rulings?|ruled|scope[\s-]+rows?"
+    r"|(?:accepted|supplied|standing|conservative|owner(?:['’]s)?|advisor(?:['’]s)?)(?:\s+[\w'’-]+){0,2}\s+rules?)\b",
+    re.IGNORECASE)
+_QUOTED = re.compile(r'"([^"]*)"|“([^”]*)”|`([^`]*)`')
+_QUOTE_MIN = 12
 
 
-def ruling_rest(text, ruling_keys=()):
+def _whole_key(key, text):
+    """True when ``key`` is in ``text`` and is not the start of a longer key (`…@L1` is not found inside `…@L12`)."""
+    return re.search(re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text) is not None
+
+
+def _quoted_ruling_keys(text, ruling_reasons):
+    """The keys of the rulings whose reason holds a quoted span (at least `_QUOTE_MIN` characters) of ``text``."""
+    if not isinstance(ruling_reasons, dict):
+        return set()
+    reasons = {k: " ".join(v.split()) for k, v in ruling_reasons.items() if isinstance(k, str) and k.strip() and isinstance(v, str)}
+    spans = {" ".join(s.split()) for m in _QUOTED.finditer(text) for s in m.groups() if s}
+    return {k for k, v in reasons.items() for s in spans if len(s) >= _QUOTE_MIN and s in v}
+
+
+def ruling_rest(text, ruling_keys=(), ruling_reasons=None):
     """None when ``text`` does not rest on a scope ruling, else {"findingKey": <key or None>}: the key when exactly one
-    of ``ruling_keys`` (non-blank strings) appears in the text, None when two or more do or only the ruling phrase does."""
+    ruling is attributed, None when two or more are or only the ruling wording is. A ruling is attributed when its key (one of
+    ``ruling_keys``, non-blank strings) appears whole in the text, or a quoted span of the text sits in its reason
+    (``ruling_reasons``: key to reason)."""
     # axis: a verifier reason that names exactly one standing ruling's key rests on that ruling — see bite-proof record wo1_scope_ruling_2478
     if not isinstance(text, str):
         return None
     keys = ruling_keys if isinstance(ruling_keys, (list, tuple, set, frozenset)) else ()
-    named = {k for k in keys if isinstance(k, str) and k.strip() and k in text}
+    named = {k for k in keys if isinstance(k, str) and k.strip() and _whole_key(k, text)}
+    # axis: a quoted span of the verifier's text that sits in a ruling's reason attributes to that ruling — see bite-proof record wo1_scope_ruling_2478
+    named |= _quoted_ruling_keys(text, ruling_reasons)
     if len(named) == 1:
         return {"findingKey": next(iter(named))}
     # axis: a verifier reason that speaks of a standing/out-of-scope ruling rests on a ruling even with no key — see bite-proof record wo1_scope_ruling_2478
@@ -61,6 +83,15 @@ def rests_on_ruling(grade, reason=None):
     if isinstance(grade.get(RESTS_ON_RULING_FIELD), dict):
         return True
     return ruling_rest(grade.get("reason")) is not None or ruling_rest(reason) is not None
+
+
+def counted_verdict(grade):
+    """The verdict a repeat's grade counts for: None for a wrong grade resting on a scope ruling (no code refutation),
+    else the grade's own verdict (None for a non-dict). The one reader every repeat site uses."""
+    # axis: a ruling-resting wrong grade counts as no verdict at every repeat reader — see bite-proof record wo1_scope_ruling_2478
+    if rests_on_ruling(grade):
+        return None
+    return grade.get("verdict") if isinstance(grade, dict) else None
 
 
 def has_stated_consequence(finding):

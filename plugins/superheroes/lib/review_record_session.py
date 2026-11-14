@@ -1070,7 +1070,7 @@ def _findings_and_merges(state):
                 grade = held.get("grade")
                 # axis: the verdict is the one the repeat was kept on (its round's repeat mark), never a grade the keep restored — see bite-proof record i2438_repeat_follows
                 verdict = kept_verdicts[key] if key in kept_verdicts else (
-                    grade.get("verdict") if isinstance(grade, dict) else None)
+                    finding_outcomes.counted_verdict(grade))
                 held["repeatOf"] = dict(held["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: {
                     "outcome": outcome, "verdict": verdict if verdict in review_record.GRADE_VERDICTS else None}})
         if "kindOfMistake" in held:
@@ -1116,7 +1116,8 @@ def _kept_mark_verdicts(state):
         for row in rows if isinstance(rows, list) else ():
             if isinstance(row, dict) and row.get("kept") is True and isinstance(row.get("findingKey"), str):
                 grade = row.get("grade")
-                out[row["findingKey"]] = grade.get("verdict") if isinstance(grade, dict) else None
+                # axis: a kept repeat whose grade rests on a scope ruling was kept on no verdict, so it never follows a fixed earlier finding — see bite-proof record wo1_scope_ruling_2478
+                out[row["findingKey"]] = finding_outcomes.counted_verdict(grade)
     return out
 
 

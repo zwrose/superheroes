@@ -429,3 +429,539 @@ FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_
 
 `git status --porcelain` over the six library files shows them modified (`M`) by the intended change only; the full new test
 file then ran green: `49 passed in 0.52s`.
+
+---
+
+# WO-2 additions (order O-2482-V922): E9 to E13
+
+**How these runs were made.** Same method as above: each run is the order's pinned command
+`scripts/pinned-python -B -m pytest plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py -q -p no:cacheprovider --tb=line -k "<node selector>"`,
+narrowed by `-k` to the tests that guard the element (`--tb=line` shapes the traceback only; nothing is filtered). Each
+neutralization is one targeted edit and each restore is the inverse edit (never `git checkout`, `restore`, `reset` or `stash`).
+The uv notice line (`warning: The UV_NATIVE_TLS ...`) that opens every capture is omitted; nothing else is cut. No secrets or
+private URLs appear. Every capture is far below the 32 KiB ceiling. 20 red/green runs were used, one pair per
+neutralization.
+
+**Guarded-element set (declared by the order, none grouped):** E9 the ruling-aware kept verdict (the shared reader
+`finding_outcomes.counted_verdict`, then each of its two session-writer call sites separately), E10 the widened wording
+(each of the three new pattern alternatives separately), E11 the quoted-reason attribution, E12 whole-key matching, E13 the
+fold's key/reason hand-off (the keys, then the reasons, separately). That is 3 + 3 + 1 + 1 + 2 = 10 neutralizations, 10 reds.
+
+---
+
+## E9a — the shared reader: `finding_outcomes.counted_verdict` (`finding_outcomes.py`)
+
+Axis: a wrong grade resting on a scope ruling counts as no verdict at every repeat reader (`_grade_verdict` and both session
+writer sites go through it).
+
+**Neutralization:** `    if rests_on_ruling(grade):` became `    if False and rests_on_ruling(grade):` in `counted_verdict`.
+
+**Raw red** (`-k "test_e1_ or test_e5 or test_e7"`):
+
+```
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert 'wrong' is None
+     +  where 'wrong' = <function _grade_verdict at 0x7f762afaa340>({'grade': {'verdict': 'wrong', 'reason': 'the standing ruling on rk:src/foo.py:12:unchecked-index routes this to the follow-up, so it is not raised here', 'restsOnRuling': {'findingKey': 'rk:src/foo.py:12:unchecked-index'}}})
+     +    where <function _grade_verdict at 0x7f762afaa340> = RD._grade_verdict
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:399: AssertionError: assert 'wrong' is None
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert 'wrong' is None
+     +  where 'wrong' = <function counted_verdict at 0x7f762bb79a80>({'verdict': 'wrong', 'reason': 'the standing ruling on rk:src/foo.py:12:unchecked-index routes this to the follow-up, so it is not raised here', 'restsOnRuling': {'findingKey': 'rk:src/foo.py:12:unchecked-index'}})
+     +    where <function counted_verdict at 0x7f762bb79a80> = FO.counted_verdict
+     +    and   {'verdict': 'wrong', 'reason': 'the standing ruling on rk:src/foo.py:12:unchecked-index routes this to the follow-up, so it is not raised here', 'restsOnRuling': {'findingKey': 'rk:src/foo.py:12:unchecked-index'}} = drop_grade('the standing ruling on rk:src/foo.py:12:unchecked-index routes this to the follow-up, so it is not raised here')
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:493: AssertionError: assert 'wrong' is None
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e1_a_repeat_whose_grade_rests_on_a_ruling_is_no_code_refutation_and_proves_no_fix
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[marked-grade-round-repeat-mark]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[marked-grade-ledger-grade-fallback]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[old-shape-phrase-round-repeat-mark]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[old-shape-phrase-ledger-grade-fallback]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e7_counted_verdict_is_the_raw_verdict_unless_a_wrong_grade_rests_on_a_ruling
+6 failed, 80 deselected in 9.14s
+```
+
+**Restore:** inverse edit, `    if False and rests_on_ruling(grade):` back to `    if rests_on_ruling(grade):`.
+**Restore receipt:** a search of `finding_outcomes.py` for `if (False and )?rests_on_ruling\(grade\):` returned only
+`92:    if rests_on_ruling(grade):`.
+
+**Raw green** (same `-k`):
+
+```
+......                                                                   [100%]
+6 passed, 80 deselected in 0.43s
+```
+
+---
+
+## E9b — call site 1: `_kept_mark_verdicts` (`review_record_session.py`)
+
+Axis: a kept repeat's round mark is read through the shared reader, so a ruling-resting wrong grade on the mark gives the
+kept mark no verdict and the repeat does not follow a fixed earlier finding.
+
+**Neutralization:** `                out[row["findingKey"]] = finding_outcomes.counted_verdict(grade)` became
+`                out[row["findingKey"]] = grade.get("verdict") if isinstance(grade, dict) else None` (the pre-WO-2 raw read).
+
+**Raw red** (`-k "test_e5 or test_e6"`; only the two round-repeat-mark params fail, the two fallback params and the healthy
+siblings pass, so the other call site is not what this proves):
+
+```
+F.F...                                                                   [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      {'verdict': 'wrong'} != {'verdict': None}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[marked-grade-round-repeat-mark]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[old-shape-phrase-round-repeat-mark]
+2 failed, 4 passed, 80 deselected in 0.25s
+```
+
+**Restore:** inverse edit back to `                out[row["findingKey"]] = finding_outcomes.counted_verdict(grade)`.
+**Restore receipt:** the restored line is the one quoted above; the `git diff -U0` of `review_record_session.py` shows it as the added line
+`+                out[row["findingKey"]] = finding_outcomes.counted_verdict(grade)` under its `# axis:` comment.
+
+**Raw green** (same `-k`):
+
+```
+......                                                                   [100%]
+6 passed, 80 deselected in 0.23s
+```
+
+---
+
+## E9c — call site 2: the `_findings_and_merges` fallback (`review_record_session.py`)
+
+Axis: with no round mark, the kept verdict falls back to the held grade read through the shared reader.
+
+**Neutralization:** `                    finding_outcomes.counted_verdict(grade))` became
+`                    grade.get("verdict") if isinstance(grade, dict) else None)` (the pre-WO-2 raw read).
+
+**Raw red** (`-k "test_e5 or test_e6"`; only the two ledger-grade-fallback params fail):
+
+```
+.F.F..                                                                   [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'verdict': 'wrong'} != {'verdict': None}
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+E   AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+      
+      Differing items:
+      {'verdict': 'wrong'} != {'verdict': None}
+      {'outcome': 'fixed'} != {'outcome': 'left-for-owner'}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:475: AssertionError: assert {'outcome': '...ict': 'wrong'} == {'outcome': '...erdict': None}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[marked-grade-ledger-grade-fallback]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_e5_a_kept_repeat_whose_wrong_grade_rests_on_a_ruling_is_kept_on_no_verdict_and_never_follows_a_fixed_earlier[old-shape-phrase-ledger-grade-fallback]
+2 failed, 4 passed, 80 deselected in 0.29s
+```
+
+**Restore:** inverse edit back to `                    finding_outcomes.counted_verdict(grade))`.
+**Restore receipt:** the restored line is the one quoted above; the `git diff -U0` of `review_record_session.py` shows it as the added line
+`+                    finding_outcomes.counted_verdict(grade))`.
+
+**Raw green** (same `-k`):
+
+```
+......                                                                   [100%]
+6 passed, 80 deselected in 0.29s
+```
+
+---
+
+## E10 — the widened wording (`finding_outcomes.py`, `_RULING_PHRASE`), three alternatives
+
+Axis: any `ruling` / `rulings` / `ruled` word, or an accepted / supplied / standing / conservative / owner's / advisor's `rule`,
+reads as resting on a ruling with no key; a code-scope refutation that mentions none of them does not (`test_a3_...`, which
+passes in every run below, so the widening is no blanket).
+
+### E10a — the `rulings?` alternative
+
+**Neutralization:** `    r"\b(?:rulings?|ruled|scope[\s-]+rows?"` became `    r"\b(?:ruled|scope[\s-]+rows?"`.
+
+**Raw red** (`-k "test_a2 or test_a3"`):
+
+```
+FFF...FF..FFFF................                                           [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('the standing ruling covers this')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('Standing Rulings cover this')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('standing-ruling covers this')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('the out of scope ruling applies')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('the out-of-scope rulings apply')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('an OUT  OF  SCOPE   ruling')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('a ruling on tabs')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('this follows the accepted ruling')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7febce515940>('per the supplied ruling the finding is out')
+     +    where <function ruling_rest at 0x7febce515940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[the standing ruling covers this]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[Standing Rulings cover this]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[standing-ruling covers this]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[the out of scope ruling applies]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[the out-of-scope rulings apply]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[an OUT  OF  SCOPE   ruling]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[a ruling on tabs]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[accepted-ruling]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[supplied-ruling]
+9 failed, 21 passed, 56 deselected in 0.34s
+```
+
+**Restore:** inverse edit back to `    r"\b(?:rulings?|ruled|scope[\s-]+rows?"`.
+**Restore receipt:** the restored line is quoted above and appears in the `git diff -U0` of `finding_outcomes.py` as the added line
+`+    r"\b(?:rulings?|ruled|scope[\s-]+rows?"`.
+
+**Raw green** (same `-k`):
+
+```
+..............................                                           [100%]
+30 passed, 56 deselected in 0.33s
+```
+
+### E10b — the `ruled` alternative
+
+**Neutralization:** `    r"\b(?:rulings?|ruled|scope[\s-]+rows?"` became `    r"\b(?:rulings?|scope[\s-]+rows?"`.
+
+**Raw red** (`-k "test_a2 or test_a3"`):
+
+```
+...FFF.........FF....F........                                           [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('this was ruled out of scope')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('the owner ruled it out of scope')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('they ruled this out of scope')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:87: AssertionError: assert None == {'findingKey': None}
+E   assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('the finding was ruled "out of scope" by the owner')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('the finding was ruled “out of scope” by the owner')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+E   assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f4e13979940>('it was ruled "not for this change" earlier')
+     +    where <function ruling_rest at 0x7f4e13979940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: assert None == {'findingKey': None}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[this was ruled out of scope]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[the owner ruled it out of scope]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2_the_ruling_phrases_rest_on_a_ruling_with_no_key[they ruled this out of scope]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[ruled-straight-quotes]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[ruled-curly-quotes]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[ruled-quoted-other-words]
+6 failed, 24 passed, 56 deselected in 0.33s
+```
+
+**Restore:** inverse edit back to `    r"\b(?:rulings?|ruled|scope[\s-]+rows?"`.
+**Restore receipt:** same restored line as E10a (the file's line 36 reads `    r"\b(?:rulings?|ruled|scope[\s-]+rows?"`).
+
+**Raw green** (same `-k`):
+
+```
+..............................                                           [100%]
+30 passed, 56 deselected in 0.29s
+```
+
+### E10c — the `accepted / supplied / standing / conservative / owner's / advisor's ... rule(s)` alternative
+
+**Neutralization:** the tail `{0,2}\s+rules?)\b",` of line 37 became `{0,2}\s+rules?zz)\b",`.
+
+**Raw red** (`-k "test_a2 or test_a3"`):
+
+```
+..............F..FFFF.........                                           [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f3021d49940>('this follows the accepted conservative rule')
+     +    where <function ruling_rest at 0x7f3021d49940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f3021d49940>('the standing rule covers it')
+     +    where <function ruling_rest at 0x7f3021d49940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+E   assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f3021d49940>("the owner's rule covers it")
+     +    where <function ruling_rest at 0x7f3021d49940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f3021d49940>('the advisor rules apply')
+     +    where <function ruling_rest at 0x7f3021d49940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+E   AssertionError: assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f3021d49940>('the owner’s rule covers it')
+     +    where <function ruling_rest at 0x7f3021d49940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:105: AssertionError: assert None == {'findingKey': None}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[accepted-conservative-rule]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[standing-rule]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[owners-rule]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[advisor-rules]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a2b_the_field_wordings_of_a_ruling_rest_on_a_ruling_with_no_key[owners-rule-curly-apostrophe]
+5 failed, 25 passed, 56 deselected in 0.35s
+```
+
+**Restore:** inverse edit back to `{0,2}\s+rules?)\b",`.
+**Restore receipt:** the restored line 37 is quoted in the `git diff -U0` of `finding_outcomes.py` as
+`+    r"|(?:accepted|supplied|standing|conservative|owner(?:['’]s)?|advisor(?:['’]s)?)(?:\s+[\w'’-]+){0,2}\s+rules?)\b",`.
+
+**Raw green** (same `-k`):
+
+```
+..............................                                           [100%]
+30 passed, 56 deselected in 0.35s
+```
+
+---
+
+## E11 — the quoted-reason attribution (`finding_outcomes.py`, `ruling_rest` and `_quoted_ruling_keys`)
+
+Axis: a quoted span (at least 12 characters after whitespace normalisation) of the verifier text that sits in exactly one
+live ruling's reason attributes to that ruling's key; in two reasons it names no single key; a short span or one in no reason
+attributes nothing.
+
+**Neutralization:** `    named |= _quoted_ruling_keys(text, ruling_reasons)` became
+`    named |= set() and _quoted_ruling_keys(text, ruling_reasons)`.
+
+**Raw red** (`-k "test_a7 or test_a8 or test_a9 or test_b4"`):
+
+```
+FFFFF........F                                                           [100%]
+=================================== FAILURES ===================================
+E   assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+     +  where None = <function ruling_rest at 0x7f196cd7d940>('the verifier saw it is "belongs to the follow-up" and left it', (), {'rk:src/foo.py:12:unchecked-index': 'this belongs to the follow-up, per the owner', 'rk:src/bar.py:3:other': 'an unrelated reason'})
+     +    where <function ruling_rest at 0x7f196cd7d940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:147: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+E   AssertionError: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+     +  where None = <function ruling_rest at 0x7f196cd7d940>('the verifier saw it is “belongs to the follow-up” and left it', (), {'rk:src/foo.py:12:unchecked-index': 'this belongs to the follow-up, per the owner', 'rk:src/bar.py:3:other': 'an unrelated reason'})
+     +    where <function ruling_rest at 0x7f196cd7d940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:147: AssertionError: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+E   AssertionError: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+     +  where None = <function ruling_rest at 0x7f196cd7d940>('the verifier saw it is `belongs to the follow-up` and left it', (), {'rk:src/foo.py:12:unchecked-index': 'this belongs to the follow-up, per the owner', 'rk:src/bar.py:3:other': 'an unrelated reason'})
+     +    where <function ruling_rest at 0x7f196cd7d940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:147: AssertionError: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+E   assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+     +  where None = <function ruling_rest at 0x7f196cd7d940>('the verifier saw it is "belongs   to\nthe  follow-up" and left it', (), {'rk:src/foo.py:12:unchecked-index': 'this belongs to the follow-up, per the owner', 'rk:src/bar.py:3:other': 'an unrelated reason'})
+     +    where <function ruling_rest at 0x7f196cd7d940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:147: assert None == {'findingKey': 'rk:src/foo.py:12:unchecked-index'}
+E   assert None == {'findingKey': None}
+     +  where None = <function ruling_rest at 0x7f196cd7d940>('it is "belongs to the follow-up"', (), {'rk:src/foo.py:12:unchecked-index': 'this belongs to the follow-up', 'rk:src/bar.py:3:other': 'also belongs to the follow-up here'})
+     +    where <function ruling_rest at 0x7f196cd7d940> = FO.ruling_rest
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:155: assert None == {'findingKey': None}
+E   KeyError: 'restsOnRuling'
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:277: KeyError: 'restsOnRuling'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling[straight-double]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling[curly-double]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling[backtick]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling[whitespace-normalised]
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a8_a_quoted_span_in_two_rulings_reasons_names_no_single_key_and_a_short_or_absent_span_attributes_nothing
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_and_leaves_a_code_refutation_unmarked
+6 failed, 8 passed, 72 deselected in 0.33s
+```
+
+**Restore:** inverse edit back to `    named |= _quoted_ruling_keys(text, ruling_reasons)`.
+**Restore receipt:** the `git diff -U0` of `finding_outcomes.py` shows the restored line as
+`+    named |= _quoted_ruling_keys(text, ruling_reasons)`.
+
+**Raw green** (same `-k`):
+
+```
+..............                                                           [100%]
+14 passed, 72 deselected in 0.51s
+```
+
+---
+
+## E12 — whole-key matching (`finding_outcomes.py`, `_whole_key`)
+
+Axis: a key counts only when the character after it cannot continue a key, so `a.py::t@L1` is not found inside `a.py::t@L12`;
+when one key is a prefix of another and both appear whole, both count.
+
+**Neutralization:** in `_whole_key`, `re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text)` became
+`re.escape(key) + r"", text)` (a plain substring match).
+
+**Raw red** (`-k "test_a10 or test_a1_"`; `test_a1_` passes, so plain whole-key finds are unchanged):
+
+```
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'findingKey': None} == {'findingKey': 'a.py::t@L12'}
+      
+      Differing items:
+      {'findingKey': None} != {'findingKey': 'a.py::t@L12'}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:175: AssertionError: assert {'findingKey': None} == {'findingKey': 'a.py::t@L12'}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a10_a_key_counts_only_whole_so_a_key_is_not_found_inside_a_longer_key
+1 failed, 1 passed, 84 deselected in 0.31s
+```
+
+**Restore:** inverse edit back to `re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text)`.
+**Restore receipt:** the `git diff -U0` of `finding_outcomes.py` shows the restored line as
+`+    return re.search(re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text) is not None`.
+
+**Raw green** (same `-k`):
+
+```
+..                                                                       [100%]
+2 passed, 84 deselected in 0.32s
+```
+
+---
+
+## E13 — the fold's key/reason hand-off (`round_driver.py`, `_fold_verifiers`), two arguments
+
+Axis: `_fold_verifiers` passes `apply_verdicts` the standing rulings' keys and reasons, built from the same
+`_standing_rulings_for_orders(state)[0]` rows the orders list, so a REFUTED that names a key, or quotes a reason, with no ruling
+wording is still marked.
+
+### E13a — the keys
+
+**Neutralization:** `verification.apply_verdicts(staged, verdicts, [r["findingKey"] for r in standing],` became
+`verification.apply_verdicts(staged, verdicts, [],`.
+
+**Raw red** (`-k "test_b3 or test_b4"`; `test_b4`, which needs only the reasons, still passes):
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'verdict': '...this finding'} == {'verdict': '...ecked-index'}}
+      
+      Omitting 2 identical items, use -vv to show
+      Right contains 1 more item:
+      {'restsOnRuling': {'findingKey': 'rk:src/foo.py:12:unchecked-index'}}
+      Use -v to get more diff
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:265: AssertionError: assert {'verdict': '...this finding'} == {'verdict': '...ecked-index'}}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_b3_the_fold_marks_a_refuted_that_names_only_the_standing_rulings_key_with_no_phrase
+1 failed, 1 passed, 84 deselected in 0.45s
+```
+
+**Restore:** inverse edit back to `verification.apply_verdicts(staged, verdicts, [r["findingKey"] for r in standing],`.
+**Restore receipt:** the `git diff -U0` of `round_driver.py` shows
+`+    applied = verification.apply_verdicts(staged, verdicts, [r["findingKey"] for r in standing],`.
+
+**Raw green** (same `-k`):
+
+```
+..                                                                       [100%]
+2 passed, 84 deselected in 0.37s
+```
+
+### E13b — the reasons
+
+**Neutralization:** the second argument line `{r["findingKey"]: r.get("reason") for r in standing})` became `None)`.
+
+**Raw red** (`-k "test_b3 or test_b4"`; `test_b3`, which needs only the keys, still passes):
+
+```
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+E   KeyError: 'restsOnRuling'
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:277: KeyError: 'restsOnRuling'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_and_leaves_a_code_refutation_unmarked
+1 failed, 1 passed, 84 deselected in 0.35s
+```
+
+**Restore:** inverse edit back to `{r["findingKey"]: r.get("reason") for r in standing})`.
+**Restore receipt:** the `git diff -U0` of `round_driver.py` shows the added continuation line
+`+                                          {r["findingKey"]: r.get("reason") for r in standing})`.
+
+**Raw green** (same `-k`):
+
+```
+..                                                                       [100%]
+2 passed, 84 deselected in 0.41s
+```
+
+---
+
+## WO-2 final state
+
+The whole new test file ran green before the first neutralization (`86 passed in 1.46s`) and again after the last restore
+(`86 passed in 1.05s`); the final `git diff -U0` of the four edited library files shows no neutralization left. The two scoped
+suites ran green after the restores: the nine-file suite `389 passed` (its first run failed on two test fakes of
+`apply_verdicts` that did not take the new keyword, `test_outcome_settle_c7.py::test_t6_...` and
+`test_layer2e_staged_ids_1272.py::test_e1_...`; both fakes were given the keyword, as the order allows, and it was re-run), and the
+`-k` suite `2392 passed, 4 skipped` (the four skips are `test_round_driver_run_verify_2133.py` lines 617, 635, 657 and 693,
+each `claude write sandbox: /proc belongs to another PID namespace ...`, sandbox-only).
