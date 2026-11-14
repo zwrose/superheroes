@@ -22,7 +22,9 @@ Tokens (one finding each when triggered):
 Warnings (never a refusal): the result's ``warnings`` list never changes ``ok``, ``findings``
 or the CLI exit code. ``order-timeout-missing`` — an implementer order names a test suite or
 long-running command (``pytest``, ``npm test``, ``go test``, ``full suite`` …) and sets no
-``--timeout``; checked on the template-masked text with code spans and fences kept.
+``--timeout``; checked on the template-masked text with code spans and fences kept. The budget
+and ``--timeout`` keywords and the suite command are read outside path spans, and ``--timeout``
+counts only as a whole flag token.
 Per-kind table:
 | check | implementer |
 |---|---|
@@ -36,7 +38,7 @@ Per-kind table:
 | order-kind-unknown | other kind; alone |
 
 Limitations: no-slash/extensionless tokens skip the path check; a ``budget`` word
-within 60 characters of any integer satisfies the budget rule.
+within 60 characters of any integer satisfies the budget rule, read outside path spans.
 """
 from __future__ import annotations
 
@@ -88,6 +90,8 @@ _TRAIL_PUNCT = re.compile(r"[.,;:!?)}\]]+$")
 _SUITE_CMD = re.compile(
     r"(?<![\w.-])(?:pytest|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|jest|vitest|go\s+test"
     r"|cargo\s+test|make\s+test|full\s+suite|test\s+suites?)(?!\w|\.\w)", re.I)
+_PATH_RUN = re.compile(r"[A-Za-z0-9_.~/-]+")
+_TIMEOUT_FLAG = re.compile(r"(?<![\w-])--timeout(?![\w-])")
 _NATIVE = ('"resultKind"', "--output-schema")
 # Driver-bound verify-command token — not an unfilled order placeholder.
 _DRIVER_PH = frozenset({"baseRef"})
@@ -341,14 +345,30 @@ def _shape(text, expect_items):
     return None
 
 
+def _mask_path_spans(text):
+    """Blank (same length) every path span: a maximal run of ``[A-Za-z0-9_.~/-]`` holding a ``/``
+    or ending in a known extension. Only the run is blanked, never the whole whitespace token."""
+    def blank(m):
+        run = m.group(0)
+        if "/" in run or run.lower().endswith(EXTENSIONS):
+            return " " * len(run)
+        return run
+    return _PATH_RUN.sub(blank, text)
+
+
 def _budget_ok(text):
-    return bool(_BUDGET_AT.search(text) or _BUDGET.search(text))
+    # axis: a budget keyword inside a path span does not satisfy the budget rule — see bite-proof record i2452_order_lint
+    masked = _mask_path_spans(text)
+    return bool(_BUDGET_AT.search(masked) or _BUDGET.search(masked))
 
 
 def _timeout_warnings(text):
-    if "--timeout" in text:
+    masked = _mask_path_spans(text)
+    # axis: a --timeout inside a path span is not the flag — see bite-proof record i2452_order_lint
+    # axis: only a whole --timeout flag token counts, never part of a longer word — see bite-proof record i2452_order_lint
+    if _TIMEOUT_FLAG.search(masked):
         return []
-    m = _SUITE_CMD.search(text)
+    m = _SUITE_CMD.search(masked)
     return [_f(WARN_TIMEOUT_MISSING, m.group(0))] if m else []
 
 
