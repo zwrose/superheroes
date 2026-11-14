@@ -100,6 +100,16 @@ Five parts, in this order, on every item that passes the filter:
 `skills/showrunner/reference/vet-receipt.md` insists on for an explicit `None` applies here. An
 omitted section is exactly what a reader cannot interpret.
 
+**Every question is answerable on its own.** No owner question depends on another question's answer,
+in another venue or the same one. When two decisions depend on each other, the advisor takes one of
+two shapes: it asks them as **one question** whose options name each combination it means (one card,
+one venue), or it asks **only the first** and holds the second until the first is ruled, then asks
+the second on its own. A question never names another question's answer in its options or its
+recommendation: "a if item 12 is fix-before-merge, otherwise b" is refused shape. Its context may
+still say what came before. The PR sheet builder refuses a card whose options or recommendation
+depend on another card or collector item (`dependent-question`; [the review
+template](../../../theme/review-template.md) § The items).
+
 **A leftover from a review is framed in owner terms.** When a review finding reaches the owner as a
 leftover, its spine says what accepting it means, what it costs and what it risks, in terms of what
 a user or the project would see, lose or pay. Its options are the owner's choices, such as accepting
@@ -904,7 +914,7 @@ leftover carries this file's per-item spine, written by the advisor in its sheet
 the sheet input's `collectorItems` (shape in `lib/pr_sheet.py`'s docstring, as the template says), carrying this
 file's per-item spine and its collector number, so the merge verdict covers it like any other card. It is never
 delivered only in the chat. A "What you're accepting" card never stands in for it. The sheet builder refuses a
-card that only points the owner to a list item instead of carrying that decision's options.
+card that only points the owner to a list item instead of carrying that decision's options. Every question delivered, in the chat, on the index or on a sheet, stands on its own as § The per-item spine says.
 
 **The first answer the advisor reads counts.** The first answer the advisor reads to a batch-1
 question, in the chat or on the index, is the answer, and it counts at once. A batch-1 answer on the
@@ -1074,7 +1084,10 @@ whoever raised the item framed it, and that framing is input, never the grading.
 
 **Spine per item:** (1) why it is yours, (2) context — rule without another artifact, (3) options with
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
-the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
+the cost named — Recommendation: b — …. Empty sections stated empty, never dropped. Each question
+answerable on its own: two dependent decisions are one question whose options name each
+combination, or the second is held until the first is ruled; no option or recommendation names
+another question's answer.
 
 **Residual disposition:** machinery: the front door evidence bar first, before any venue (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) — an item that fails the bar is declined with a revisit trigger; past the bar → venue ladder (continue → fold → file, bundled by surface); product: never takes the bar — owner ratification, same venue ladder; a product decline is an owner call.
 **Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; every new filing is an owner call, whatever its tier, except the layer sub-issues of an approved stack shape or a size split, and what an owner word already approved; a new-scope layer waits for the word; doubt upward.
