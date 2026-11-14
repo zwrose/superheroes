@@ -24,8 +24,16 @@ import stack_linear as sl  # noqa: E402
 
 # pinned condition: every fixture git call ignores the user's and the system's git config and passes its
 # commit identity inline, so a host whose global config rewrites hooks, signing or default branches
-# cannot change the repos built here.
-_GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+# cannot change the repos built here. Inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE
+# and the rest) are dropped first: git honours them over cwd, so a test run from inside another git
+# operation would otherwise point these fixture calls at that repository.
+def _fixture_git_env(environ):
+    env = {key: value for key, value in environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    return env
+
+
+_GIT_ENV = _fixture_git_env(os.environ)
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 REPO = "o/r"
@@ -1154,6 +1162,50 @@ def test_prove_the_fixed_above_grammar_is_imported_when_the_check_runs_not_at_lo
 # The recipe's --no-rebase-merges flag.
 # ---------------------------------------------------------------------------------------------
 
+def test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched(tmp_path):
+    bait = tmp_path / "bait.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bait)], check=True, capture_output=True,
+                   env=_fixture_git_env(os.environ))
+    inherited = dict(os.environ, GIT_DIR=str(bait), GIT_WORK_TREE=str(tmp_path), GIT_INDEX_FILE=str(bait / "index"))
+    env = _fixture_git_env(inherited)
+    assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} & set(env)
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+    repo = tmp_path / "fixture"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(repo), check=True, capture_output=True, env=env)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True, capture_output=True, env=env)
+    subprocess.run(["git", *_ID, "commit", "-q", "-m", "a"], cwd=str(repo), check=True, capture_output=True, env=env)
+    assert (repo / ".git").is_dir()
+    # the bait is untouched: no commit, no object and no index were written into it
+    clean = _fixture_git_env(os.environ)
+    bait_head = subprocess.run(["git", "--git-dir", str(bait), "rev-parse", "--verify", "--quiet", "HEAD"],
+                               capture_output=True, text=True, env=clean)
+    assert bait_head.returncode != 0, "a fixture git call under an inherited GIT_DIR committed into the bait"
+    objects = subprocess.run(["git", "--git-dir", str(bait), "count-objects", "-v"],
+                             check=True, capture_output=True, text=True, env=clean).stdout
+    assert "count: 0" in objects.splitlines() and "in-pack: 0" in objects.splitlines(), objects
+    assert not (bait / "index").exists(), "a fixture git call under an inherited GIT_DIR wrote the bait's index"
+
+
+_MERGE_TRAIN = os.path.join(os.path.dirname(_LIB), "skills", "showrunner", "reference", "merge-train.md")
+
+
+def _recipe_rebase_flags():
+    """The flags the shipped recipe's straightening rebases pass, read from merge-train.md § Merging a
+    stack, item 4 (c): the words between `git rebase` and `--onto` in each of its two rebase commands."""
+    with open(_MERGE_TRAIN, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.index("(c) **Rebase on pinned shas.**")
+    end = text.index("(d) **A rebase conflict**", start)
+    step = " ".join(text[start:end].split())
+    commands = re.findall(r"`(git rebase [^`]*)`", step)
+    assert len(commands) == 2, commands
+    flags = [cmd.split("--onto", 1)[0].split()[2:] for cmd in commands]
+    assert flags[0] == flags[1], flags
+    return flags[0]
+
+
 def test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit(tmp_path):
     repo = tmp_path / "flag"
     repo.mkdir()
@@ -1182,8 +1234,8 @@ def test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_mer
                        bodies={101: ""}, run=_GitRun(), today=TODAY)
     _assert_not_proven(refused, "merge-commit-remains")
 
-    # the recipe's command with the flag: no merge commit, and prove proves
-    _git(repo, "rebase", "-q", "--no-rebase-merges", "--onto", base, base, vetted)
+    # the recipe's command as shipped (its flags read from merge-train.md): no merge commit, and prove proves
+    _git(repo, "rebase", "-q", *_recipe_rebase_flags(), "--onto", base, base, vetted)
     flat = _head(repo)
     _git(repo, "checkout", "-q", "main")
     assert flat != kept
