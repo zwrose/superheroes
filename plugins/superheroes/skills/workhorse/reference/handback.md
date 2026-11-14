@@ -133,6 +133,9 @@ The build record holds, below the marker:
 - **In the light lane**, the review dispositions table and the receipts. There is no brief.
 - **In both lanes**, bite-proof records for every detector the build added or changed, or the line
   `None — this build added or changed no detector` when there are none, plus disclosures.
+- **In both lanes, on the superheroes source repository**, when the change edited plugin Markdown,
+  the whole-tree text tests' run among the receipts: the command, the head, the pass count and the
+  run time (the charter's §8).
 - **In both lanes**, a dispatch provenance section: each dispatch with the engine and model it ran
   on, validated against the registry allowlist, so the advisor can vet what ran without your
   context. Per order it also records whether the order was a rework, and for any blocking review
