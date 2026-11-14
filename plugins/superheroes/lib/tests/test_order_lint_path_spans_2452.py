@@ -181,3 +181,68 @@ def test_f7_runner_name_inside_a_longer_last_segment_does_not_warn(tmp_path):
     r = OL.check_text("# WO\n\nSee bin/pytest-watch for the watcher.\n%s" % _BUDGET_LINE,
                       repo_root=root)
     assert r["warnings"] == []
+
+
+def _run_order(tmp_path, sentence):
+    root = _repo(tmp_path)
+    return OL.check_text("# WO\n\n%s\n%s" % (sentence, _BUDGET_LINE), repo_root=root)
+
+
+# G1-G6: every suite command word invoked by a path, with no timeout
+def test_g1_cargo_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the cargo command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run ~/.cargo/bin/cargo test once."))
+
+
+def test_g2_go_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the go command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run /usr/local/go/bin/go test ./... once."))
+
+
+def test_g3_npm_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the npm command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run ./node_modules/.bin/npm test once."))
+
+
+def test_g4_yarn_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the yarn command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run ./node_modules/.bin/yarn test once."))
+
+
+def test_g5_pnpm_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the pnpm command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run ./node_modules/.bin/pnpm test once."))
+
+
+def test_g6_make_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a path whose last segment is the make command word is still a suite command — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run /usr/bin/make test once."))
+
+
+# G7: the command word in a different case
+def test_g7_mixed_case_runner_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: the last-segment command word is matched case-insensitively, as the suite command is — see bite-proof record i2452_order_lint
+    assert _warned(_run_order(tmp_path, "Run .venv/bin/PyTest -q once."))
+
+
+# G8: a sentence-final period after the runner name
+def test_g8_runner_name_with_sentence_final_period_warns(tmp_path):
+    assert _warned(_run_order(tmp_path, "Then run .venv/bin/pytest."))
+
+
+# H1: a bare toolchain path is not a suite command
+def test_h1_bare_toolchain_path_does_not_warn(tmp_path):
+    r = _run_order(tmp_path, "See bin/go for the toolchain.")
+    assert r["warnings"] == []
+
+
+# H2: a longer last segment starting with a runner name
+def test_h2_longer_last_segment_does_not_warn(tmp_path):
+    r = _run_order(tmp_path, "Run bin/pytest-watch once.")
+    assert r["warnings"] == []
+
+
+# H3: a toolchain suite command by path that sets the flag
+def test_h3_toolchain_path_with_timeout_does_not_warn(tmp_path):
+    r = _run_order(tmp_path, "Run ~/.cargo/bin/cargo test --timeout 600 once.")
+    assert r["warnings"] == []
