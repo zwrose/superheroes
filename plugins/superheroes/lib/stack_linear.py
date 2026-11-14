@@ -17,6 +17,12 @@ head descends from the layer below's new head (the base, for the bottom), and th
 of the vetted bottom. Only a proven result carries the dated re-pin lines and the one leased, atomic
 push argv. The module prints that argv; it never runs a push.
 
+When `prove` is given each layer's pull request number and body, it proves one thing more: no body carries a
+`fixed-above #<PR> <commit>` line (the grammar of `leftover_accepting.FIXED_ABOVE_RE`) naming a layer of this stack
+with a commit that is not an ancestor of (or equal to) that layer's new head. A straightening rewrites every commit,
+so such a line would point at a commit the stack no longer holds; it refuses `fixed-above-stale` and prints the
+replacement line. A line naming a pull request outside the stack refuses `fixed-above-unknown-layer`.
+
 Every answer is JSON on stdout. Exit code 0 only when the result's `ok` is true."""
 import argparse
 import datetime
@@ -50,6 +56,8 @@ REASON_NOT_ON_LAYER_BELOW = "not-on-layer-below"
 REASON_BASE_NOT_CONTAINED = "base-not-contained"
 REASON_HISTORY_SHALLOW = "history-shallow"
 REASON_GIT_FAILED = "git-failed"
+REASON_FIXED_ABOVE_STALE = "fixed-above-stale"
+REASON_FIXED_ABOVE_UNKNOWN_LAYER = "fixed-above-unknown-layer"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
 _OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -136,10 +144,10 @@ def _check_unreadable(detail, layers):
                          layers=layers)
 
 
-def _prove_result(*, proven, reason, detail, base, layers, repin, push):
+def _prove_result(*, proven, reason, detail, base, layers, repin, push, fixed_above=None):
     """The one `prove` result builder. ok and proven are the same flag; repin and push are set only
-    by the caller that proved every layer."""
-    return {
+    by the caller that proved every layer. `fixedAbove` is present only when the bodies were checked."""
+    result = {
         "ok": proven,
         "proven": proven,
         "reason": reason,
@@ -149,6 +157,9 @@ def _prove_result(*, proven, reason, detail, base, layers, repin, push):
         "repin": repin,
         "push": push,
     }
+    if fixed_above is not None:
+        result["fixedAbove"] = fixed_above
+    return result
 
 
 def _prove_refused(reason, detail, base=None, layers=None):
@@ -444,7 +455,7 @@ def check_local(*, repo_root, base, layers, run=None):
 # prove.
 # ---------------------------------------------------------------------------------------------
 
-def _validate_prove(repo_root, base, layers, remote, today):
+def _validate_prove(repo_root, base, layers, remote, today, bodies):
     # axis: repo_root is not a non-empty string
     if not isinstance(repo_root, str) or not repo_root:
         return _prove_refused(REASON_BAD_ARGUMENT, "repo_root must be a non-empty path")
@@ -456,12 +467,13 @@ def _validate_prove(repo_root, base, layers, remote, today):
     # axis: layers is not a non-empty list
     if not isinstance(layers, list) or not layers:
         return _prove_refused(REASON_BAD_ARGUMENT,
-                              "layers must be a non-empty list of (branch, vetted, new)")
+                              "layers must be a non-empty list of (branch, vetted, new, pr)")
 
-    # axis: a layer is not a (branch, vetted, new) triple
-    if not all(isinstance(layer, (tuple, list)) and len(layer) == 3 for layer in layers):
+    # axis: a layer is not a (branch, vetted, new) triple or a (branch, vetted, new, pr) quadruple
+    if not all(isinstance(layer, (tuple, list)) and len(layer) in (3, 4) for layer in layers):
         return _prove_refused(REASON_BAD_ARGUMENT,
-                              "every layer must be a (branch, vetted, new) triple")
+                              "every layer must be a (branch, vetted, new) triple or a "
+                              "(branch, vetted, new, pr) quadruple")
 
     branches = [layer[0] for layer in layers]
     # axis: a branch is not a plain branch name (no whitespace, no colon, no leading dash)
@@ -476,6 +488,34 @@ def _validate_prove(repo_root, base, layers, remote, today):
     # axis: a vetted or new head is not a usable git ref
     if not all(_valid_ref(layer[1]) and _valid_ref(layer[2]) for layer in layers):
         return _prove_refused(REASON_BAD_ARGUMENT, "every vetted and new head must be a git ref")
+
+    prs = [layer[3] for layer in layers if len(layer) == 4]
+    # axis: a layer's pr is not a positive int (bool is not an int here)
+    if not all(_is_int(pr) and pr >= 1 for pr in prs):
+        return _prove_refused(REASON_BAD_ARGUMENT, "every layer's pr must be a positive integer")
+
+    # axis: the same pr is listed twice
+    if len(set(prs)) != len(prs):
+        return _prove_refused(REASON_BAD_ARGUMENT, "prs must not repeat a pull request")
+
+    if bodies is not None:
+        # axis: bodies are given but a layer is a triple, so it names no pull request
+        if len(prs) != len(layers):
+            return _prove_refused(REASON_BAD_ARGUMENT,
+                                  "bodies are given, so every layer must be a "
+                                  "(branch, vetted, new, pr) quadruple")
+
+        # axis: bodies is not a dict
+        if not isinstance(bodies, dict):
+            return _prove_refused(REASON_BAD_ARGUMENT,
+                                  "bodies must be a dict of pull request number to body text")
+
+        # axis: bodies are given but a layer's pull request has no string body
+        missing = [pr for pr in prs if not isinstance(bodies.get(pr), str)]
+        if missing:
+            return _prove_refused(REASON_BAD_ARGUMENT,
+                                  "no body text for pull request %s" % ", ".join(
+                                      str(pr) for pr in missing))
 
     # axis: remote is not a usable remote name
     if not _valid_ref(remote):
@@ -500,12 +540,71 @@ def _merges_between(run, repo_root, older, newer):
     return [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()], None
 
 
-def prove(*, repo_root, base, layers, remote="origin", today=None, run=None):
+def _check_fixed_above(run, repo_root, base_sha, entries, prs, bodies):
+    """Return (refusal, None), or (None, []) when no layer's body carries a stale fixed-above line.
+    Every `fixed-above #<PR> <commit>` line (`leftover_accepting.FIXED_ABOVE_RE`) in every body, in
+    layer order then body order, must name a layer of this stack with a commit that is an ancestor of
+    (or equal to) that layer's new head. All stale lines are collected before the refusal."""
+    # lazy import: stack_merge imports this module, and the merge path must not load
+    # leftover_accepting's dependencies
+    from leftover_accepting import FIXED_ABOVE_RE
+
+    new_of = {pr: entry["new"] for pr, entry in zip(prs, entries)}
+    stale = []
+    for pr in prs:
+        for found in FIXED_ABOVE_RE.finditer(bodies[pr]):
+            line, named, commit = found.group(0), int(found.group(1)), found.group(2)
+            # axis: a line naming a pull request that is not a layer of this stack - fixed-above-unknown-layer
+            if named not in new_of:
+                return _prove_result(
+                    proven=False, reason=REASON_FIXED_ABOVE_UNKNOWN_LAYER,
+                    detail="PR %d line \"%s\" names PR %d, which is not a layer of this stack" % (
+                        pr, line, named),
+                    base=base_sha, layers=entries, repin=[], push=None, fixed_above=[]), None
+
+            proc, problem = _git(run, repo_root, "rev-parse", "--verify", "--quiet",
+                                 commit + "^{commit}")
+            # axis: the commit could not be looked up at all - git-failed, never current
+            if proc is None:
+                return _prove_refused(REASON_GIT_FAILED, "PR %d line \"%s\": %s" % (pr, line, problem),
+                                      base=base_sha, layers=entries), None
+            commit_sha = (proc.stdout or "").strip()
+            resolves = proc.returncode == 0 and _OBJECT_ID_RE.match(commit_sha) is not None
+            # axis: a commit that does not resolve counts as stale
+            if not resolves:
+                stale.append((pr, line, named, commit))
+                continue
+
+            current, problem = _is_ancestor(run, repo_root, commit_sha, new_of[named])
+            # axis: git could not tell whether the commit is an ancestor of the new head - git-failed
+            if current is None:
+                return _prove_refused(REASON_GIT_FAILED, "PR %d line \"%s\": %s" % (pr, line, problem),
+                                      base=base_sha, layers=entries), None
+            # axis: the commit is not an ancestor of (nor equal to) the new head - stale
+            if not current:
+                stale.append((pr, line, named, commit))
+
+    # axis: any stale line refuses the straightening, with every stale line named
+    if stale:
+        return _prove_result(
+            proven=False, reason=REASON_FIXED_ABOVE_STALE,
+            detail="stale fixed-above lines: " + "; ".join(
+                "PR %d line \"%s\"" % (pr, line) for pr, line, _named, _commit in stale),
+            base=base_sha, layers=entries, repin=[], push=None,
+            fixed_above=[{"pr": pr, "line": line, "names": named, "commit": commit,
+                          "replacement": "fixed-above #%d %s" % (named, new_of[named])}
+                         for pr, line, named, commit in stale]), None
+    return None, []
+
+
+def prove(*, repo_root, base, layers, remote="origin", today=None, run=None, bodies=None):
     """Prove a straightening kept every layer's files and left no merge commit. `layers` is a list of
-    (branch, vetted, new) triples, bottom to top. Only a proven result carries repin and push."""
+    (branch, vetted, new) triples, or (branch, vetted, new, pr) quadruples, bottom to top. When
+    `bodies` (pull request number -> body text) is given, every layer must be a quadruple with a body,
+    and no body may carry a stale `fixed-above` line. Only a proven result carries repin and push."""
     run = subprocess.run if run is None else run
 
-    refusal = _validate_prove(repo_root, base, layers, remote, today)
+    refusal = _validate_prove(repo_root, base, layers, remote, today, bodies)
     if refusal is not None:
         return refusal
 
@@ -525,7 +624,8 @@ def prove(*, repo_root, base, layers, remote="origin", today=None, run=None):
         return _prove_refused(REASON_GIT_FAILED, "base: " + problem)
 
     resolved = []
-    for branch, vetted_ref, new_ref in layers:
+    for layer in layers:
+        branch, vetted_ref, new_ref = layer[0], layer[1], layer[2]
         vetted_sha, problem = _rev_parse(run, repo_root, vetted_ref, "commit", True)
         # axis: a vetted head does not resolve - git-failed
         if vetted_sha is None:
@@ -601,6 +701,13 @@ def prove(*, repo_root, base, layers, remote="origin", today=None, run=None):
                                   base=base_sha, layers=entries)
         prev = new_sha
 
+    fixed_above = None
+    if bodies is not None:
+        refusal, fixed_above = _check_fixed_above(run, repo_root, base_sha, entries,
+                                                  [layer[3] for layer in layers], bodies)
+        if refusal is not None:
+            return refusal
+
     if today is None:
         today = datetime.datetime.now(datetime.timezone.utc).date()
     elif isinstance(today, datetime.datetime):
@@ -620,7 +727,8 @@ def prove(*, repo_root, base, layers, remote="origin", today=None, run=None):
     )
     return _prove_result(proven=True, reason=None,
                          detail="%d layers keep their trees and carry no merge commit" % len(entries),
-                         base=base_sha, layers=entries, repin=repin, push=push)
+                         base=base_sha, layers=entries, repin=repin, push=push,
+                         fixed_above=fixed_above)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -639,9 +747,52 @@ def _build_parser():
     prove_parser = subparsers.add_parser("prove", allow_abbrev=False)
     prove_parser.add_argument("--repo-root", required=True)
     prove_parser.add_argument("--base", required=True)
-    prove_parser.add_argument("--layer", nargs=3, action="append", required=True)
+    prove_parser.add_argument("--layer", nargs=4, action="append", required=True)
+    prove_parser.add_argument("--pr-body", nargs=2, action="append")
     prove_parser.add_argument("--remote", default="origin")
     return parser
+
+
+_PR_TEXT_RE = re.compile(r"[1-9][0-9]*\Z")
+
+
+def _prove_cli_inputs(args):
+    """Return (layers, bodies, None) from the parsed `prove` arguments, or (None, None, refusal): each
+    --layer's pr as an int, and each --pr-body file read as UTF-8 text."""
+    layers = []
+    for branch, vetted, new, pr in args.layer:
+        # axis: a --layer pr is not a positive integer
+        if not _PR_TEXT_RE.match(pr):
+            return None, None, _prove_refused(REASON_BAD_ARGUMENT,
+                                              "--layer pr must be a positive integer")
+        layers.append((branch, vetted, new, int(pr)))
+
+    bodies = {}
+    for pr, path in args.pr_body or []:
+        # axis: a --pr-body pr is not a positive integer
+        if not _PR_TEXT_RE.match(pr):
+            return None, None, _prove_refused(REASON_BAD_ARGUMENT,
+                                              "--pr-body pr must be a positive integer")
+        # axis: the same pr is given two --pr-body files
+        if int(pr) in bodies:
+            return None, None, _prove_refused(REASON_BAD_ARGUMENT,
+                                              "--pr-body is given twice for PR %s" % pr)
+        try:
+            with open(path, "rb") as handle:
+                bodies[int(pr)] = handle.read().decode("utf-8")
+        except (OSError, ValueError) as exc:
+            # axis: a --pr-body file that cannot be read, or is not UTF-8, is never read as empty
+            return None, None, _prove_refused(
+                REASON_BAD_ARGUMENT,
+                "--pr-body %s file cannot be read as UTF-8 text: %s" % (pr, type(exc).__name__))
+
+    for layer in layers:
+        # axis: every layer's PR needs its own --pr-body, so no body is guessed as empty
+        if layer[3] not in bodies:
+            return None, None, _prove_refused(
+                REASON_BAD_ARGUMENT,
+                "--pr-body <pr> <file> is required for PR %d" % layer[3])
+    return layers, bodies, None
 
 
 def main(argv=None, *, run=None, monotonic=None, today=None):
@@ -661,9 +812,12 @@ def main(argv=None, *, run=None, monotonic=None, today=None):
         return 1
 
     if args.verb == "prove":
-        result = prove(repo_root=args.repo_root, base=args.base,
-                       layers=[tuple(layer) for layer in args.layer], remote=args.remote,
-                       today=today, run=run)
+        layers, bodies, refusal = _prove_cli_inputs(args)
+        if refusal is not None:
+            result = refusal
+        else:
+            result = prove(repo_root=args.repo_root, base=args.base, layers=layers,
+                           remote=args.remote, today=today, run=run, bodies=bodies)
     else:
         rest_form = args.repo is not None or args.pr is not None
         local_form = (args.repo_root is not None or args.base is not None

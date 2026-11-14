@@ -32,6 +32,7 @@ REPO = "o/r"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 TODAY = datetime.date(2026, 11, 14)
+PRS = [101, 102, 103]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -997,6 +998,202 @@ def test_prove_a_layer_rebuilt_from_its_vetted_tree_after_a_rebase_conflict(conf
 
 
 # ---------------------------------------------------------------------------------------------
+# prove: fixed-above lines in the layers' PR bodies (#2459 WO-6).
+# ---------------------------------------------------------------------------------------------
+
+def _two(stack):
+    """The first two layers as (branch, vetted, new, pr) quadruples, PRs 101 and 102."""
+    return [triple + (PRS[i],) for i, triple in enumerate(_triples(stack)[:2])]
+
+
+def _line(pr, sha):
+    return "fixed-above #%d %s" % (pr, sha)
+
+
+def test_prove_stale_fixed_above_line_is_refused_with_its_replacement(stack):
+    # the failing-today case: the finding is fixed by layer 2's vetted head, which the straightening rewrote
+    stale = _line(102, stack.vetted[1])
+    bodies = {101: "## Findings\n- F-1 retry loop never backs off. %s\n" % stale, 102: "No claim.\n"}
+    result = _prove(stack, _two(stack), bodies=bodies)
+    _assert_not_proven(result, "fixed-above-stale")
+    assert result["fixedAbove"] == [{
+        "pr": 101, "line": stale, "names": 102, "commit": stack.vetted[1],
+        "replacement": _line(102, stack.new[1]),
+    }]
+    assert 'PR 101 line "%s"' % stale in result["detail"]
+    assert [entry["branch"] for entry in result["layers"]] == ["l1", "l2"]
+
+    fixed = {101: bodies[101].replace(stale, result["fixedAbove"][0]["replacement"]), 102: bodies[102]}
+    again = _prove(stack, _two(stack), bodies=fixed)
+    assert again["proven"] is True and again["ok"] is True and again["fixedAbove"] == []
+
+
+def test_prove_bodies_without_a_fixed_above_line_prove_as_without_bodies(stack):
+    plain = _prove(stack, _triples(stack)[:2])
+    assert "fixedAbove" not in plain
+    healthy = _prove(stack, _two(stack), bodies={101: "No claim.\n", 102: "A bare fixed-above mention.\n"})
+    assert healthy["proven"] is True and healthy["fixedAbove"] == []
+    assert healthy["repin"] == plain["repin"] and healthy["push"] == plain["push"]
+    assert healthy["layers"] == plain["layers"]
+
+
+def test_prove_lines_naming_an_ancestor_of_the_new_head_are_current(stack):
+    body_101 = "\n".join([_line(102, stack.new[1]), _line(102, stack.new[0]),
+                          _line(101, stack.new[0]), _line(102, stack.new[1][:12])])
+    result = _prove(stack, _two(stack), bodies={101: body_101, 102: "`%s`\n" % _line(101, stack.new[0])})
+    assert result["proven"] is True and result["fixedAbove"] == []
+
+
+def test_prove_line_naming_a_pr_outside_the_stack_is_unknown_layer(stack):
+    bodies = {101: "No claim.\n", 102: "- F-2 fixed here, %s\n" % _line(999, stack.new[0])}
+    result = _prove(stack, _two(stack), bodies=bodies)
+    _assert_not_proven(result, "fixed-above-unknown-layer")
+    assert 'PR 102 line "%s"' % _line(999, stack.new[0]) in result["detail"]
+    assert "999" in result["detail"]
+    assert result["fixedAbove"] == []
+
+
+def test_prove_line_whose_commit_does_not_resolve_is_stale(stack):
+    nowhere = _line(102, "0123456")
+    result = _prove(stack, _two(stack), bodies={101: nowhere + "\n", 102: "No claim.\n"})
+    _assert_not_proven(result, "fixed-above-stale")
+    assert result["fixedAbove"][0]["commit"] == "0123456"
+    assert result["fixedAbove"][0]["replacement"] == _line(102, stack.new[1])
+
+
+def test_prove_all_stale_lines_in_all_bodies_are_reported(stack):
+    first, second = _line(102, stack.vetted[1]), _line(101, stack.vetted[0])
+    bodies = {101: "- F-1 %s\n" % first, 102: "- F-2 %s\n- F-3 %s\n" % (second, _line(101, stack.new[0]))}
+    result = _prove(stack, _two(stack), bodies=bodies)
+    _assert_not_proven(result, "fixed-above-stale")
+    assert [(item["pr"], item["line"], item["names"]) for item in result["fixedAbove"]] == [
+        (101, first, 102), (102, second, 101)]
+    assert result["fixedAbove"][1]["replacement"] == _line(101, stack.new[0])
+    assert first in result["detail"] and second in result["detail"]
+
+
+def test_prove_tree_proof_keeps_precedence_over_a_stale_line(stack):
+    changed = _amend(stack, stack.new[1], change="f2.txt")
+    triples = [("l1", stack.vetted[0], stack.new[0], 101), ("l2", stack.vetted[1], changed, 102)]
+    result = _prove(stack, triples, bodies={101: _line(102, stack.vetted[1]), 102: ""})
+    _assert_not_proven(result, "tree-changed")
+    assert "fixedAbove" not in result
+
+
+def test_prove_ancestry_check_failing_on_a_line_is_git_failed_not_current(stack):
+    def match(argv):
+        return argv[1:3] == ["merge-base", "--is-ancestor"] and argv[3] == stack.vetted[1]
+    bodies = {101: _line(102, stack.vetted[1]), 102: ""}
+    result = _prove(stack, _two(stack), bodies=bodies, run=_GitRun(_fail_when(match, rc=128, err="fatal")))
+    _assert_not_proven(result, "git-failed")
+    assert "PR 101" in result["detail"] and "fixedAbove" not in result
+
+
+def test_prove_lookup_raising_on_a_line_is_git_failed(stack):
+    short = stack.vetted[1][:12]
+    run = _GitRun(_raise_when(_is_commit_resolve(short), OSError("gone")))
+    result = _prove(stack, _two(stack), bodies={101: _line(102, short), 102: ""}, run=run)
+    _assert_not_proven(result, "git-failed")
+    assert "PR 101" in result["detail"] and "gone" in result["detail"]
+
+
+Q1 = ("l1", SHA_A, SHA_B, 1)
+Q2 = ("l2", SHA_B, SHA_A, 2)
+
+
+@pytest.mark.parametrize("layers,bodies", [
+    ([Q1, Q2], {1: "x"}),
+    ([Q1, Q2], {}),
+    ([Q1, Q2], {1: "x", 2: None}),
+    ([Q1, Q2], {1: "x", 2: b"y"}),
+    ([Q1, Q2], {1: "x", "2": "y"}),
+    ([Q1, Q2], []),
+    ([Q1, Q2], "xy"),
+    ([GOOD, Q2], {1: "x", 2: "y"}),
+    ([Q1, ("l2", SHA_B, SHA_A, 1)], {1: "x"}),
+    ([Q1, ("l2", SHA_B, SHA_A, 0)], {1: "x", 0: "y"}),
+    ([Q1, ("l2", SHA_B, SHA_A, True)], {1: "x"}),
+    ([Q1, ("l2", SHA_B, SHA_A, "2")], {1: "x", "2": "y"}),
+    ([Q1, ("l2", SHA_B, SHA_A, 2.0)], {1: "x", 2.0: "y"}),
+], ids=["missing-body", "empty-bodies", "body-none", "body-bytes", "key-is-string", "bodies-list",
+        "bodies-string", "triple-with-bodies", "duplicate-pr", "pr-zero", "pr-bool", "pr-string",
+        "pr-float"])
+def test_prove_bodies_that_do_not_fit_the_layers_are_bad_argument_and_run_nothing(layers, bodies):
+    run = _GitRun()
+    result = sl.prove(repo_root="/x", base="b", layers=layers, run=run, today=TODAY, bodies=bodies)
+    _assert_not_proven(result, "bad-argument")
+    assert result["layers"] == [] and "fixedAbove" not in result
+    assert run.calls == []
+
+
+@pytest.mark.parametrize("layers", [
+    [Q1, ("l2", SHA_B, SHA_A, 1)],
+    [Q1, ("l2", SHA_B, SHA_A, 0)],
+    [Q1, ("l2", SHA_B, SHA_A, "2")],
+], ids=["duplicate-pr", "pr-zero", "pr-string"])
+def test_prove_a_bad_pr_is_bad_argument_even_without_bodies(layers):
+    run = _GitRun()
+    _assert_not_proven(sl.prove(repo_root="/x", base="b", layers=layers, run=run, today=TODAY),
+                       "bad-argument")
+    assert run.calls == []
+
+
+def test_prove_quadruples_without_bodies_prove_as_before(stack):
+    result = _prove(stack, [t + (PRS[i],) for i, t in enumerate(_triples(stack))])
+    assert result["proven"] is True and "fixedAbove" not in result
+
+
+def test_prove_the_fixed_above_grammar_is_imported_when_the_check_runs_not_at_load():
+    source = open(os.path.join(_LIB, "stack_linear.py"), encoding="utf-8").read()
+    top = source.split("\ndef ", 1)[0]
+    assert "import leftover_accepting" not in top and "from leftover_accepting" not in top
+    assert "from leftover_accepting import FIXED_ABOVE_RE" in source
+
+
+# ---------------------------------------------------------------------------------------------
+# The recipe's --no-rebase-merges flag.
+# ---------------------------------------------------------------------------------------------
+
+def test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit(tmp_path):
+    repo = tmp_path / "flag"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _commit_file(repo, "a.txt", "0\n", "c0")
+    base = _commit_file(repo, "m.txt", "m\n", "m1")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit_file(repo, "g.txt", "g\n", "g")
+    _git(repo, "checkout", "-q", "-b", "l1", "main")
+    _commit_file(repo, "f1.txt", "1\n", "f1")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "side into l1", "side")
+    vetted = _head(repo)
+    assert _git(repo, "rev-list", "--merges", base + ".." + vetted) != ""
+    # the clone's own setting, in the throwaway repo only
+    _git(repo, "config", "rebase.rebaseMerges", "true")
+    assert _git(repo, "config", "--get", "rebase.rebaseMerges") == "true"
+    _git(repo, "checkout", "-q", "main")
+
+    # the recipe's command without the flag: the clone's setting keeps the merge commit
+    _git(repo, "rebase", "-q", "--onto", base, base, vetted)
+    kept = _head(repo)
+    _git(repo, "checkout", "-q", "main")
+    assert _git(repo, "rev-list", "--merges", base + ".." + kept) != "", \
+        "without the flag the clone's rebase.rebaseMerges keeps a merge commit"
+    refused = sl.prove(repo_root=str(repo), base=base, layers=[("l1", vetted, kept, 101)],
+                       bodies={101: ""}, run=_GitRun(), today=TODAY)
+    _assert_not_proven(refused, "merge-commit-remains")
+
+    # the recipe's command with the flag: no merge commit, and prove proves
+    _git(repo, "rebase", "-q", "--no-rebase-merges", "--onto", base, base, vetted)
+    flat = _head(repo)
+    _git(repo, "checkout", "-q", "main")
+    assert flat != kept
+    assert _git(repo, "rev-list", "--merges", base + ".." + flat) == ""
+    proven = sl.prove(repo_root=str(repo), base=base, layers=[("l1", vetted, flat, 101)],
+                      bodies={101: ""}, run=_GitRun(), today=TODAY)
+    assert proven["proven"] is True and proven["fixedAbove"] == []
+
+
+# ---------------------------------------------------------------------------------------------
 # Command line.
 # ---------------------------------------------------------------------------------------------
 
@@ -1057,10 +1254,21 @@ def test_cli_check_needs_exactly_one_form(capsys, argv):
     assert gh.calls == []
 
 
-def test_cli_prove_proven_prints_repin_and_push(stack, capsys):
+def _body_args(tmp_path, texts):
+    """The `--pr-body <pr> <file>` argv for {pr: body text}, each body written to its own file."""
+    argv = []
+    for pr, text in texts.items():
+        path = tmp_path / ("body-%d.md" % pr)
+        path.write_text(text, encoding="utf-8")
+        argv += ["--pr-body", str(pr), str(path)]
+    return argv
+
+
+def test_cli_prove_proven_prints_repin_and_push(stack, capsys, tmp_path):
     argv = ["prove", "--repo-root", stack.repo, "--base", stack.base, "--remote", "upstream"]
     for i in range(3):
-        argv += ["--layer", stack.branches[i], stack.vetted[i], stack.new[i]]
+        argv += ["--layer", stack.branches[i], stack.vetted[i], stack.new[i], str(PRS[i])]
+    argv += _body_args(tmp_path, {pr: "no claim\n" for pr in PRS})
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 0
     assert result["proven"] is True and len(result["repin"]) == 3
@@ -1068,9 +1276,10 @@ def test_cli_prove_proven_prints_repin_and_push(stack, capsys):
     assert result["repin"][0].startswith("Re-pinned 2026-11-14 (")
 
 
-def test_cli_prove_refusal_exits_one(stack, capsys):
+def test_cli_prove_refusal_exits_one(stack, capsys, tmp_path):
     argv = ["prove", "--repo-root", stack.repo, "--base", stack.base,
-            "--layer", "l1", stack.vetted[0], stack.vetted[0]]
+            "--layer", "l1", stack.vetted[0], stack.vetted[0], "101"]
+    argv += _body_args(tmp_path, {101: "no claim\n"})
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 1
     assert result["reason"] == "merge-commit-remains" and result["push"] is None
@@ -1099,8 +1308,90 @@ def test_cli_malformed_is_bad_argument_json_exit_one(capsys, argv):
         assert "linear" in result
 
 
-def test_cli_exit_code_is_zero_only_when_ok(stack, capsys):
+def test_cli_exit_code_is_zero_only_when_ok(stack, capsys, tmp_path):
     # a result that is a refusal exits 1 even though it printed a full JSON result
-    argv = ["prove", "--repo-root", stack.repo, "--base", "no-such-ref", "--layer", "l1", "a", "b"]
+    argv = ["prove", "--repo-root", stack.repo, "--base", "no-such-ref", "--layer", "l1", "a", "b",
+            "101"] + _body_args(tmp_path, {101: "no claim\n"})
     code, result = _cli(capsys, argv, run=_GitRun())
     assert code == 1 and result["reason"] == "git-failed"
+
+
+def _prove_argv(stack, *, prs=PRS):
+    argv = ["prove", "--repo-root", stack.repo, "--base", stack.base]
+    for i in range(3):
+        argv += ["--layer", stack.branches[i], stack.vetted[i], stack.new[i], str(prs[i])]
+    return argv
+
+
+def test_cli_prove_round_trip_with_bodies_prints_the_exact_push(stack, capsys, tmp_path):
+    # each --layer's branch is paired with its own heads and its own pr; the bodies are read from files
+    bodies = {101: "- F-1 %s\n" % _line(102, stack.new[1]), 102: "No claim.\n", 103: "é no claim\n"}
+    argv = _prove_argv(stack) + _body_args(tmp_path, bodies)
+    code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
+    assert code == 0 and result["proven"] is True and result["fixedAbove"] == []
+    assert result["push"] == (
+        ["git", "push", "--atomic", "origin"]
+        + ["--force-with-lease=refs/heads/%s:%s" % (stack.branches[i], stack.vetted[i]) for i in range(3)]
+        + ["%s:refs/heads/%s" % (stack.new[i], stack.branches[i]) for i in range(3)]
+    )
+    assert [entry["branch"] for entry in result["layers"]] == ["l1", "l2", "l3"]
+    assert [entry["new"] for entry in result["layers"]] == stack.new
+
+
+def test_cli_prove_stale_line_exits_one_with_the_replacement(stack, capsys, tmp_path):
+    stale = _line(103, stack.vetted[2])
+    argv = _prove_argv(stack) + _body_args(tmp_path, {101: "x\n", 102: stale + "\n", 103: "y\n"})
+    code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
+    assert code == 1 and result["reason"] == "fixed-above-stale" and result["push"] is None
+    assert result["fixedAbove"][0]["replacement"] == _line(103, stack.new[2])
+
+
+def test_cli_prove_without_a_pr_body_for_every_layer_is_bad_argument(stack, capsys, tmp_path):
+    run = _GitRun()
+    argv = _prove_argv(stack) + _body_args(tmp_path, {101: "x\n", 102: "y\n"})
+    code, result = _cli(capsys, argv, run=run, today=TODAY)
+    assert code == 1 and result["ok"] is False and result["reason"] == "bad-argument"
+    assert "--pr-body" in result["detail"] and "103" in result["detail"]
+    assert result["push"] is None and run.calls == []
+    code, result = _cli(capsys, _prove_argv(stack), run=run, today=TODAY)
+    assert code == 1 and result["reason"] == "bad-argument" and "--pr-body" in result["detail"]
+    assert run.calls == []
+
+
+def test_cli_prove_pr_body_file_that_cannot_be_read_is_bad_argument(stack, capsys, tmp_path):
+    run = _GitRun()
+    bad_utf8 = tmp_path / "latin1.md"
+    bad_utf8.write_bytes(b"caf\xe9 \xff\xfe\n")
+    for path in (str(tmp_path / "missing.md"), str(bad_utf8), str(tmp_path)):
+        files = _body_args(tmp_path, {101: "x\n", 102: "y\n"}) + ["--pr-body", "103", path]
+        code, result = _cli(capsys, _prove_argv(stack) + files, run=run, today=TODAY)
+        assert code == 1 and result["reason"] == "bad-argument", path
+        assert "103" in result["detail"] and "UTF-8" in result["detail"]
+    assert run.calls == []
+
+
+@pytest.mark.parametrize("extra,layer_pr", [
+    (["--pr-body", "0", "f"], "103"),
+    (["--pr-body", "x", "f"], "103"),
+    (["--pr-body", "103", "f", "--pr-body", "103", "f"], "103"),
+    ([], "0"),
+    ([], "abc"),
+    ([], "-3"),
+], ids=["body-pr-zero", "body-pr-text", "body-pr-twice", "layer-pr-zero", "layer-pr-text", "layer-pr-negative"])
+def test_cli_prove_bad_pr_numbers_are_bad_argument(stack, capsys, tmp_path, extra, layer_pr):
+    run = _GitRun()
+    path = tmp_path / "f"
+    path.write_text("x\n", encoding="utf-8")
+    argv = _prove_argv(stack, prs=[101, 102, int(layer_pr) if layer_pr.lstrip("-").isdigit() else layer_pr])
+    argv += _body_args(tmp_path, {101: "x\n", 102: "y\n"})
+    argv += [str(path) if token == "f" else token for token in extra]
+    code, result = _cli(capsys, argv, run=run, today=TODAY)
+    assert code == 1 and result["reason"] == "bad-argument"
+    assert run.calls == []
+
+
+def test_cli_prove_three_value_layer_is_the_old_form_and_bad_argument(stack, capsys):
+    argv = ["prove", "--repo-root", stack.repo, "--base", stack.base,
+            "--layer", "l1", stack.vetted[0], stack.new[0]]
+    code, result = _cli(capsys, argv, run=_GitRun())
+    assert code == 1 and result["reason"] == "bad-argument" and result["push"] is None
