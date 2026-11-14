@@ -798,6 +798,12 @@ def _stored_repeat(mark):
     return dict(mark, findingKey=review_record._key({"findingKey": key})) if isinstance(key, str) and key.strip() else mark
 
 
+def _without_kept(mark):
+    """A copy of the repeat mark without the `kept` stamp (which only this session's own decision writes); a mark
+    that is not an object is returned as it is."""
+    return {k: v for k, v in mark.items() if k != review_record.REPEAT_KEPT_FIELD} if isinstance(mark, dict) else mark
+
+
 def _stored_fix_group(group):
     """The fix group naming each member by its stored key, as `_stored_repeat` names the earlier finding; a
     malformed group is left for the writer to refuse."""
@@ -1009,6 +1015,15 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if isinstance(held.get("repeatOf"), dict):
+            # axis: a stale `kept` the ledger or row holds is dropped; only this session's own decision stamps it — see bite-proof record i2438_repeat_follows
+            held["repeatOf"] = _without_kept(held["repeatOf"])
+            # axis: the kept mark is stamped only on a finding that is its own representative and carries a valid `repeatKept`, never on a merged member — see bite-proof record i2438_repeat_follows
+            if rep is not None and sc.finding_identity_key(rep) == key and _valid_repeat_kept(rep):
+                grade = held.get("grade")
+                verdict = grade.get("verdict") if isinstance(grade, dict) else None
+                held["repeatOf"] = dict(held["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: {
+                    "outcome": outcome, "verdict": verdict if verdict in review_record.GRADE_VERDICTS else None}})
         if "kindOfMistake" in held:
             # the one place the record finding's kind is built: each place's `fixed` is read from the disposition the decision stands on
             held["kindOfMistake"] = _kind_with_place_results(held["kindOfMistake"], by_key.get(key), by_key, audit_answers)
@@ -1745,7 +1760,8 @@ def _fill(account, earlier, raisers_from=None):
             continue
         for part in ("grade", "repeatOf", "kindOfMistake"):
             if part not in f and part in old:
-                f[part] = _stored_repeat(old[part]) if part == "repeatOf" else old[part]
+                # axis: the earlier record's `kept` mark is never copied: it is this session's own decision's alone — see bite-proof record i2438_repeat_follows
+                f[part] = _without_kept(_stored_repeat(old[part])) if part == "repeatOf" else old[part]
         # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
         # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
         if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):
@@ -1768,7 +1784,11 @@ def _carried(account, earlier):
             continue
         reason = f.get("reason")
         fresh = isinstance(reason, str) and reason and not reason.endswith(CARRIED)
-        out.append(dict(f, reason=reason + CARRIED if fresh else reason))
+        copied = dict(f, reason=reason + CARRIED if fresh else reason)
+        # axis: a carried finding's `kept` mark does not cross records; it is dropped from the copy — see bite-proof record i2438_repeat_follows
+        if isinstance(copied.get("repeatOf"), dict):
+            copied["repeatOf"] = _without_kept(copied["repeatOf"])
+        out.append(copied)
     return out
 
 
