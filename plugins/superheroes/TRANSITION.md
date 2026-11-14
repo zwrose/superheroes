@@ -18,6 +18,22 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** A review record's kept repeat now follows its earlier finding's current outcome: a repeat graded wrong whose earlier finding reads fixed reads fixed instead of waiting for the owner, any other kept repeat whose earlier finding is fixed keeps its own outcome, and every other kept repeat is unchanged. The record's `repeatOf` gains the optional `kept` key, and an account carrying a malformed `kept` is refused `review-account-invalid`; a record written before the switch carries no `kept`, so its repeats are not followed. See [Review record: a kept repeat follows its earlier finding's current outcome](#review-record-a-kept-repeat-follows-its-earlier-findings-current-outcome).
+
+### Review record: a kept repeat follows its earlier finding's current outcome
+
+- A finding the session kept as a repeat carries `repeatOf.kept`, `{"outcome": <the outcome it kept>, "verdict": <the session's own verifier grade verdict of the repeat, or null>}`. The session writer stamps it on a finding that is its own representative and carries a valid kept mark, and never copies it from an earlier record.
+- When the record is written, a repeat whose outcome is still its kept outcome, that cites no decision, that no carried check names, and whose earlier finding is in the same record and reads `fixed` (fixed in the session, or moved to fixed by a carried check that held), is decided by the repeat table's `fixed` row on its kept verdict. A repeat graded `wrong` reads `fixed` with `fixHolds: true`; any other verdict, or none, keeps its own outcome, and a kept `left-for-owner` repeat is then its own owner card. A chain of kept repeats settles in turn, a ring changes nothing, and every other kept repeat is unchanged.
+- An account whose `kept` is not an object with an outcome from the outcome vocabulary and a verdict that is null, `confirmed`, `plausible` or `wrong` is refused `review-account-invalid`.
+- A record written before the switch carries no `kept`, so its repeats are never followed.
+- Replacement. None: the key is additive and no command or reason changes.
+
 ## 0.49.0
 
 ### Before you upgrade
