@@ -146,6 +146,19 @@ FAILED plugins/superheroes/lib/tests/test_merged_member_loop_2489.py::test_the_t
 - **Restore:** the inverse edit (`if False and ` removed). **Restore receipt:** the line reads `    if _nonempty_str(into) and into != key:` again; `git diff --stat` then showed only the fix and its test (round_driver.py 16 +/-, the test file 14 +).
 - **Raw green:** the same command → `1 passed, 19 deselected in 4.66s`.
 
+## E6 — the end-of-loop settle reads the ledger again after an unmerge (review session 2 fix)
+
+- **Guarded element:** `round_driver._settle_open_findings`, the lookup refresh after `_unmerge_finding` (`if refresh_fault is None: ledger_by_key = refreshed`). **Axis:** a finding the unmerge re-pointed resolves through its current link, so a chain leaf under a fixed representative with no ruling of its own is settled open too, whatever the ledger order.
+- **Neutralization:** `if refresh_fault is None:` → `if False and refresh_fault is None:` (one targeted edit through the host edit action).
+- **Raw red:** `pytest plugins/superheroes/lib/tests/test_merged_member_loop_2489.py -q -p no:cacheprovider -k test_the_settle_of_a_chain_middle` →
+  ```
+  /home/user/wt-2489/plugins/superheroes/lib/tests/test_merged_member_loop_2489.py:326: AssertionError
+  FAILED plugins/superheroes/lib/tests/test_merged_member_loop_2489.py::test_the_settle_of_a_chain_middle_settles_its_unaudited_leaf_too
+  1 failed, 20 deselected in 7.56s
+  ```
+- **Restore:** the inverse edit. **Restore receipt:** the line reads `            if refresh_fault is None:` again; `git diff --stat` showed only the fix and its test (round_driver.py 6 +/-, the test file 18 +).
+- **Raw green:** the same command → `1 passed, 20 deselected in 45.52s`.
+
 ## Not neutralized
 
 The `membersReopened` round record and the `merged-member-reopened` decision are written in the reopen branch E1 skips. The unit tests assert both, but neither write was neutralized on its own, so neither is proven by a run of its own.

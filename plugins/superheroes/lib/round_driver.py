@@ -3165,7 +3165,11 @@ def _settle_open_findings(state, cap=False):
                     and not session_contract.member_ruled_fixed(rep, key)):
                 continue
             row = _unmerge_finding(state, key) or _live_finding_by_key(state, key) or row
-            if key in ledger_by_key:
+            # axis: the unmerge re-points the findings merged into this one, so the lookup is read again and a later row resolves through its current link — see bite-proof record i2489_member_loop
+            refreshed, refresh_fault = _disposition_ledger_by_key(state)
+            if refresh_fault is None:
+                ledger_by_key = refreshed
+            elif key in ledger_by_key:
                 ledger_by_key[key] = row
         pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
         if _disposition_is_current(row) and not _restaged_after(state, key, row) and pending is None:

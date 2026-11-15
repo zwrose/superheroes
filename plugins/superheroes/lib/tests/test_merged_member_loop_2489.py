@@ -312,6 +312,24 @@ def test_edge9_the_settle_leaves_open_a_member_under_a_fixed_representative_with
     assert state[SC.DISPOSITION_LEDGER_KEY] == before
 
 
+def test_the_settle_of_a_chain_middle_settles_its_unaudited_leaf_too(tmp_path):
+    # axis: the unmerge re-points the findings merged into this one, so the lookup is read again and a later row resolves through its current link — see bite-proof record i2489_member_loop
+    # ledger order [representative, middle, leaf]: leaf -> middle -> a fixed representative that ruled neither
+    leaf = _ledger_row(M_C, "member " + M_C, 30, **{SC.MERGED_INTO_FIELD: M_A})
+    world = _world(tmp_path, members=(M_A,), extra_rows=(leaf,))
+    state = world.state
+    _ledger(state, REP).update({"disposition": "fixed", "dispositionRound": 2, SC.DISPOSITION_SEQ_FIELD: 9})
+    state["terminal"] = "handed-back"
+    RD._settle_open_findings(state, cap=True)
+    for key in (M_A, M_C):
+        row = _ledger(state, key)
+        assert row.get("disposition") == "left-for-owner" and row.get(SC.OPEN_AT_LOOP_END_FIELD) is True, row
+        assert SC.MERGED_INTO_FIELD not in row
+    before = copy.deepcopy(state[SC.DISPOSITION_LEDGER_KEY])
+    RD._settle_open_findings(state, cap=True)
+    assert state[SC.DISPOSITION_LEDGER_KEY] == before
+
+
 # --- the end-to-end arms -------------------------------------------------------------------------------------------
 
 LOCK_TITLE = "LOCK: the lock is released before the write finishes"
