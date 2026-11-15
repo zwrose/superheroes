@@ -144,7 +144,6 @@ REPEAT_FOLLOWS_FIXED = ("repeat of {name}, which is now fixed; this session's ve
                         "so the fix holds and it reads fixed")
 REPEAT_KEEPS_OWN = ("repeat of {name}, which is now fixed; its own grade ({verdict}) does not show the fix holds "
                     "for it, so it keeps its own outcome")
-REPEAT_MEMBER_FOLLOWS = "merged into {name}, a kept repeat that now reads fixed, so it reads fixed with it"
 REPEAT_FOLLOWS_RULING = "repeat of {name}, which that ruling settled, so it reads the ruling"
 REPEAT_MEMBER_FOLLOWS_RULING = ("merged into {name}, a kept repeat that now reads a ruling, so it reads the ruling "
                                 "with it")
@@ -1897,7 +1896,8 @@ def _follow_repeats(findings, checks, sources=None):
     verdict of the repeat, never the finding's `grade`): `wrong` moves it to fixed with `fixHolds` true; any other
     verdict keeps its own outcome and says why. When the earlier finding reads `ruling` with a cited decision that
     ``sources()`` shows on record now, a repeat kept at left-for-owner reads that ruling with a copy of the citation,
-    and so do the findings merged into it; a citation that is not on record changes nothing. Only a repeat whose
+    and so do the findings merged into it; a citation that is not on record changes nothing. The findings merged
+    into a repeat that moves to fixed do not follow it: they keep their own outcome. Only a repeat whose
     outcome is still the kept snapshot, with no cited decision and no carried check naming it, whose earlier finding
     is in this record, is read. Chains settle to a fixed point. With no ``sources`` the ruling branch never runs.
     Returns a new list; no input finding is changed."""
@@ -1968,13 +1968,7 @@ def _follow_repeats(findings, checks, sources=None):
                 changed = dict(f, outcome=_FIXED, repeatOf=dict(mark, fixHolds=True, **{
                     REPEAT_KEPT_FIELD: dict(kept, outcome=_FIXED, verdict=verdict)}))
                 moved = True
-                for j in members_to_follow(i, kept):
-                    # axis: a finding merged into the moved repeat, still at the kept outcome with no cited decision and no carried check naming it, reads fixed with it — see bite-proof record i2438_repeat_follows
-                    handled.add(j)
-                    h, was = out[j], out[j].get("reason")
-                    note = REPEAT_MEMBER_FOLLOWS.format(name=_name(f))
-                    out[j] = by_key[_key(h)] = dict(
-                        h, outcome=_FIXED, reason=f"{note}; earlier: {was}" if isinstance(was, str) and was else note)
+                # axis: a finding merged into the repeat that moved to fixed keeps its own outcome, since no audit ruled its own part fixed — see bite-proof record i2489_member_record
             else:
                 # axis: any other verdict keeps the repeat's own outcome and says so, so its owner card stays — see bite-proof record i2438_repeat_follows
                 new = REPEAT_KEEPS_OWN.format(name=_name(g), verdict=verdict if verdict is not None else "none")
