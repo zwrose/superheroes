@@ -671,6 +671,75 @@ def _leading_ws(line):
     return len(line) - len(line.lstrip())
 
 
+def _lexically_masked(lines):
+    """1-based numbers of the lines that START inside a block comment or a template literal.
+
+    Text on such a line is comment or literal content, never a declaration, so the
+    declaration-inside leg skips it. A small scanner, not a parser: it tracks ``/* */``
+    comments, ``//`` comments, quoted strings (one line each) and template literals with their
+    ``${...}`` expressions (nested templates included). It does not recognise regex literals,
+    so a backtick or a comment opener inside a regex can shift its state; a shifted state
+    only changes which lines are skipped by this one leg.
+    """
+    masked = set()
+    stack = []  # "tpl" for an open template literal; an int brace depth for a ${...} expression
+    block = False
+    for number, line in enumerate(lines, 1):
+        if block or (stack and stack[-1] == "tpl"):
+            masked.add(number)
+        quote = None
+        i, n = 0, len(line)
+        while i < n:
+            c = line[i]
+            nxt = line[i + 1] if i + 1 < n else ""
+            if block:
+                if c == "*" and nxt == "/":
+                    block = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if stack and stack[-1] == "tpl":
+                if c == "\\":
+                    i += 2
+                elif c == "`":
+                    stack.pop()
+                    i += 1
+                elif c == "$" and nxt == "{":
+                    stack.append(0)
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if quote:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+                i += 1
+                continue
+            if c == "/" and nxt == "/":
+                break
+            if c == "/" and nxt == "*":
+                block = True
+                i += 2
+                continue
+            if c in "'\"":
+                quote = c
+            elif c == "`":
+                stack.append("tpl")
+            elif stack and c == "{":
+                stack[-1] += 1
+            elif stack and c == "}":
+                if stack[-1] == 0:
+                    stack.pop()
+                else:
+                    stack[-1] -= 1
+            i += 1
+    return masked
+
+
 def _span_rules(rows, lines):
     """One rule per row of ONE file: None for a sound row, else the first leg that fired.
 
@@ -680,11 +749,12 @@ def _span_rules(rows, lines):
     # Bites on: a lizard row whose span no single brace block could hold (invalid, crossing,
     # or holding a declaration at or above its own indentation).
     n = len(lines)
+    masked = _lexically_masked(lines)
     decl_nums = []
     decl_indents = []
     for number, line in enumerate(lines, 1):
         stripped = line.lstrip()
-        if _DECL_RE.match(stripped):
+        if number not in masked and _DECL_RE.match(stripped):
             decl_nums.append(number)
             decl_indents.append(len(line) - len(stripped))
     spans = sorted((r["start"], r["end"]) for r in rows

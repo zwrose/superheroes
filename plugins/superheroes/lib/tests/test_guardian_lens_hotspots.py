@@ -2035,3 +2035,60 @@ def test_crlf_source_counts_lines_and_compares_indentation_the_same(tmp_path):
     assert files["hotspots:break1.ts"] == _MISREAD_DIGEST
     assert _span_errors(out) == [
         _misread_entry("break1.ts", "first", 1, 22, "declaration-inside")]
+
+
+# Declaration-looking text inside a block comment or a multi-line template literal is content, not a
+# declaration: the enclosing function stays measured (review finding: exclude comments and literals).
+_COMMENT_TS = """export function documented(x: number) {
+  /*
+function example() {
+  return 1;
+}
+   */
+  if (x) {
+    return 1;
+  }
+  return 0;
+}
+"""
+
+_TEMPLATE_TS = """export function render(x: number) {
+  const page = `
+function example() {
+  return ${x > 1 ? `${x}` : "none"};
+}
+export const other = () => 1;
+`;
+  if (x) {
+    return page;
+  }
+  return "";
+}
+"""
+
+
+@pytest.mark.parametrize("name, source", [
+    ("comment.ts", _COMMENT_TS),
+    ("template.ts", _TEMPLATE_TS),
+], ids=["block-comment", "template-literal"])
+def test_declaration_text_inside_a_comment_or_template_is_not_a_misread(tmp_path, name, source):
+    end = len(source.splitlines())
+    run = _span_run(tmp_path, {name: source}, _span_row(name, "f", 15, 1, end))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert _span_errors(out) == []
+    assert out["digest"]["files"]["hotspots:%s" % name]["ccn"] == 15
+    assert gl.classify_collect(out) == ("collected", None)
+
+
+def test_a_real_declaration_after_a_closed_comment_and_template_still_reads_misread(tmp_path):
+    # The mask ends where the comment and the template close: a declaration after them, inside the
+    # reported span, is still caught.
+    source = _COMMENT_TS + "\n" + _TEMPLATE_TS + "\nexport function later() {\n  return 1;\n}\n"
+    end = len(source.splitlines())
+    run = _span_run(tmp_path, {"mixed.ts": source}, _span_row("mixed.ts", "f", 15, 1, end))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:mixed.ts": _MISREAD_DIGEST}
+    assert _span_errors(out) == [
+        _misread_entry("mixed.ts", "f", 1, end, "declaration-inside")]
