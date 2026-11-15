@@ -88,17 +88,29 @@ def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_a
                _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")]),
                # the silent seat answered after its end; another seat did not run, silently or not, so this is no void
                _rec(5, "s5", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE, "not-run")], ends=[_end(SEC)])])
-    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 5}}, "unplaced": 0}
+    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "unresolved": 0, "sessions": 5}},
+                                        "unplaced": 0}
 
 
-def test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not():
-    """A forfeited seat's run dir binds no row, so its end carries the role-and-dir label; a seat a later round
-    recovered leaves no row that did not run (review_record_session drops the missing row), so its end voids nothing."""
+def test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one():
+    """A forfeited or recovered seat's run dir binds no row, so its end carries the role-and-dir label and cannot be
+    tied to the row that did not run: beside such a row it is unresolved, never a void. A seat a later round recovered
+    leaves no row that did not run (review_record_session drops the missing row), so alone its end is clear."""
     at, label = "2026-11-06T10:00:00Z", "reviewer (run-r1-sec)"
+    recovered = _row("security-reviewer (round 2)")
     m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(label)]),
-               _rec(2, "s2", at=at, status="not-reviewed", rows=[_row("security-reviewer (round 2)"), _row(CODE)],
-                    ends=[_end(label)])])
-    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 2}}, "unplaced": 0}
+               _rec(2, "s2", at=at, status="not-reviewed", rows=[recovered, _row(CODE)], ends=[_end(label)]),
+               # the recovered seat's end beside an unrelated seat that did not run (round-2 finding code-001)
+               _rec(3, "s3", at=at, status="not-reviewed", rows=[recovered, _row(CODE, "not-run")], ends=[_end(label)])])
+    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 0, "unresolved": 2, "sessions": 3}},
+                                        "unplaced": 0}
+
+
+def test_a_repeat_whose_card_another_finding_holds_is_no_owner_card_of_its_own():
+    original = _card("k1")
+    repeat = dict(_card("k2"), repeatOf={"findingKey": "k1", "id": "k1", "fixHolds": None})
+    m, _ = _m([_rec(1, findings=[original, repeat])], mergedPrs=[1])
+    assert m["ownerCardsPerMergedPr"]["byRelease"] == {"0.49.0": {"median": 1, "p90": 1, "total": 1}}
 
 
 def test_an_unrecorded_status_reads_unmeasured_never_uncertified_or_voided():

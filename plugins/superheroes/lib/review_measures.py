@@ -40,13 +40,15 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     `ownerCardsPerMergedPr` counts, per merged PR, the distinct finding keys any of its in-window sessions' latest
     records left for the owner (merged members left out). `sessionsPerPrByRelease` counts each PR's in-window sessions.
     `firstSessionCertification` reads each PR's first session among all its records: certified when that session's
-    latest record is `reviewed`. `silentReviewerVoids` counts the in-window sessions whose latest record is not
-    `reviewed`, has a reviewer row that did not run, and lists a silence-watchdog end for a seat that is not a row that
-    ran (a forfeited seat's end is named by its role and run dir, so it cannot be tied to its row by name; a seat a
-    later round recovered leaves no row that did not run, so its end voids nothing). It is what the held in-session
-    reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer). A release before 0.48.0, which
-    recorded no watchdog ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that
-    release's figure unmeasured.
+    latest record is `reviewed`; owner cards also leave out a repeat whose card another finding holds
+    (`review_record.repeat_held_elsewhere`). `silentReviewerVoids` reads each in-window session's latest record
+    that is not `reviewed` and has a reviewer row that did not run: `voided` when a silence-watchdog end names that
+    row, `unresolved` when an end names no row (a forfeited or recovered seat's run dir binds no row, so its end
+    carries its role and run dir and cannot be tied to the row that did not run), else neither. `voided` is what the
+    held in-session reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer); an
+    `unresolved` session is read in its record before it counts. A release before 0.48.0, which recorded no watchdog
+    ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that release's figure
+    unmeasured.
 """
 import argparse
 import collections
@@ -281,9 +283,10 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
             review_record.cleared(status) if status in review_record.STATUSES else None)
         if pr in merged_set:
             # axis: a merged PR's cards are its distinct finding keys left for the owner, merged members out — see bite-proof record i2498_by_release
+            # axis: a repeat whose card another finding of the record holds is no card of its own — see bite-proof record i2498_by_release
             cards = {f.get(session_contract.FINDING_KEY_FIELD) or f.get("id") for r in sessions[pr].values()
                      for f in r["findings"] if f.get("outcome") == review_findings_schema.LEFT_FOR_OWNER
-                     and not review_learning._merged_member(f)}
+                     and not review_learning._merged_member(f) and not review_record.repeat_held_elsewhere(f, r["findings"])}
             put("ownerCardsPerMergedPr", pr_release, len(cards))
         for sid, last in sessions[pr].items():
             ends = last.get("silenceWatchdogEnds", [])
@@ -291,12 +294,20 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
             whole = (isinstance(ends, list) and last.get("status") in review_record.STATUSES
                      and all(isinstance(e, dict) and isinstance(e.get("seat"), str) and e["seat"].strip() for e in ends))
             answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
-            missing = any(x["ran"] == review_record.RAN_NOT_RUN for x in last["reviewers"])
-            # axis: voided only when the session did not certify and a silence end names a seat that never answered — see bite-proof record i2498_by_release
-            # axis: a silence end counts only beside a reviewer row that did not run, so a seat a later round recovered (its row gone, its dir unbound) voids nothing — see bite-proof record i2498_by_release
-            voided = (None if not whole else not review_record.cleared(last.get("status"))
-                      and missing and any(e["seat"] not in answered for e in ends))
-            put("silentReviewerVoids", release_of([r for r in rs if r["sessionId"] == sid]), voided)
+            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
+            silent = [e["seat"] for e in ends if e["seat"] not in answered] if whole else []
+            if not whole:
+                state = None
+            elif review_record.cleared(last.get("status")) or not not_run or not silent:
+                # axis: a session that certified, or whose every silent seat answered, or with no reviewer row that did not run, is no void — see bite-proof record i2498_by_release
+                state = "clear"
+            elif any(s in not_run for s in silent):
+                # axis: voided only when a silence end names a reviewer row that did not run — see bite-proof record i2498_by_release
+                state = "voided"
+            else:
+                # axis: an end naming no row (a forfeited or a recovered seat's run dir binds none) beside a row that did not run is unresolved, never a void — see bite-proof record i2498_by_release
+                state = "unresolved"
+            put("silentReviewerVoids", release_of([r for r in rs if r["sessionId"] == sid]), state)
 
     def shown(k, ver, vals):
         if k == "ownerCardsPerMergedPr":
@@ -312,7 +323,7 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
             return miss("%s.byRelease.%s" % (k, ver), "watchdog-ends-not-recorded")
         if None in vals:
             return miss("%s.byRelease.%s" % (k, ver), "incomplete-evidence")
-        return {"voided": sum(vals), "sessions": len(vals)}
+        return {"voided": vals.count("voided"), "unresolved": vals.count("unresolved"), "sessions": len(vals)}
 
     out = {k: {"byRelease": {v: shown(k, v, by[k][v]) for v in sorted(by[k], key=versions.get)},
                "unplaced": unplaced[k]} for k in BY_RELEASE}

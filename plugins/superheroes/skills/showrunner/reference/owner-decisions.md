@@ -662,7 +662,9 @@ advisor run together to keep calibration honest.
      reviewer (`silentReviewerVoids`). They read the input's `releases` (each release the project ran,
      with the day it adopted it) and, for owner cards, `mergedPrs`. A session or PR earlier than every
      listed release counts as unplaced. The held in-session reviewer retry waits on the fourth: it is
-     due once a session on 0.50.0 or later reads voided there.
+     due once a session on 0.50.0 or later reads voided there. A session it counts as unresolved
+     (a silence end it cannot tie to the reviewer that did not run) is read in its review record
+     before it counts either way.
    - **The tally counts escapes by kind as well as by seat**, as `escapesByKind`, and the per-seat
      tally stays. An escape with no kind, every escape logged before the caught-by line existed
      among them, counts as `unmeasured` for kind, never as `nothing-reachable`; a kind outside the
