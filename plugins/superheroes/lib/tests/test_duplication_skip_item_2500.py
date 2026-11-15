@@ -23,6 +23,7 @@ def _load(name):
 
 PC = _load("project_config")
 CM = _load("core_md")
+GS = _load("guardian_sweep")
 
 _CORE_FACTS = {
     "verifyCommand": "npm test",
@@ -156,6 +157,26 @@ def test_reader_names_an_unavailable_repo_root(tmp_path, monkeypatch):
     got = PC.read_duplication_skip(repo, root=store)
     assert got["globs"] == []
     assert got["reason"] == "duplication-skip-unreadable"
+
+
+def test_sweep_reads_the_stored_item(tmp_path):
+    # axis: a value stored through set_item reaches the lens, unchanged, through the sweep's reader
+    repo, store = _setup_repo(tmp_path)
+    stored = ["snapshots/**", "styles/generated/*.css"]
+    assert PC.set_item(repo, "duplicationSkip", stored, root=store)["action"] == "written"
+    got = GS._read_duplication_skip(repo, store)
+    assert got["globs"] == ["snapshots/**", "styles/generated/*.css"]
+    assert got["reason"] is None
+    assert os.path.realpath(got["repoRoot"]) == os.path.realpath(repo)
+
+
+def test_sweep_reads_a_malformed_item_as_skip_nothing(tmp_path):
+    # axis: a malformed stored value read through the sweep skips nothing and names duplication-skip-malformed
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config(repo, {"duplicationSkip": "not-a-list"}, root=store)
+    got = GS._read_duplication_skip(repo, store)
+    assert got["globs"] == []
+    assert got["reason"] == "duplication-skip-malformed"
 
 
 def test_reader_writes_nothing(tmp_path):
