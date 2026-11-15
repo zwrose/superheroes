@@ -1,6 +1,7 @@
 # plugins/superheroes/lib/tests/test_duplication_skip_item_2500.py
 """Calibration item 20 (duplicationSkip): the set path, and the never-raising, read-only reader."""
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -59,6 +60,7 @@ def _snapshot(directory):
 
 
 def test_registry_carries_item_20_duplication_skip():
+    # axis: item 20 is registered as a project-configuration glob list with no plugin default
     item = next(entry for entry in PC.ITEMS if entry["slug"] == "duplicationSkip")
     assert item["number"] == 20 and item["name"] == "Duplication skip trees"
     assert item["shape"] == "globList" and item["plugin_default"] is None
@@ -67,6 +69,7 @@ def test_registry_carries_item_20_duplication_skip():
 
 
 def test_set_then_get_round_trip(tmp_path):
+    # axis: a valid glob list stored through set_item reads back unchanged and stamped
     repo, store = _setup_repo(tmp_path)
     got = PC.set_item(repo, "duplicationSkip", ["snapshots/**"], root=store)
     assert got["action"] == "written"
@@ -90,18 +93,21 @@ def test_set_refuses_a_malformed_value(tmp_path, bad):
 
 
 def test_reader_with_no_core_md_skips_nothing(tmp_path):
+    # axis: with no core.md the reader skips nothing and names no reason
     repo, store = _bare_repo(tmp_path)
     got = PC.read_duplication_skip(repo, root=store)
     assert got == {"globs": [], "reason": None, "detail": None}
 
 
 def test_reader_with_item_unset_skips_nothing(tmp_path):
+    # axis: with the item unset in a present core.md the reader skips nothing and names no reason
     repo, store = _setup_repo(tmp_path)
     got = PC.read_duplication_skip(repo, root=store)
     assert got == {"globs": [], "reason": None, "detail": None}
 
 
 def test_reader_returns_the_stored_globs_as_a_copy(tmp_path):
+    # axis: the reader hands back a copy, so a caller mutating it never changes the stored value
     repo, store = _setup_repo(tmp_path)
     stored = ["snapshots/**", "styles/generated/*.css"]
     assert PC.set_item(repo, "duplicationSkip", stored, root=store)["action"] == "written"
@@ -148,6 +154,7 @@ def test_reader_never_raises_when_the_read_raises(tmp_path, monkeypatch):
 
 
 def test_reader_names_an_unavailable_repo_root(tmp_path, monkeypatch):
+    # axis: an unresolvable repo root skips nothing and names duplication-skip-unreadable
     repo, store = _setup_repo(tmp_path)
 
     def _no_root(*a, **k):
@@ -180,9 +187,45 @@ def test_sweep_reads_a_malformed_item_as_skip_nothing(tmp_path):
 
 
 def test_reader_writes_nothing(tmp_path):
+    # axis: reading with no core.md creates no file in the store or the repo
     repo, store = _bare_repo(tmp_path)
     before = _snapshot(store)
     PC.read_duplication_skip(repo, root=store)
     after = _snapshot(store)
     assert before == after
     assert not os.path.exists(os.path.join(repo, ".claude", "superheroes", "core.md"))
+
+
+def test_reader_reads_core_md_without_backfill(tmp_path, monkeypatch):
+    # axis: the reader reads core.md with persist_backfill=False, so reading never backfills
+    repo, store = _setup_repo(tmp_path)
+    real_read = PC.core_md.read
+    calls = []
+
+    def _recording_read(*args, **kwargs):
+        calls.append(dict(kwargs))
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(PC.core_md, "read", _recording_read)
+    PC.read_duplication_skip(repo, root=store)
+    assert calls, "the reader never called core_md.read"
+    assert all(call.get("persist_backfill") is False for call in calls), calls
+
+
+def test_reader_names_a_non_object_project_configuration(tmp_path):
+    # axis: a non-object projectConfiguration skips nothing and is named unreadable, never reason None
+    repo, store = _setup_repo(tmp_path)
+    path = CM.core_path(repo, store)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    mb = CM._JSON_BLOCK.search(text)
+    block = json.loads(mb.group(1))
+    block["projectConfiguration"] = ["snapshots/**"]
+    new_block = json.dumps(block, indent=2, sort_keys=True)
+    text = text[:mb.start(1)] + new_block + text[mb.end(1):]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    got = PC.read_duplication_skip(repo, root=store)
+    assert got["globs"] == []
+    assert got["reason"] == "duplication-skip-unreadable"
+    assert got["detail"] == "project-configuration-not-an-object"

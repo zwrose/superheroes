@@ -441,6 +441,37 @@ def read_duplication_skip(cwd, root=None):
                 REASON_DUPLICATION_SKIP_UNREADABLE,
                 "core-md-unreadable: core.md could not be read or parsed",
             )
+        # parse_core replaces a non-object projectConfiguration with {}, so the parsed facts
+        # cannot show it: read the JSON block again, exactly as parse_core does.
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-block-unreadable",
+            )
+        block = None
+        match = core_md._JSON_BLOCK.search(text)
+        if match:
+            try:
+                block = json.loads(match.group(1))
+            except ValueError:
+                block = None
+        if block is None:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-block-unreadable",
+            )
+        # axis: a non-object projectConfiguration skips nothing and is named unreadable, never reason None
+        if (isinstance(block, dict)
+                and core_md.PROJECT_CONFIGURATION_KEY in block
+                and block[core_md.PROJECT_CONFIGURATION_KEY] is not None
+                and not isinstance(block[core_md.PROJECT_CONFIGURATION_KEY], dict)):
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "project-configuration-not-an-object",
+            )
         mapping = _project_config_mapping(facts)
         raw = _read_project_config_raw(mapping, DUPLICATION_SKIP_SLUG)
         if raw is None:

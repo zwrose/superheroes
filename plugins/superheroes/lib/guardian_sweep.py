@@ -1066,8 +1066,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             }
             # A filed pair touching a skipped tree is absent from this sweep because the
             # lens never looked at it, not because it was fixed: mark it so closure
-            # leaves it filed.
-            if lens.name == "duplication" and duplication_skip["globs"]:
+            # leaves it filed. A pair this sweep did measure is never marked skipped.
+            # bite-proof axis: a present candidate is never marked skipped, even when its
+            # path holds a pipe that pair_touches_skip can split into a skipped-looking half.
+            if (lens.name == "duplication" and duplication_skip["globs"]
+                    and matched_cand is None):
                 import guardian_lens_duplication
                 if guardian_lens_duplication.pair_touches_skip(
                         rid, duplication_skip["globs"],

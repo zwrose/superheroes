@@ -55,6 +55,7 @@ def _frozen_and_src(tmp_path):
 # --- skip_matches / pair_touches_skip ----------------------------------------------
 
 def test_skip_matches_returns_first_matching_glob_or_none():
+    # axis: skip_matches returns the first matching glob in order, is case-sensitive, and None when none match
     assert gld.skip_matches("frozen/x/y.py", ["src/*", "frozen/*", "frozen/x/*"]) == "frozen/*"
     assert gld.skip_matches("src/a.py", ["frozen/*"]) is None
     assert gld.skip_matches("src/a.py", []) is None
@@ -63,6 +64,7 @@ def test_skip_matches_returns_first_matching_glob_or_none():
 
 
 def test_pair_touches_skip_matches_either_side(tmp_path):
+    # axis: a pair touches a skipped tree when either of its two files matches a glob
     cwd = str(tmp_path)
     pid = gld._pair_id("frozen/a.py", "src/b.py")
     assert gld.pair_touches_skip(pid, ["frozen/*"], cwd=cwd) is True
@@ -73,6 +75,7 @@ def test_pair_touches_skip_matches_either_side(tmp_path):
 
 
 def test_pair_touches_skip_path_containing_pipe_still_matches(tmp_path):
+    # axis: a pair id whose path holds a pipe is still split correctly, so either side still matches
     cwd = str(tmp_path)
     pid = gld._pair_id("src/a|b.py", "src/c.py")
     assert pid == "duplication:src/a|b.py|src/c.py"
@@ -82,6 +85,7 @@ def test_pair_touches_skip_path_containing_pipe_still_matches(tmp_path):
 
 
 def test_pair_touches_skip_non_duplication_id_is_false(tmp_path):
+    # axis: an id that is not a duplication pair id never touches a skipped tree
     cwd = str(tmp_path)
     assert gld.pair_touches_skip("complexity:frozen/a.py|b.py", ["frozen/*"], cwd=cwd) is False
     assert gld.pair_touches_skip("", ["frozen/*"], cwd=cwd) is False
@@ -89,6 +93,7 @@ def test_pair_touches_skip_non_duplication_id_is_false(tmp_path):
 
 
 def test_pair_touches_skip_converts_to_repo_root_relative(tmp_path):
+    # axis: a pair's paths are matched relative to the repo root, not to the working directory
     sub = tmp_path / "pkg"
     sub.mkdir()
     pid = gld._pair_id("generated/a.py", "y.py")
@@ -101,6 +106,7 @@ def test_pair_touches_skip_converts_to_repo_root_relative(tmp_path):
 # --- lens: filter ------------------------------------------------------------------
 
 def test_stub_jscpd_input_config_never_lists_a_skipped_file(tmp_path):
+    # axis: the path list handed to jscpd omits every skipped file, and the skipped counts are reported
     _frozen_and_src(tmp_path)
     src_a = str(tmp_path / "src" / "a.py")
     src_b = str(tmp_path / "src" / "b.py")
@@ -117,6 +123,7 @@ def test_stub_jscpd_input_config_never_lists_a_skipped_file(tmp_path):
 
 
 def test_each_file_counts_once_under_first_matching_glob_in_order(tmp_path):
+    # axis: a file matching several globs is counted once, under the first glob in order
     _frozen_and_src(tmp_path)
     run = _FakeJscpd(_report([]))
     globs = ["frozen/a*", "frozen/*", "never/*"]
@@ -133,6 +140,7 @@ def test_each_file_counts_once_under_first_matching_glob_in_order(tmp_path):
 
 
 def test_subdirectory_cwd_matches_globs_from_the_repo_root(tmp_path):
+    # axis: from a subdirectory cwd the lens still matches globs against repo-root-relative paths
     # Repo root is tmp_path; the lens runs from pkg/ and sees cwd-relative paths.
     _write(tmp_path, "pkg/generated/x.py")
     _write(tmp_path, "pkg/y.py")
@@ -150,6 +158,7 @@ def test_subdirectory_cwd_matches_globs_from_the_repo_root(tmp_path):
 
 
 def test_every_tracked_file_skipped_is_not_collected_never_empty_digest(tmp_path):
+    # axis: skipping every tracked file is not-collected with no digest, and jscpd is never spawned
     _write(tmp_path, "frozen/a.py")
     _write(tmp_path, "frozen/b.py")
     run = _FakeJscpd(_report([]))
@@ -165,6 +174,7 @@ def test_every_tracked_file_skipped_is_not_collected_never_empty_digest(tmp_path
 
 
 def test_stub_jscpd_reporting_a_skipped_file_anyway_is_not_collected(tmp_path):
+    # axis: a clone reported on a file outside the census makes the run not-collected, never a digest
     _frozen_and_src(tmp_path)
     report = _report([
         _clone_entry("frozen/a.py", "src/a.py", lines=12, fmt="python"),
@@ -188,6 +198,7 @@ def test_stub_jscpd_reporting_a_skipped_file_anyway_is_not_collected(tmp_path):
     "frozen/*",
 ])
 def test_no_usable_globs_behaves_as_today(tmp_path, skip):
+    # axis: an absent, empty, unreadable or malformed skip value leaves the lens census untouched
     _frozen_and_src(tmp_path)
     run = _FakeJscpd(_report([]))
     ctx = {"cwd": str(tmp_path), "run": run, "config": None, "prevDigest": None}
@@ -242,6 +253,7 @@ def _real_run(env):
 
 @pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")
 def test_real_jscpd_skipped_tree_reaches_neither_side_of_any_pair(tmp_path):
+    # axis: with real jscpd a skipped tree appears on neither side of any reported pair
     repo, env = _real_repo_with_two_pairs(tmp_path)
     ctx = {
         "cwd": repo, "run": _real_run(env), "config": None, "prevDigest": None,
@@ -261,6 +273,7 @@ def test_real_jscpd_skipped_tree_reaches_neither_side_of_any_pair(tmp_path):
 
 @pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")
 def test_real_jscpd_control_without_skip_reports_both_pairs(tmp_path):
+    # axis: control: without a skip value real jscpd reports both the frozen and the live pair
     repo, env = _real_repo_with_two_pairs(tmp_path)
     ctx = {"cwd": repo, "run": _real_run(env), "config": None, "prevDigest": None}
     out = gld.DuplicationLens().collect(ctx)
@@ -291,12 +304,12 @@ _FILED_PID = "duplication:frozen/a.py|src/a.py"
 _SKIPPED = {"globs": [{"glob": "frozen/*", "files": 2}], "files": 2}
 
 
-def _filed_duplication_repo(tmp_path):
+def _filed_duplication_repo(tmp_path, pid=_FILED_PID):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)
     write_guardian_layer(tmp_path, {"vitals": False})
     write_ledger(tmp_path, [{
-        "id": _FILED_PID,
+        "id": pid,
         "disposition": "filed",
         "date": "2026-07-01",
         "issue": "#123",
@@ -319,6 +332,7 @@ def _skip_read(repo, globs, reason=None, detail=None):
 ])
 def test_filed_duplication_record_in_skipped_tree_is_never_closed(
         tmp_path, monkeypatch, globs, closes):
+    # axis: a filed record whose pair is absent only because its tree was skipped stays filed
     repo, root = _filed_duplication_repo(tmp_path)
     monkeypatch.setattr(gsw, "_read_duplication_skip", _skip_read(repo, globs))
     monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "closed")
@@ -342,12 +356,58 @@ def test_filed_duplication_record_in_skipped_tree_is_never_closed(
         assert advances == []
 
 
-def test_bundle_carries_the_read_and_the_lens_skipped_trees(tmp_path, monkeypatch):
-    repo, root = _filed_duplication_repo(tmp_path)
+def test_present_pipe_path_pair_is_not_marked_skipped(tmp_path, monkeypatch):
+    # axis: a filed pair this sweep measured is never marked skipped, even when a pipe in its path splits into a skipped-looking half
+    pid = "duplication:src/a.py|src/a|frozen/b.py"
+    repo, root = _filed_duplication_repo(tmp_path, pid=pid)
     monkeypatch.setattr(gsw, "_read_duplication_skip", _skip_read(repo, ["frozen/*"]))
+    monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "closed")
+    lens = _DupLens({
+        "candidates": [{"id": pid, "metric": 5}],
+        "digest": {"v": 2}, "skippedTrees": _SKIPPED,
+    })
+
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+
+    obs = bundle["filedObservations"][pid]
+    assert obs["present"] is True
+    assert not obs.get("skipped")
+    records = gs.read_ledger(repo, root=root)["records"]
+    new_records, advances = gsw._close_filed_records(
+        records, bundle["filedObservations"], "sweep-2500")
+    by_id = {r["id"]: r for r in new_records}
+    assert by_id[pid]["disposition"] != "filed"
+    assert len(advances) == 1
+
+
+class _CtxLens(FixtureLens):
+    """A non-duplication lens that records the ctx it was handed."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.last_ctx = None
+
+    def collect(self, ctx):
+        self.last_ctx = ctx
+        return super().collect(ctx)
+
+
+def test_bundle_carries_the_read_and_the_lens_skipped_trees(tmp_path, monkeypatch):
+    # axis: the sweep reads the skip value once and hands every lens that same value
+    repo, root = _filed_duplication_repo(tmp_path)
+    reads = []
+    returned = []
+
+    def _counting_read(cwd, store_root):
+        value = {"globs": ["frozen/*"], "reason": None, "detail": None, "repoRoot": repo}
+        reads.append((cwd, store_root))
+        returned.append(value)
+        return value
+
+    monkeypatch.setattr(gsw, "_read_duplication_skip", _counting_read)
     monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "open")
     lens = _DupLens({"candidates": [], "digest": {"v": 2}, "skippedTrees": _SKIPPED})
-    other = FixtureLens(name="other-lens", emit_normal=True)
+    other = _CtxLens(name="other-lens", emit_normal=True)
 
     bundle = gsw.collect(repo, lenses=[lens, other], root=root)
 
@@ -355,12 +415,16 @@ def test_bundle_carries_the_read_and_the_lens_skipped_trees(tmp_path, monkeypatc
         "read": {"globs": ["frozen/*"], "reason": None, "detail": None},
         "lenses": {"duplication": _SKIPPED},
     }
-    # every lens ctx carries the one read
+    # one read per sweep, and every lens ctx carries that one value
+    assert len(reads) == 1
+    assert lens.last_ctx["duplicationSkip"] is returned[0]
+    assert other.last_ctx["duplicationSkip"] is returned[0]
     assert lens.last_ctx["duplicationSkip"]["globs"] == ["frozen/*"]
     assert lens.last_ctx["duplicationSkip"]["repoRoot"] == repo
 
 
 def test_not_collected_lens_still_reports_its_skipped_trees(tmp_path, monkeypatch):
+    # axis: a not-collected lens still reports its skipped trees and observes no filed record
     repo, root = _filed_duplication_repo(tmp_path)
     monkeypatch.setattr(gsw, "_read_duplication_skip", _skip_read(repo, ["frozen/*"]))
     monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "closed")
@@ -376,6 +440,7 @@ def test_not_collected_lens_still_reports_its_skipped_trees(tmp_path, monkeypatc
 
 
 def test_read_failure_is_recorded_in_the_bundle(tmp_path, monkeypatch):
+    # axis: a failed read is carried into the bundle with its reason and detail
     repo = init_calibrated_repo(tmp_path)
     monkeypatch.setattr(
         gsw, "_read_duplication_skip",
@@ -389,6 +454,7 @@ def test_read_failure_is_recorded_in_the_bundle(tmp_path, monkeypatch):
 
 
 def test_sweep_reader_returns_the_readers_globs_with_repo_root(tmp_path, monkeypatch):
+    # axis: the sweep's reader passes the calibration reader's value through and adds the repo root
     import project_config
     repo = init_calibrated_repo(tmp_path)
     monkeypatch.setattr(
@@ -401,6 +467,7 @@ def test_sweep_reader_returns_the_readers_globs_with_repo_root(tmp_path, monkeyp
 
 
 def test_sweep_reader_that_raises_skips_nothing_and_says_so(tmp_path, monkeypatch):
+    # axis: a calibration reader that raises makes the sweep skip nothing and name duplication-skip-unreadable
     import project_config
 
     def boom(cwd, root=None):
@@ -423,6 +490,7 @@ def test_sweep_reader_that_raises_skips_nothing_and_says_so(tmp_path, monkeypatc
 ])
 def test_sweep_reader_result_that_is_not_a_glob_list_skips_nothing(
         tmp_path, monkeypatch, bad):
+    # axis: a reader result that is not a glob list makes the sweep skip nothing and name duplication-skip-unreadable
     import project_config
     repo = init_calibrated_repo(tmp_path)
     monkeypatch.setattr(
@@ -433,6 +501,7 @@ def test_sweep_reader_result_that_is_not_a_glob_list_skips_nothing(
 
 
 def test_sweep_reader_unresolvable_repo_root_is_none(tmp_path, monkeypatch):
+    # axis: when the repo root cannot be resolved the sweep's reader reports repoRoot None and still returns the globs
     import project_config
 
     def no_root(cwd):
@@ -466,6 +535,7 @@ def _render(skipped, **extra):
 
 
 def test_report_lists_each_glob_with_its_count_and_a_total():
+    # axis: the report lists each skipped glob in order with its file count, then the total
     md = _render({
         "read": {"globs": ["frozen/*", "gen/*"], "reason": None, "detail": None},
         "lenses": {"duplication": {
@@ -483,6 +553,7 @@ def test_report_lists_each_glob_with_its_count_and_a_total():
 
 
 def test_report_without_duplication_entry_says_count_not_measured_and_omits_total():
+    # axis: with no lens entry the report says the count was not measured and prints no total
     md = _render({
         "read": {"globs": ["frozen/*"], "reason": None, "detail": None},
         "lenses": {},
@@ -494,6 +565,7 @@ def test_report_without_duplication_entry_says_count_not_measured_and_omits_tota
 
 
 def test_report_states_an_unreadable_value_with_reason_and_detail():
+    # axis: an unreadable skip value is stated in the report with its reason and its detail
     md = _render({
         "read": {"globs": [], "reason": "duplication-skip-unreadable",
                  "detail": "RuntimeError: boom"},
@@ -506,6 +578,7 @@ def test_report_states_an_unreadable_value_with_reason_and_detail():
 
 
 def test_report_unreadable_value_without_detail_has_no_colon_tail():
+    # axis: an unreadable value with no detail prints its reason alone, with no trailing colon
     md = _render({
         "read": {"globs": [], "reason": "duplication-skip-malformed", "detail": None},
         "lenses": {},
@@ -520,12 +593,14 @@ def test_report_unreadable_value_without_detail_has_no_colon_tail():
     {"read": {"globs": [], "reason": None, "detail": None}, "lenses": {}},
 ])
 def test_report_with_nothing_skipped_says_none(skipped):
+    # axis: with no skipped tree, or an empty read, the section states None
     lines = _section(_render(skipped)).splitlines()
     assert lines[0] == "## Skipped trees"
     assert "_None._" in lines
 
 
 def test_skipped_trees_section_sits_after_report_card_and_before_funnel():
+    # axis: the Skipped trees section sits between the report card and the funnel
     md = _render(None)
     assert md.index(gr.HEADER_REPORT_CARD) < md.index(gr.HEADER_SKIPPED) \
         < md.index(gr.HEADER_FUNNEL)
