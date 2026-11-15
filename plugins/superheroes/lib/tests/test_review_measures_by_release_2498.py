@@ -161,6 +161,14 @@ def test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced():
     assert all(m[k] == U and why[k] == "incomplete-evidence" for k in RM.BY_RELEASE)
 
 
+def test_a_broken_time_in_one_session_of_a_pr_makes_all_four_unmeasured():
+    """`first()` orders sessions by their raw times, so one broken time on the PR leaves the first session unknown
+    (round-4 finding code-001): the broken session may precede the valid one and the release adoption."""
+    m, why = _m([_rec(1, "good", at="2026-11-05T12:01:00Z"), _rec(1, "broken", at="2026-11-05Tbroken", status="not-reviewed")],
+                mergedPrs=[1])
+    assert all(m[k] == U and why[k] == "incomplete-evidence" for k in RM.BY_RELEASE)
+
+
 def test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape():
     row = RM.compute({}, FROM, UNTIL)
     old = dict(row, schema="review-loop-measures/1", measures={k: row["measures"][k] for k in RM.MEASURES_V1})
