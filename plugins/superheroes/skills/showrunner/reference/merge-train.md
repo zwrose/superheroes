@@ -349,6 +349,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    grades a bring-current: a mechanically non-semantic hunk takes CI and a disclosure line, and a
    behaviour-bearing or unclear hunk takes the reviewer floor. A layer GitHub left conflicting goes
    back to its builder for a bring-current merge (item 6) and then takes this identity check.
+   That merge puts a merge commit back into the layer, and the base still has its queue, so the
+   remaining layers go through item 4's check and straightening again, as a whole, before step 3;
+   the heads that straightening proves are the ones steps 3 to 7 use.
 
    (3) **Fresh CI** on every moved head, selected by workflow name plus head sha.
 
