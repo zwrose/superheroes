@@ -229,8 +229,8 @@ def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_not_reviewed
 
 
 def test_null_outcome_is_not_reviewed():
-    # axis: the outcome condition; a finding with no outcome counted as reviewed
-    rec = build(account(findings=[finding(outcome=None)]))
+    # axis: the outcome condition; a finding with no outcome counted as reviewed (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
+    rec = build(account(findings=[finding(outcome=None, severity="Important")]))
     assert rec["status"] == "not-reviewed" and "finding code-001 has no outcome" in rec["whatIsMissing"]
 
 
@@ -454,9 +454,9 @@ def test_unreadable_pr_is_not_reviewed():
 
 
 def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
-    # axis: outcome spelling; a foreign outcome accepted, or a null outcome refused
+    # axis: outcome spelling; a foreign outcome accepted, or a null outcome refused (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
     fake = Fake()
-    ok = rr.write(put(tmp_path, account(findings=[finding(outcome=None)])), str(tmp_path), fake.readers())
+    ok = rr.write(put(tmp_path, account(findings=[finding(outcome=None, severity="Important")])), str(tmp_path), fake.readers())
     assert ok["ok"] and ok["status"] == "not-reviewed"
     bad = rr.write(put(tmp_path, account(findings=[finding(outcome="done")])), str(tmp_path), fake.readers())
     assert (bad["ok"], bad["reason"]) == (False, "review-account-invalid") and "outcome" in bad["detail"]
@@ -669,14 +669,14 @@ def test_w1_only_creates(tmp_path):
 
 
 def test_w2_the_one_check_across_sessions(tmp_path):
-    # axis: the unaccounted check; an earlier finding dropped by a later account, or a pending one refused on relisting
+    # axis: the unaccounted check; an earlier finding dropped by a later account, or a pending one refused on relisting (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
     fake = Fake()
-    send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call")])
+    send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call", severity="Important")])
     out = rr.write(put(tmp_path, account(findings=[])), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted")
     assert out["detail"] == "earlier findings with no outcome in this account: a-1"
     assert len(fake.comments) == 1
-    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="")])), str(tmp_path), fake.readers())
+    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="", severity="Important")])), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
     assert rr.read(7, readers=fake.readers())["status"] == "not-reviewed"
     shown = wrong("a-1", reason="not a bug here")

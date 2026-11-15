@@ -92,8 +92,8 @@ def test_leftovers_and_a_planned_reviewer_that_did_not_run_stay_not_reviewed(tmp
 
 
 def test_leftovers_and_an_undecided_finding_stay_not_reviewed(tmp_path):
-    # axis: an undecided finding; its "has no outcome" line is not a leftover line
-    rec = build(acct(tmp_path, findings=[*left_two(), finding("f3", outcome=None)]), Clean())
+    # axis: an undecided finding; its "has no outcome" line is not a leftover line (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
+    rec = build(acct(tmp_path, findings=[*left_two(), finding("f3", outcome=None, severity="Important")]), Clean())
     assert rec["status"] == rr.NOT_REVIEWED
     assert "finding f3 has no outcome" in rec["whatIsMissing"]
 
@@ -173,7 +173,8 @@ def _read_status(tmp_path, findings, fake=None, **over):
 
 
 def _undecided(tmp_path, findings):
-    return _read_status(tmp_path, [*findings, finding("f3", outcome=None)])
+    # axis: an undecided finding withholds (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
+    return _read_status(tmp_path, [*findings, finding("f3", outcome=None, severity="Important")])
 
 
 def _unreadable(tmp_path, findings):
