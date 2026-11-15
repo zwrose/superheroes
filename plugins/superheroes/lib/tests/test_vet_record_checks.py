@@ -36,7 +36,7 @@ _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findin
                "outcome": "findings", "reason": "findings", "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
 _ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
-              "The proven copies match their source")
+              "The proven copies match their source", "A merged finding's fix is its own")
 _ROW_NON_OUTCOMES = frozenset({"review-record-missing", "review-record-unreadable", "digest-unavailable"})
 _HYPHENATED = re.compile(r"^[a-z]+(-[a-z]+)+$")
 
@@ -239,7 +239,7 @@ def test_record_checks_section_outcomes_are_the_schema_spellings():
         assert f"`{outcome}`" in section, f"the section does not name `{outcome}`"
 
 
-def test_record_checks_rows_are_the_four_named_checks():
+def test_record_checks_rows_are_the_five_named_checks():
     # axis: a check row renamed, removed or added
     names = tuple(re.match(r"\| \*\*(.+?)\*\*", row).group(1) for row in _section_rows())
     assert names == _ROW_NAMES
