@@ -2246,8 +2246,65 @@ def _secret_line_count(text):
     return sum(1 for line in text.split("\n") if _has_secret(line)) or 1
 
 
+# ANSI escape sequences, removed before the control stand-ins: 7-bit and 8-bit CSI (parameter bytes 0x30-0x3F,
+# intermediate bytes 0x20-0x2F, one final byte 0x40-0x7E), OSC (up to and including BEL, ESC backslash or 0x9C),
+# and the two-character ESC followed by one byte in 0x40-0x5F. An ESC that starts none of these is kept for its stand-in.
+_ANSI_START = re.compile("[\x1b\x9b\x9d]")
+_CSI = re.compile("(?:\x1b\\[|\x9b)[0-?]*[ -/]*[@-~]")
+_ESC_PAIR = re.compile("\x1b[@-_]")
+_OSC_END = re.compile("\x07|\x1b\\\\|\x9c")
+# GitHub rewrites a JSON control escape, and a raw control byte, of these codes into caret notation, which
+# leaves a record invalid JSON; each becomes a visible stand-in instead. Tab, newline, vertical tab, carriage
+# return, backspace and form feed are left as they are.
+_CONTROL_STANDINS = {
+    **{c: chr(0x2400 + c) for c in (*range(0x00, 0x08), *range(0x0E, 0x20))},
+    0x7F: "␡",
+    **{c: f"[U+{c:04X}]" for c in range(0x80, 0xA0)},
+}
+
+
+def _strip_ansi(text):
+    """`text` less its ANSI escape sequences. One forward pass: each unterminated OSC start is tested once against
+    the last terminator found, so adversarial input stays linear."""
+    out, at, scan, no_osc_end = [], 0, 0, False
+    while True:
+        m = _ANSI_START.search(text, scan)
+        if m is None:
+            break
+        i, lead = m.start(), text[m.start()]
+        end = None
+        if lead != "\x9d":
+            hit = _CSI.match(text, i)
+            end = hit.end() if hit else None
+        if end is None and (lead == "\x9d" or text.startswith("\x1b]", i)) and not no_osc_end:
+            stop = _OSC_END.search(text, i + 1)
+            if stop is None:
+                no_osc_end = True
+            else:
+                end = stop.end()
+        if end is None and lead == "\x1b":
+            hit = _ESC_PAIR.match(text, i)
+            end = hit.end() if hit else None
+        if end is None:
+            scan = i + 1
+            continue
+        out.append(text[at:i])
+        at = scan = end
+    out.append(text[at:])
+    return "".join(out)
+
+
+def _visible_controls(text):
+    """`text` with its ANSI escape sequences removed, then every other control code GitHub would rewrite shown as a
+    stand-in: 00-07 and 0E-1F as the Control Picture chr(0x2400 + code) (ESC is U+241B), 7F as U+2421, and 80-9F
+    as the text [U+00XX] (upper-case hex)."""
+    return _strip_ansi(text).translate(_CONTROL_STANDINS)  # axis: ANSI escape sequences are removed before the stand-ins, so a colour code leaves no picture characters — see bite-proof record wo_2490_controls
+
+
 def _scrub_text(text):
-    """A record string: withheld whole when it holds a credential-shaped assignment, else scrubbed of token shapes."""
+    """A record string: control codes shown as stand-ins, then withheld whole when it holds a credential-shaped
+    assignment, else scrubbed of token shapes."""
+    text = _visible_controls(text)  # axis: no record string reaches the JSON dump holding a code GitHub rewrites — see bite-proof record wo_2490_controls
     if _has_secret(text):
         return _WITHHELD_FIELD
     return pr_comment.scrub(text)
@@ -2261,17 +2318,26 @@ def _scrubbed(value):
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            hidden_key = isinstance(k, str) and (_has_secret(k) or pr_comment.scrub(k) != k)
+            shown = _visible_controls(k) if isinstance(k, str) else k  # axis: a dict key holding a code GitHub rewrites is posted as its stand-in — see bite-proof record wo_2490_controls
+            # the secret checks run on the original key and, when the stand-in changed it, on the posted name too
+            hidden_key = isinstance(k, str) and (_has_secret(k) or pr_comment.scrub(k) != k
+                                                 or (shown != k and (_has_secret(shown) or pr_comment.scrub(shown) != shown)))
             if hidden_key:
                 n, nk = 0, "[REDACTED KEY]"
                 while nk in out or nk in value:
                     n += 1
                     nk = f"[REDACTED KEY]-{n}"
                 k2 = nk
+            elif shown != k:
+                n, nk = 0, shown
+                while nk in out or nk in value:  # axis: a stood-in key that lands on a taken name is numbered, never overwriting an entry — see bite-proof record wo_2490_controls
+                    n += 1
+                    nk = f"{shown}-{n}"
+                k2 = nk
             else:
                 k2 = k
             counted = _is_count_key(k) and isinstance(v, (int, float)) and not isinstance(v, bool)
-            secret = hidden_key or (_secret_key(k) and not counted)
+            secret = hidden_key or ((_secret_key(k) or (shown != k and _secret_key(shown))) and not counted)
             out[k2] = "[REDACTED]" if secret and v is not None else _scrubbed(v)
         return out
     return value
@@ -3094,16 +3160,19 @@ def render(record, part_ids=None):
 def render_raw(name, text):
     """A raw-output comment as (body, withheld). One reviewer's output file goes verbatim under a short intro,
     unless it holds a credential-shaped assignment or a private-key block: then none of it is posted."""
-    if _has_secret(text):
+    shown = _visible_controls(text)
+    # the check runs on the original text and on the stand-in text that would be posted
+    if _has_secret(text) or _has_secret(shown):
         note = (f"Raw output of one reviewer withheld: {name}. It contains credential-shaped assignments on "
-                f"{_secret_line_count(text)} line(s), so it is not posted. Its findings are in the review record on this PR.")
+                f"{_secret_line_count(text if _has_secret(text) else shown)} line(s), so it is not posted. "
+                "Its findings are in the review record on this PR.")
         _assert_no_bug_free_claim(note)
         return f"{RAW_MARKER}\n{note}", True
     intro = (f"Raw output of one reviewer, kept verbatim: {name}. "
              "A review record on this PR links this comment.")
     # Only the sentence this writer authors is checked: the kept text is the reviewer's own.
     _assert_no_bug_free_claim(intro)
-    text = pr_comment.scrub(text)
+    text = pr_comment.scrub(shown)  # axis: the raw output posts no code GitHub rewrites — see bite-proof record wo_2490_controls
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
     body = f"{RAW_MARKER}\n{intro}\n\n{fence}\n{text}\n{fence}"
     if len(body) > GITHUB_MAX_CHARS:
@@ -3243,10 +3312,10 @@ def _unreadable_detail(latest, by_id):
     return f"{where}: the parts index is malformed"
 
 
-def _comments(rd, pr, repo):
+def _comments(rd, pr, repo, failed="the PR comments could not be listed"):
     comments = rd["list_comments"](pr, repo)
     if comments is None:
-        raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
+        raise Refusal("review-record-gh-failed", failed)
     return comments
 
 
@@ -3325,6 +3394,31 @@ def _transit_summary(checks):
             f"{c['what']} (comment {c['comment']}): {cloud_builder.transit_line(c['transit'])}"
             for c in checks if c["transit"].get("transit") != cloud_builder.TRANSIT_MATCHED)
     return out
+
+
+def _refuse_unless_read_back(rd, pr, repo, head, summary):
+    """Refuse when the record comment `head` just created does not read back as `read` would read it: the PR's
+    comments are listed again and the head, found among the record comments by its id, must parse with its parts
+    and carry a findings list. Called only when every created comment was read back (matched or changed), so a
+    comment that GitHub rewrote into text `read` cannot parse is never reported as written."""
+    where = head.get("url") or "the record comment"
+    # axis: a listing that fails after the write refuses, never reads as a record that read back — see bite-proof record wo_2490_controls
+    comments = _comments(rd, pr, repo, f"{where}: the comments were posted, but the PR comments could not be listed to read "
+                                       "the record back after the write")
+    by_id = {c["id"]: c for c in comments}
+    # axis: the head is found among the record comments by the marker predicate `read` uses; a head whose marker was damaged is not a record — see bite-proof record wo_2490_controls
+    listed = next((c for c in _marker_comments(comments) if c["id"] == head["id"]), None)
+    if listed is not None:
+        parsed = _parse_body(listed["body"], by_id)
+        if parsed is not None and _findings_listed(parsed):
+            return
+        why = _unreadable_detail(listed, by_id)
+    else:
+        why = "the comment no longer carries the record marker" if head["id"] in by_id else "the comment is missing"
+    detail = f"{where} was posted but does not read back: {why}"
+    if summary.get("transitLine"):
+        detail += " " + summary["transitLine"]
+    raise Refusal("review-record-unreadable-after-write", detail)
 
 
 def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None):
@@ -3421,9 +3515,13 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
         if sent is None:
             raise Refusal("review-record-gh-failed", "the record comment could not be written")
         note_transit(sent, "record")
+        summary = _transit_summary(checks)
+        # axis: every created comment read back, matched or changed, has its record parsed again from a fresh listing before the write reports ok; a record that does not parse refuses — see bite-proof record wo_2490_controls
+        if summary["transit"] != cloud_builder.TRANSIT_NOT_CHECKED:
+            _refuse_unless_read_back(rd, pr, repo, sent, summary)
         return {"ok": True, "action": "created", "url": sent.get("url"), "parts": len(part_ids),
                 "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"],
-                **_transit_summary(checks)}
+                **summary}
     return _guarded(go)
 
 
