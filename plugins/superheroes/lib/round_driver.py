@@ -7949,6 +7949,11 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     if places_fault is not None:
         return ("%s is refused: %s; expected `places` as a list of {\"file\", \"line\", \"fixed\": true or false} "
                 "for each place its target's kind of mistake names, or leave the field out" % (where, places_fault))
+    # axis: the optional `members` answer is a list of {id, fixed, why} rows — `audits.member_answers_fault`, the fold's own judge — see bite-proof record i2489_member_answers
+    members_fault = audits.member_answers_fault(entry)
+    if members_fault is not None:
+        return ("%s is refused: %s; expected `members` as a list of {\"id\", \"fixed\": true or false, \"why\"} "
+                "for each finding merged into its target, or leave the field out" % (where, members_fault))
     return None
 
 
