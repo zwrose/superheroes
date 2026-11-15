@@ -12,7 +12,6 @@
   "record": {
     "carriedRechecks": [],
     "checked": [
-      "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
@@ -43,6 +42,7 @@
         "file": "a.py",
         "findingKey": "rr1:73fd44afde35d2aec4596b8b2b512815",
         "id": "code-retry-double-charge",
+        "inRiskArea": null,
         "line": 3,
         "outcome": "craft",
         "reason": "style preference",
@@ -75,6 +75,7 @@
       ]
     },
     "leftForOwner": [],
+    "listedForMerge": [],
     "makers": [
       {
         "family": "anthropic"

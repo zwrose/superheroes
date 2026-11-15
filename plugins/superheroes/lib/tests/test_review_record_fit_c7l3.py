@@ -620,8 +620,9 @@ def test_the_summary_says_how_many_rounds_ran_against_which_cap(rounds, line):
     # axis: the cap line; the cap kind or the stop left unsaid
     rec = build(account(rounds=rounds), Fake())
     lines = rr.render(rec).split("\n")
-    ci = next(i for i, l in enumerate(lines) if l.startswith("CI on the final commit"))
-    assert lines[ci + 1] == line
+    assert not any(l.startswith("CI on the final commit") for l in lines)
+    makers = next(i for i, l in enumerate(lines) if l.startswith("Makers: "))
+    assert lines[makers + 1] == line
     assert rec["rounds"]["capKind"] == rounds.get("capKind", "rounds")
 
 

@@ -68,15 +68,16 @@ def test_the_compact_head_line_lists_no_ids(tmp_path):
 
 def test_other_statuses_render_their_head_line_as_before(tmp_path):
     # axis: head line of the other statuses; not-reviewed or reviewed rewritten by the awaits-owner branch
-    assert "**Review record: not reviewed.**" in rr.render(build(account(findings=left_two()), Clean(ci=RED)))
+    # not-reviewed here comes from a record with no maker named; CI no longer decides the certificate (#2493)
+    assert "**Review record: not reviewed.**" in rr.render(build(account(findings=left_two(), makers=[]), Clean()))
     assert "**Review record: reviewed.**" in rr.render(build(account(), Clean()))
 
 
-def test_ci_red_with_leftovers_stays_not_reviewed(tmp_path):
-    # axis: every line is a leftover; a record with another gap beside the leftovers reading awaits-owner
+def test_ci_red_with_leftovers_still_reads_awaits_owner(tmp_path):
+    # axis: every line is a leftover; CI no longer adds a line beside the leftovers (#2493), so a red CI keeps the record awaiting the owner
     rec = build(acct(tmp_path), Clean(ci=RED))
-    assert rec["status"] == rr.NOT_REVIEWED
-    assert any(m.startswith("CI is ") for m in rec["whatIsMissing"])
+    assert rec["status"] == rr.AWAITS_OWNER
+    assert rec["whatIsMissing"] == lines_of(left_two()) and rec["ci"]["state"] == "red"
 
 
 def test_leftovers_and_a_planned_reviewer_that_did_not_run_stay_not_reviewed(tmp_path):
@@ -187,7 +188,7 @@ def _credential(tmp_path, findings):
 
 SHAPES = {
     "clean": (rr.AWAITS_OWNER, lambda p, f: _read_status(p, f)),
-    "ci-red": (rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, Clean(ci=RED))),
+    "ci-red": (rr.AWAITS_OWNER, lambda p, f: _read_status(p, f, Clean(ci=RED))),
     "reviewer-did-not-run": (rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, reviewers=[reviewer(), NOT_RUN])),
     "reviewer-did-not-run-with-go-ahead": (
         rr.NOT_REVIEWED, lambda p, f: _read_status(p, f, reviewers=[reviewer(), NOT_RUN], goAheads=[GO_AHEAD])),
