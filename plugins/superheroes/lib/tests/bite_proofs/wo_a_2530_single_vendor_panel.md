@@ -1098,4 +1098,115 @@ FAILED plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_emit_receip
 
 `same_family_seats` (`seat_map_receipts.py`) passes `extra_makers=session_makers` too, as the order lists, but the one thing it reads from `unexcused_violations` is the `maker-family` constraint, and `extra_makers` only changes whether `critical-diversity` is dropped, so the threading there changes no output and no test can tell it from `extra_makers=()`. **Unprovable as placed**: it is unproven and carries no protection claim; it becomes provable only if `extra_makers` ever reaches the `maker-family` rule. `test_same_family_seats_reads_a_session_with_a_former_fixer_without_error` only proves the call does not raise.
 
+---
+
+# WO-D2 (#2530, advisor fix order from vet 953) — the review-fix union in the liveness excusal is withdrawn
+
+The review-fix change at `d96a92a5` added the session's makers to `classify_violations`' liveness `maker_set`. Vet 953 measured that it makes an unpinned all-codex panel with a recorded `critical-diversity` read `full-panel-confirmed` (cleaner than base) when live alternatives are proven, and the advisor ruled that union withdrawn. The line is removed again; the element below guards its absence.
+
+## J1 — the absence of session makers in `classify_violations`' liveness `maker_set` (`seat_map.py` `classify_violations`)
+
+- **axis:** `classify_violations`' liveness excusal counts only the map's own `makerFamilies` and the author family as makers, so the session's other makers (`extra_makers`) never turn a live alternative into an excused one; with live alternatives proven, no variant of shapes a and b reads cleaner than base
+
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, directly after `maker_set.add(author_family)`, line 1284): the two lines removed by this order are put back exactly as at `d96a92a5`:
+```diff
+--- before (restored text)
+        maker_set.add(author_family)
+        achievable: set[str] | None = set()
++++ neutralized
+        maker_set.add(author_family)
+        # axis: the session's other makers are makers in the excusal arithmetic too, never live alternatives — see bite-proof record wo_a_2530_single_vendor_panel
+        maker_set.update(f for f in extra_makers if isinstance(f, str) and f)
+        achievable: set[str] | None = set()
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-d2-pyc -m pytest plugins/superheroes/lib/tests/test_round_driver.py -k "reads_constraint_violated_for_unpinned_seats or no_variant_of_the_two_shapes" -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; both unpinned tests and the matrix's `a-False-True` and `b-False-True` rows read `full-panel-confirmed`):
+```
+FF..F...F.                                                               [100%]
+=================================== FAILURES ===================================
+_ test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats _
+
+    def test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats():
+        # axis: the liveness excusal never reads the session's makers out of the live alternatives, so a
+        # recorded critical-diversity on unpinned seats is no cleaner than base — see bite-proof record
+        # wo_a_2530_single_vendor_panel (J1)
+>       assert _single_vendor_shape("a", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...aint-violated'
+E         
+E         - full-panel-confirmed-constraint-violated
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:4050: AssertionError
+___ test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats ____
+
+    def test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats():
+        # axis: same as above, for the maker held in formerFixerFamilies — see bite-proof record
+        # wo_a_2530_single_vendor_panel (J1)
+>       assert _single_vendor_shape("b", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...aint-violated'
+E         
+E         - full-panel-confirmed-constraint-violated
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:4056: AssertionError
+_ test_no_variant_of_the_two_shapes_reads_cleaner_than_base[a-False-True-full-panel-confirmed-constraint-violated] _
+
+shape = 'a', pinned = False, recorded = True
+base_shape = 'full-panel-confirmed-constraint-violated'
+
+    (parametrize decorator with the 8 rows, repeated verbatim in pytest's output, elided here)
+    def test_no_variant_of_the_two_shapes_reads_cleaner_than_base(shape, pinned, recorded, base_shape):
+        # axis: with live alternatives proven, no variant of shape a or b (pinned or not, recorded or not)
+        # certifies cleaner than the base commit does — see bite-proof record wo_a_2530_single_vendor_panel (J1)
+>       assert _single_vendor_shape(shape, pinned, recorded) == base_shape
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...aint-violated'
+E         
+E         - full-panel-confirmed-constraint-violated
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:4075: AssertionError
+_ test_no_variant_of_the_two_shapes_reads_cleaner_than_base[b-False-True-full-panel-confirmed-constraint-violated] _
+
+shape = 'b', pinned = False, recorded = True
+base_shape = 'full-panel-confirmed-constraint-violated'
+
+    (parametrize decorator with the 8 rows, repeated verbatim in pytest's output, elided here)
+    def test_no_variant_of_the_two_shapes_reads_cleaner_than_base(shape, pinned, recorded, base_shape):
+        # axis: with live alternatives proven, no variant of shape a or b (pinned or not, recorded or not)
+        # certifies cleaner than the base commit does — see bite-proof record wo_a_2530_single_vendor_panel (J1)
+>       assert _single_vendor_shape(shape, pinned, recorded) == base_shape
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...aint-violated'
+E         
+E         - full-panel-confirmed-constraint-violated
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:4075: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_no_variant_of_the_two_shapes_reads_cleaner_than_base[a-False-True-full-panel-confirmed-constraint-violated]
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_no_variant_of_the_two_shapes_reads_cleaner_than_base[b-False-True-full-panel-confirmed-constraint-violated]
+4 failed, 6 passed, 413 deselected in 1.91s
+```
+(The only elision is the 8-row `parametrize` decorator that pytest echoes inside each of the two matrix failures; the failing lines, assertions and the summary are verbatim.)
+
+**restore:** the inverse text edit of the neutralization above (the `# axis:` comment and the `maker_set.update(...)` line removed again; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored lines, `seat_map.py:1284-1285`):
+```
+        maker_set.add(author_family)
+        achievable: set[str] | None = set()
+```
+
+**raw green** (after restore, exit 0):
+```
+..........                                                               [100%]
+10 passed, 413 deselected in 1.67s
+```
+
 (end of record)

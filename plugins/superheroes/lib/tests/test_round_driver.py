@@ -3995,6 +3995,86 @@ def test_a_former_fixer_family_is_a_maker_for_the_exemption():
     assert any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
 
 
+def _unpinned_single_vendor_map():
+    """The all-codex map of `_legacy_pinned_single_vendor_map` with no seat pinned: built from the same
+    live vendor and author with no pins, so the builder seats every seat (`source` is never `pinned`),
+    with the same stored `critical-diversity` violation and degradation."""
+    SM = _load("seat_map")
+    live = ["codex"]
+    built = SM.build(SM.PANEL_ROSTER, live, "anthropic", 0)
+    stored = SM.to_receipt(built, "anthropic")
+    stored.update(_nonpanel_cell_proof(live))
+    stored["seats"] = dict(stored["seats"])
+    for seat, cfg in stored["seats"].items():
+        assert cfg["source"] != "pinned"
+    for seat in SM.CRITICAL_SEATS:
+        assert stored["seats"][seat]["vendor"] == "codex"
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"] + [
+        {"constraint": "critical-diversity", "reason": "relaxed critical-diversity — no assignment spanned ≥2 families"},
+    ]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _single_vendor_map(pinned, recorded):
+    """The all-codex map (author anthropic), its seats pinned or not, its own `violations` recording
+    `critical-diversity` or not (the degradation row stays as in the fixtures above)."""
+    stored = _legacy_pinned_single_vendor_map() if pinned else _unpinned_single_vendor_map()
+    # live alternatives exist (claude, codex, cursor, proven by the synthesized cell source), so the
+    # excusal arithmetic has a live family outside the makers to count; the seats stay all codex
+    stored["liveVendors"] = ["claude", "codex", "cursor"]
+    stored["liveCellsSource"] = "synthesized"
+    stored["livenessPinScoped"] = False
+    if not recorded:
+        stored["violations"] = []
+    return stored
+
+
+def _single_vendor_shape(shape, pinned, recorded):
+    """The certified shape of vet 952's shape ``a`` (a later receipt leaves out an earlier receipt's maker)
+    or ``b`` (``formerFixerFamilies`` holds the maker) over `_single_vendor_map`."""
+    latest = _single_vendor_map(pinned, recorded)
+    if shape == "a":
+        state, _ = _certify_session([_earlier_receipt_naming_openai(), latest])
+    else:
+        assert shape == "b"
+        state, _ = _certify_session([latest], former_fixer_families=["openai"])
+    return state["certification"]["shape"]
+
+
+def test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats():
+    # axis: the liveness excusal never reads the session's makers out of the live alternatives, so a
+    # recorded critical-diversity on unpinned seats is no cleaner than base — see bite-proof record
+    # wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape("a", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+
+
+def test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats():
+    # axis: same as above, for the maker held in formerFixerFamilies — see bite-proof record
+    # wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape("b", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+
+
+@pytest.mark.parametrize(
+    "shape, pinned, recorded, base_shape",
+    [
+        ("a", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("a", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("a", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("a", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("b", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+    ],
+)
+def test_no_variant_of_the_two_shapes_reads_cleaner_than_base(shape, pinned, recorded, base_shape):
+    # axis: with live alternatives proven, no variant of shape a or b (pinned or not, recorded or not)
+    # certifies cleaner than the base commit does — see bite-proof record wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape(shape, pinned, recorded) == base_shape
+
+
 def test_a_malformed_former_fixer_families_names_no_extra_maker():
     # E5: absent, a scalar, or a list with a non-string / empty member adds no maker — the healthy shape holds
     stored = _legacy_pinned_single_vendor_map()
