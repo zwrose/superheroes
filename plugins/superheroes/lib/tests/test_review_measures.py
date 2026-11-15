@@ -61,7 +61,8 @@ def _f(key, outcome="fixed", reviewer="Security"):
 def _full(**over):
     inp = {"records": [_rec(1)], "ciRuns": [{"pr": 1, "minutes": 4, "suiteMinutes": 3}], "escapes": [],
            "vetReceipts": [], "capChoicesSince": "2026-09-01",
-           "costly": {"lateFindsOnUnchangedCode": {"basis": "monthly", "value": 0, "source": SRC}}}
+           "costly": {"lateFindsOnUnchangedCode": {"basis": "monthly", "value": 0, "source": SRC}},
+           "releases": [{"version": "0.50.0", "since": "2026-09-01"}], "mergedPrs": [1]}
     inp.update(over)
     return inp
 
@@ -78,7 +79,9 @@ def _filled(**counts):
 def test_the_row_shape_is_pinned():
     assert RM.MEASURES == ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "ci", "panels",
                            "vetSendBacksOnCleanLoops", "escapes", "capChoices", "lateFindsOnUnchangedCode",
-                           "repeatFindingLocations")
+                           "repeatFindingLocations", "ownerCardsPerMergedPr", "sessionsPerPrByRelease",
+                           "firstSessionCertification", "silentReviewerVoids")
+    assert RM.SCHEMA == "review-loop-measures/2"
     assert RM.ROW_KEYS == ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
     row = RM.compute(_full(), FROM, UNTIL)
     assert tuple(row) == RM.ROW_KEYS and tuple(row["measures"]) == RM.MEASURES and RM.problems(row) == []

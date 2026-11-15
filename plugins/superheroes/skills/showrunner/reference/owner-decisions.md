@@ -339,7 +339,8 @@ declined with a trigger by default.
    advisor suspects it, the advisor reads a sample of recent decisions back to the owner at a walk.
 8. **Homes.** The **misses log** lives as a sibling section of the collector's pinned registry
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
-   durable comment on the collector at each pass.
+   durable comment on the collector at each pass, or as numbered parts when it is over GitHub's
+   comment limit ([The gardening record](#the-gardening-record)).
 9. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
    ran in, full, light, or micro,** so the receipt corpus can be read by lane. The receipt carries it
    as spine field 9 (`skills/showrunner/reference/vet-receipt.md`). **The grading record does not carry it**, because no lane
@@ -574,7 +575,8 @@ advisor run together to keep calibration honest.
 **The trigger.**
 
 1. **The pass is owed seven days after the last [gardening record](../../../rubric/glossary.md#gardening-record)**,
-   and it is done **at an opportune sitting, not the first one**.
+   and it is done **at an opportune sitting, not the first one**. Every read of an earlier record
+   reads all its parts ([The gardening record](#the-gardening-record)).
 2. **The check runs at the start of any [decision walk](../../../rubric/glossary.md#decision-walk)**,
    never on its own and never on an ordinary [ruling](../../../rubric/glossary.md#ruling). When seven
    or more days have passed since the last record and no "gardening pass owed" item is on the
@@ -656,6 +658,15 @@ advisor run together to keep calibration honest.
      replaces that window's row. A measure whose input is missing or damaged reads unmeasured with its
      reason, never zero. The late-finds and repeat-location measures run monthly or on a sample, and
      the row says which. The row gates nothing and is read by hand.
+     Four of its measures are counted by plugin release, with no target number: owner cards per
+     merged PR (`ownerCardsPerMergedPr`), review sessions per PR (`sessionsPerPrByRelease`),
+     first-session certification (`firstSessionCertification`), and sessions voided by a silent
+     reviewer (`silentReviewerVoids`). They read the input's `releases` (each release the project ran,
+     with the day it adopted it) and, for owner cards, `mergedPrs`. A session or PR earlier than every
+     listed release counts as unplaced. The held in-session reviewer retry waits on the fourth: it is
+     due once a session on 0.50.0 or later reads voided there. A session it counts as unresolved
+     (a silence end it cannot tie to the reviewer that did not run) is read in its review record
+     before it counts either way.
    - **The tally counts escapes by kind as well as by seat**, as `escapesByKind`, and the per-seat
      tally stays. An escape with no kind, every escape logged before the caught-by line existed
      among them, counts as `unmeasured` for kind, never as `nothing-reachable`; a kind outside the
@@ -821,6 +832,26 @@ beside it. **No instrument is built for the count**. It is an advisor's read ove
 **The shape.** **The record has no length cap.** Each batched word carries the full per-item spine
 this contract defines. **Length pressure is answered by fewer items per pass, never by thinner
 spines.**
+
+**A record over GitHub's comment limit splits into parts.** A GitHub comment holds at most 65,536
+characters, so a record longer than that lands on the collector as numbered parts, one comment each,
+posted in order:
+
+- **Part 1 carries the batched words, the "what I decided for you" recap, and every machine-read
+  block the next pass reads**, so part 1 alone holds every decision and every input a later read
+  takes from the record by machine.
+- **The later parts carry the duty detail**, in the duties' order.
+- **Every part carries the record marker and `part N of M`.** The record marker is the heading line
+  that names the comment a gardening record and its pass, the same in every part; `part N of M`
+  follows it, so no part reads as a record of its own and a missing part shows.
+- **The split moves content and drops none.** The contents list above is the whole record across its
+  parts, and the shape rule above still holds: no spine is thinned to fit.
+
+**A read of an earlier record reads every part.** Wherever this contract reads the last gardening
+record, or any earlier one (its date, its pending-words line, its open questions, its counts and
+tallies, or a block the next pass reads by machine), the read finds every part of that record and
+reads them all. A record's date is its part 1's. A part that cannot be found leaves the read
+incomplete, and the pass says so, never reading the missing part's contents as empty.
 
 **The windows are calendar days.** The [gardening window](../../../rubric/glossary.md#gardening-window)
 is the measurement window for the trend counts. **Condition windows are stated in calendar days and
