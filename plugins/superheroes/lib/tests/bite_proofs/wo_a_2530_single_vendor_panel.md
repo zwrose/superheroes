@@ -737,4 +737,365 @@ FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers
 1 passed in 0.57s
 ```
 
+---
+
+# WO-C (#2530, advisor fix order from vet 952) — the exemption reads the session's whole maker set
+
+**Provenance:** claude / sonnet-5.5 (implementer), `plugins/superheroes/lib/seat_map.py`, `plugins/superheroes/lib/seat_map_receipts.py`. Shape and ceilings: `plugins/superheroes/rubric/bite-proof.md`.
+
+Declared guarded-element set (from the order): H1-H4. Each was neutralized by one targeted text edit of that one production line, the proving node(s) were run red, the neutralization was undone by the inverse text edit, and the same node(s) were run green. Redactions: the one `UV_NATIVE_TLS` deprecation warning line that `scripts/pinned-python` prints before every run is dropped; nothing else was edited. Every command ran from the worktree root through the pinned interpreter, with the shell tool's own timeout of 900000 ms and no pytest timeout flag:
+
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-c-pyc -m pytest <node ids> -q
+```
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| H1 | `extra_makers` union inside `panel_outside_makers` (`seat_map.py`) | the session's other makers (a later map's omission, a replaced fixer's family) are makers of the exemption too | `test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption`, `...::test_a_former_fixer_family_is_a_maker_for_the_exemption`, `test_seat_map.py::test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session` |
+| H2 | `pin_excused_records` threading (`seat_map_receipts.py`) | the pin-excused critical-diversity record reads the session's whole maker set | the two `test_round_driver.py` nodes above, `test_seat_map_receipts.py::test_state_level_pin_excused_records_read_the_sessions_makers` |
+| H3 | state-level `unexcused_violations` threading (`seat_map_receipts.py`) | the unexcused critical-diversity record reads the session's whole maker set | `test_seat_map_receipts.py::test_state_level_unexcused_violations_read_the_sessions_former_fixer_family` (added by this order: neither `test_round_driver.py` node goes red here) |
+| H4 | `emit_receipt_seat_map` threading at its `panel_outside_makers` call (`seat_map_receipts.py`) | the emitted seat map keeps a receipt's critical-diversity row when a session maker is in the panel's family | `test_seat_map_receipts.py::test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker` (added by this order) |
+
+**Break-it run of the round-driver detectors against the unmodified `12a3c1b0` code** (production edits not yet made; exit 1; the two failures are the clean label `full-panel-confirmed` where `full-panel-confirmed-degraded` is asserted; the healthy and malformed-input tests pass, as they must on base):
+```
+FF..                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption _
+
+    def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
+        # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
+        # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+        SM = _load("seat_map")
+        latest = _legacy_pinned_single_vendor_map()
+        earlier = _earlier_receipt_naming_openai()
+        state, receipt = _certify_session([earlier, latest])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3973: AssertionError
+___________ test_a_former_fixer_family_is_a_maker_for_the_exemption ____________
+
+    def test_a_former_fixer_family_is_a_maker_for_the_exemption():
+        # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+        stored = _legacy_pinned_single_vendor_map()
+        state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3987: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption
+2 failed, 2 passed in 1.76s
+```
+
+**Shape measured after the fix** (the detectors' own assertions, green): `state["certification"]["shape"] == "full-panel-confirmed-degraded"`, `shapeDrivers == ["seat-pin"]`, `independence == "independent"` (the `independence` field reads the separate `_degraded` channel, which `seat-pin` does not drive; this is the same as the existing `test_seat_map_pin_excusal_degraded_shape_and_disclosure` shape), for both shape (a) and shape (b). The healthy case reads `full-panel-confirmed`, `independence == "independent"`, `shapeDrivers == []`.
+
+---
+
+## H1 — `extra_makers` union (`seat_map.py` `panel_outside_makers`)
+
+- **axis:** the session's other makers join the maker set the exemption reads
+
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, the line after the `makerFamilies` block, line 463):
+```diff
+--- before (restored text)
+    makers.update(f for f in extra_makers if isinstance(f, str) and f)
++++ neutralized
+    pass
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-c-pyc -m pytest plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session -q
+```
+
+**raw red** (exit 1; complete, nothing truncated):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption _
+
+    def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
+        # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
+        # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+        SM = _load("seat_map")
+        latest = _legacy_pinned_single_vendor_map()
+        earlier = _earlier_receipt_naming_openai()
+        state, receipt = _certify_session([earlier, latest])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3973: AssertionError
+___________ test_a_former_fixer_family_is_a_maker_for_the_exemption ____________
+
+    def test_a_former_fixer_family_is_a_maker_for_the_exemption():
+        # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+        stored = _legacy_pinned_single_vendor_map()
+        state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3988: AssertionError
+____ test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session ____
+
+    def test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session():
+        # axis: the session's other makers join the maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        assert SM.panel_outside_makers(m, "anthropic")
+        assert SM.panel_outside_makers(m, "anthropic", extra_makers=())
+>       assert not SM.panel_outside_makers(m, "anthropic", extra_makers={"openai"})
+E       AssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f4a0b3dd120>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, 'anthropic', extra_makers={'openai'})
+E        +    where <function panel_outside_makers at 0x7f4a0b3dd120> = SM.panel_outside_makers
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_seat_map.py:4763: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session
+3 failed in 2.65s
+```
+
+**restore:** the inverse text edit of the neutralization above (`pass` put back to the `makers.update(...)` line; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored line, `seat_map.py:463`, under the `# axis:` comment on line 462):
+```
+    makers.update(f for f in extra_makers if isinstance(f, str) and f)
+```
+
+**raw green** (after restore, same command, exit 0):
+```
+...                                                                      [100%]
+3 passed in 1.66s
+```
+
+---
+
+## H2 — `pin_excused_records` threading (`seat_map_receipts.py`)
+
+- **axis:** the pin-excused critical-diversity record (the `seat-pin` shape driver's source) reads the session's whole maker set
+
+**neutralization** (`plugins/superheroes/lib/seat_map_receipts.py`, line 150):
+```diff
+--- before (restored text)
+        classified = seat_map.classify_violations(entry["map"], driver_author_family, extra_makers=session_makers)
++++ neutralized
+        classified = seat_map.classify_violations(entry["map"], driver_author_family, extra_makers=())
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-c-pyc -m pytest plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_state_level_pin_excused_records_read_the_sessions_makers -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; the two round-driver nodes fail on the same clean-label assertion as in H1, and the state-level detector fails on the empty pin-excused list):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption _
+
+    def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
+        # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
+        # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+        SM = _load("seat_map")
+        latest = _legacy_pinned_single_vendor_map()
+        earlier = _earlier_receipt_naming_openai()
+        state, receipt = _certify_session([earlier, latest])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3973: AssertionError
+___________ test_a_former_fixer_family_is_a_maker_for_the_exemption ____________
+
+    def test_a_former_fixer_family_is_a_maker_for_the_exemption():
+        # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+        stored = _legacy_pinned_single_vendor_map()
+        state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+>       assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+E       AssertionError: assert 'full-panel-confirmed' == 'full-panel-c...rmed-degraded'
+E         
+E         - full-panel-confirmed-degraded
+E         ?                     ---------
+E         + full-panel-confirmed
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_round_driver.py:3988: AssertionError
+________ test_state_level_pin_excused_records_read_the_sessions_makers _________
+
+    def test_state_level_pin_excused_records_read_the_sessions_makers():
+        stored = _stored_outside_makers_map()
+        assert not _has_critical_diversity(SMR.pin_excused_records(_session_state([stored]), "anthropic"))
+        for state in (
+            _session_state([stored], former_fixer_families=["openai"]),
+            _session_state([dict(stored, makerFamilies=["anthropic", "openai"]), stored]),
+        ):
+>           assert _has_critical_diversity(SMR.pin_excused_records(state, "anthropic"))
+E           AssertionError: assert False
+E            +  where False = _has_critical_diversity([])
+E            +    where [] = <function pin_excused_records at 0x7efe74105d00>({'seatMapReceipts': [{'round': '1', 'map': {'seats': {'test-role': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort...t spanned ≥2 families'}], 'seed': 0, 'liveVendors': ['codex'], ...}}], 'rounds': {}, 'formerFixerFamilies': ['openai']}, 'anthropic')
+E            +      where <function pin_excused_records at 0x7efe74105d00> = SMR.pin_excused_records
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_seat_map_receipts.py:532: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption
+FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption
+FAILED plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_state_level_pin_excused_records_read_the_sessions_makers
+3 failed in 1.65s
+```
+
+**restore:** the inverse text edit of the neutralization above (`extra_makers=()` put back to `extra_makers=session_makers`; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored line, `seat_map_receipts.py:150`):
+```
+        classified = seat_map.classify_violations(entry["map"], driver_author_family, extra_makers=session_makers)
+```
+
+**raw green** (after restore, same command, exit 0):
+```
+...                                                                      [100%]
+3 passed in 1.39s
+```
+
+---
+
+## H3 — state-level `unexcused_violations` threading (`seat_map_receipts.py`)
+
+- **axis:** the unexcused critical-diversity record reads the session's whole maker set
+
+**neutralization** (`plugins/superheroes/lib/seat_map_receipts.py`, line 137):
+```diff
+--- before (restored text)
+        for v in seat_map.unexcused_violations(entry["map"], driver_author_family, extra_makers=session_makers):
++++ neutralized
+        for v in seat_map.unexcused_violations(entry["map"], driver_author_family, extra_makers=()):
+```
+
+**Which detector goes red, measured.** Run with the two round-driver nodes (T-a, T-b) alongside the detector this order added for H3: only the added detector goes red. T-a and T-b stay green because their maps are pinned with a submitted `critical-diversity` record, which `classify_violations` excuses by pin (an H2 path), so the state-level unexcused projection never carries it. The order's own rule applies: none of the existing detectors bites H3, so the added one is the proof. It uses an unpinned all-codex map with no submitted violation, so the session maker (openai, from `formerFixerFamilies`, or from an earlier receipt) makes `critical-diversity` DERIVED, and a derived record is never excused.
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-c-pyc -m pytest plugins/superheroes/lib/tests/test_round_driver.py::test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption plugins/superheroes/lib/tests/test_round_driver.py::test_a_former_fixer_family_is_a_maker_for_the_exemption plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_state_level_unexcused_violations_read_the_sessions_former_fixer_family -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; `..F`: the two round-driver nodes pass, the added detector fails):
+```
+..F                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_state_level_unexcused_violations_read_the_sessions_former_fixer_family __
+
+    def test_state_level_unexcused_violations_read_the_sessions_former_fixer_family():
+        # axis: the state-level unexcused projection judges a map against the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _unpinned_all_codex_map()
+        assert seat_map.panel_outside_makers(m, "anthropic")
+        assert not _has_critical_diversity(SMR.unexcused_violations(_session_state([m]), "anthropic"))
+        # an openai fixer a session upgrade replaced is still a maker: the all-codex panel is in its family
+        state = _session_state([m], former_fixer_families=["openai"])
+        unexcused = SMR.unexcused_violations(state, "anthropic")
+>       assert _has_critical_diversity(unexcused)
+E       assert False
+E        +  where False = _has_critical_diversity([])
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_seat_map_receipts.py:518: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_state_level_unexcused_violations_read_the_sessions_former_fixer_family
+1 failed, 2 passed in 1.41s
+```
+
+**restore:** the inverse text edit of the neutralization above (`extra_makers=()` put back to `extra_makers=session_makers`; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored line, `seat_map_receipts.py:137`):
+```
+        for v in seat_map.unexcused_violations(entry["map"], driver_author_family, extra_makers=session_makers):
+```
+
+**raw green** (after restore, the added detector alone, exit 0):
+```
+.                                                                        [100%]
+1 passed in 0.22s
+```
+
+---
+
+## H4 — `emit_receipt_seat_map` threading (`seat_map_receipts.py`)
+
+- **axis:** the emitted seat map keeps a receipt's critical-diversity row and violation when a session maker is in the panel's family
+
+**neutralization** (`plugins/superheroes/lib/seat_map_receipts.py`, line 282, the `panel_outside_makers` call's third argument):
+```diff
+--- before (restored text)
+            entry["map"], seat_map.effective_author_family(entry["map"], driver_author_family), session_makers,
++++ neutralized
+            entry["map"], seat_map.effective_author_family(entry["map"], driver_author_family), (),
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-c-pyc -m pytest plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; the dropped row is the failure):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker _
+
+    def test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker():
+        # axis: the emitted seat map judges each receipt against the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        stored = _stored_outside_makers_map()
+        healthy = SMR.emit_receipt_seat_map(_session_state([stored]), "anthropic")
+        assert not _has_critical_diversity(healthy.get("degradations"))
+        assert not _has_critical_diversity(healthy.get("violations"))
+        for state in (
+            _session_state([stored], former_fixer_families=["openai"]),
+            _session_state([dict(stored, makerFamilies=["anthropic", "openai"]), stored]),
+        ):
+            emitted = SMR.emit_receipt_seat_map(state, "anthropic")
+>           assert _CRITICAL_DIVERSITY_ROW in emitted["degradations"]
+E           AssertionError: assert {'constraint': 'critical-diversity', 'reason': 'relaxed critical-diversity — no assignment spanned ≥2 families'} in []
+
+/home/user/wt-2530/plugins/superheroes/lib/tests/test_seat_map_receipts.py:547: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_map_receipts.py::test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker
+1 failed in 0.26s
+```
+
+**restore:** the inverse text edit of the neutralization above (`(),` put back to `session_makers,`; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored line, `seat_map_receipts.py:282`):
+```
+            entry["map"], seat_map.effective_author_family(entry["map"], driver_author_family), session_makers,
+```
+
+**raw green** (after restore, exit 0):
+```
+.                                                                        [100%]
+1 passed in 0.23s
+```
+
+---
+
+## Threaded without a guarded element of its own
+
+`same_family_seats` (`seat_map_receipts.py`) passes `extra_makers=session_makers` too, as the order lists, but the one thing it reads from `unexcused_violations` is the `maker-family` constraint, and `extra_makers` only changes whether `critical-diversity` is dropped, so the threading there changes no output and no test can tell it from `extra_makers=()`. **Unprovable as placed**: it is unproven and carries no protection claim; it becomes provable only if `extra_makers` ever reaches the `maker-family` rule. `test_same_family_seats_reads_a_session_with_a_former_fixer_without_error` only proves the call does not raise.
+
 (end of record)

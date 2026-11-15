@@ -3941,6 +3941,79 @@ def test_a_legacy_single_vendor_pinned_panel_outside_the_makers_certifies_full_p
     assert not any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
 
 
+def _certify_session(maps, former_fixer_families=None):
+    """Certify a session whose seat-map receipts are ``maps`` in order (round 1, 2, ...), optionally with
+    ``state["formerFixerFamilies"]`` — the driver's whole maker set, not one map's."""
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMapReceipts"] = [{"round": str(i + 1), "map": dict(m)} for i, m in enumerate(maps)]
+    if former_fixer_families is not None:
+        state["formerFixerFamilies"] = former_fixer_families
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    return state, RD.build_receipt(state)
+
+
+def _earlier_receipt_naming_openai():
+    """A clean round-1 map whose seats are all cursor (family xai) and which names openai as a maker, so
+    the session's maker set holds openai while the latest, all-codex map leaves it out."""
+    SM = _load("seat_map")
+    earlier = SM.to_receipt(SM.build(SM.PANEL_ROSTER, ["cursor"], "anthropic", 0), "anthropic")
+    earlier.update(_nonpanel_cell_proof(["cursor"]))
+    earlier["makerFamilies"] = ["anthropic", "openai"]
+    return earlier
+
+
+def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
+    # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
+    # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+    SM = _load("seat_map")
+    latest = _legacy_pinned_single_vendor_map()
+    earlier = _earlier_receipt_naming_openai()
+    state, receipt = _certify_session([earlier, latest])
+    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
+    # seat-pin is its own shape driver; the `independence` field reads a different channel (_degraded)
+    assert state["certification"]["independence"] == "independent"
+    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["seatMap"].get("violations", []))
+    # the latest map alone reads outside the makers (what 12a3c1b0 judged); with the session's makers it does not
+    assert SM.panel_outside_makers(latest, "anthropic")
+    assert not SM.panel_outside_makers(latest, "anthropic", extra_makers={"openai"})
+
+
+def test_a_former_fixer_family_is_a_maker_for_the_exemption():
+    # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+    stored = _legacy_pinned_single_vendor_map()
+    state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
+    assert state["certification"]["independence"] == "independent"
+    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    # the emitted seat map keeps the critical-diversity row and violation: the panel is in a maker's family
+    emitted = receipt["seatMap"]
+    assert any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
+def test_a_malformed_former_fixer_families_names_no_extra_maker():
+    # E5: absent, a scalar, or a list with a non-string / empty member adds no maker — the healthy shape holds
+    stored = _legacy_pinned_single_vendor_map()
+    for bad in (None, "openai", 7, {"openai": True}, [None, 5, ""]):
+        state, _ = _certify_session([stored], former_fixer_families=bad)
+        assert state["certification"]["shape"] == "full-panel-confirmed", bad
+
+
+def test_a_healthy_all_codex_panel_with_no_other_maker_stays_full_panel_confirmed():
+    # E3: no other maker in any receipt or in formerFixerFamilies — behaviour exactly as at 12a3c1b0
+    stored = _legacy_pinned_single_vendor_map()
+    for maps, former in (([stored], None), ([stored], []), ([dict(stored), dict(stored)], None)):
+        state, receipt = _certify_session(maps, former_fixer_families=former)
+        assert state["certification"]["shape"] == "full-panel-confirmed", (len(maps), former)
+        assert state["certification"]["independence"] == "independent"
+        assert state["certification"]["shapeDrivers"] == []
+        assert not [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
+
+
 def test_a_legacy_pinned_panel_with_a_critical_seat_in_the_authors_family_keeps_todays_shape():
     # the break-it twin: one critical seat moved to the author's family (anthropic, still pinned) is not
     # outside the makers, so the record is classified exactly as before #2530. Shape measured on base.

@@ -4755,6 +4755,37 @@ def test_panel_outside_makers_edge_h_unfilled_seats_are_skipped():
     assert not SM.panel_outside_makers(with_maker, "anthropic")
 
 
+def test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session():
+    # axis: the session's other makers join the maker set — see bite-proof record wo_a_2530_single_vendor_panel
+    m = _outside_panel()
+    assert SM.panel_outside_makers(m, "anthropic")
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers=())
+    assert not SM.panel_outside_makers(m, "anthropic", extra_makers={"openai"})
+    assert not SM.panel_outside_makers(m, "anthropic", extra_makers=frozenset({"google", "openai"}))
+    assert not SM.panel_outside_makers(m, "anthropic", ["openai"])
+    # an extra maker nobody is seated in leaves the panel outside
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers={"google"})
+    # the same set reaches verify, derived_violations, classify_violations and unexcused_violations
+    stored = dict(_legacy_stored_outside_panel())
+    assert SM.verify(m, "anthropic") == []
+    assert {"constraint": "critical-diversity"} in SM.verify(m, "anthropic", {"openai"})
+    assert SM.derived_violations(stored, "anthropic") == []
+    assert _has_critical_diversity(SM.derived_violations(stored, "anthropic", {"openai"}))
+    assert SM.classify_violations(stored, "anthropic")["excusedByPin"] == []
+    assert _has_critical_diversity(SM.classify_violations(stored, "anthropic", {"openai"})["excusedByPin"])
+    assert SM.unexcused_violations(stored, "anthropic") == []
+
+
+def test_panel_outside_makers_ignores_a_non_string_or_empty_extra_maker():
+    # E4: the caller's set is already filtered; a bad member is dropped, never raised on and never a maker
+    m = _outside_panel()
+    for bad in ("", None, 7, ("openai",), ["openai"], {"a": 1}, 1.5, False):
+        assert SM.panel_outside_makers(m, "anthropic", extra_makers=[bad]), bad
+        assert SM.panel_outside_makers(m, "anthropic", extra_makers=[bad, "google"]), bad
+        assert not SM.panel_outside_makers(m, "anthropic", extra_makers=[bad, "openai"]), bad
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers=frozenset({"", "google"}))
+
+
 # --- the maker's family is barred from every known seat -----------------------------------------
 
 

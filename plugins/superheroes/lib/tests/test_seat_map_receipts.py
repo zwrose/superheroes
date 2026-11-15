@@ -1,6 +1,7 @@
 """Tests for ``seat_map_receipts`` — the leaf projection module (#681)."""
 import ast
 import os
+import subprocess
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -405,6 +406,10 @@ def _stored_outside_makers_map():
     return stored
 
 
+def _without_critical_diversity(m):
+    return [d for d in m["degradations"] if d.get("constraint") != "critical-diversity"]
+
+
 def _has_critical_diversity(rows):
     return any(isinstance(r, dict) and r.get("constraint") == "critical-diversity" for r in rows or [])
 
@@ -435,9 +440,21 @@ def test_emit_receipt_seat_map_keeps_a_critical_diversity_row_when_a_maker_is_se
     seated["seats"]["security-reviewer"] = dict(stored["seats"]["security-reviewer"], vendor="claude")
     assert not seat_map.panel_outside_makers(seated, "anthropic")
     assert _CRITICAL_DIVERSITY_ROW in _emit([seated], "anthropic")["degradations"]
-    # judged per receipt: round 1 is outside the makers and drops the row, round 2 seats a maker and keeps it
-    emitted = _emit([stored, seated], "anthropic")
-    assert emitted["degradations"].count(_CRITICAL_DIVERSITY_ROW) == 1
+    # judged per receipt, with DISTINCT rows so the assertion tells the two receipts apart (FU2): the
+    # outside-round receipt (every seat codex) drops its row, the maker-round receipt (one seat on the
+    # author's own family, anthropic) keeps its row — in either order. The maker the second receipt names is
+    # the author's own family, so the session's maker set stays {anthropic} and the first receipt's codex
+    # seats stay outside every maker the session names.
+    outside_row = {"constraint": "critical-diversity", "reason": "outside-round"}
+    maker_row = {"constraint": "critical-diversity", "reason": "maker-round"}
+    outside_receipt = dict(stored, degradations=_without_critical_diversity(stored) + [dict(outside_row)])
+    maker_receipt = dict(seated, degradations=_without_critical_diversity(seated) + [dict(maker_row)])
+    assert seat_map.panel_outside_makers(outside_receipt, "anthropic")
+    assert not seat_map.panel_outside_makers(maker_receipt, "anthropic")
+    for order in ((outside_receipt, maker_receipt), (maker_receipt, outside_receipt)):
+        emitted = _emit(list(order), "anthropic")
+        assert outside_row not in emitted["degradations"], [m["degradations"][-1]["reason"] for m in order]
+        assert emitted["degradations"].count(maker_row) == 1, [m["degradations"][-1]["reason"] for m in order]
     # an unknown author family keeps the row too
     no_author = {k: v for k, v in stored.items() if k != "authorFamily"}
     assert _CRITICAL_DIVERSITY_ROW in _emit([no_author])["degradations"]
@@ -471,3 +488,80 @@ def test_critical_diversity_never_appears_for_a_panel_outside_every_maker():
         assert not _has_critical_diversity(emitted.get("degradations")), label
         if "build" in label:
             assert not _has_critical_diversity(m["degradations"]), label
+
+
+# --- the exemption reads the session's whole maker set (#2530, WO-C) ----------------------------
+
+
+def _session_state(maps, former_fixer_families=None):
+    state = {"seatMapReceipts": [{"round": str(i + 1), "map": m} for i, m in enumerate(maps)], "rounds": {}}
+    if former_fixer_families is not None:
+        state["formerFixerFamilies"] = former_fixer_families
+    return state
+
+
+def _unpinned_all_codex_map():
+    """An all-codex map with no submitted violation: a maker (openai) in the session makes its
+    `critical-diversity` DERIVED, and a derived record is never excused."""
+    built = seat_map.build(seat_map.PANEL_ROSTER, ["codex"], "anthropic", 0)
+    return seat_map.to_receipt(built, "anthropic")
+
+
+def test_state_level_unexcused_violations_read_the_sessions_former_fixer_family():
+    # axis: the state-level unexcused projection judges a map against the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+    m = _unpinned_all_codex_map()
+    assert seat_map.panel_outside_makers(m, "anthropic")
+    assert not _has_critical_diversity(SMR.unexcused_violations(_session_state([m]), "anthropic"))
+    # an openai fixer a session upgrade replaced is still a maker: the all-codex panel is in its family
+    state = _session_state([m], former_fixer_families=["openai"])
+    unexcused = SMR.unexcused_violations(state, "anthropic")
+    assert _has_critical_diversity(unexcused)
+    assert all(v.get("derived") is True for v in unexcused if v.get("constraint") == "critical-diversity")
+    # shape (a): a later receipt that omits openai does not release it
+    earlier = dict(m, makerFamilies=["anthropic", "openai"], seats={})
+    assert _has_critical_diversity(SMR.unexcused_violations(_session_state([earlier, m]), "anthropic"))
+
+
+def test_state_level_pin_excused_records_read_the_sessions_makers():
+    stored = _stored_outside_makers_map()
+    assert not _has_critical_diversity(SMR.pin_excused_records(_session_state([stored]), "anthropic"))
+    for state in (
+        _session_state([stored], former_fixer_families=["openai"]),
+        _session_state([dict(stored, makerFamilies=["anthropic", "openai"]), stored]),
+    ):
+        assert _has_critical_diversity(SMR.pin_excused_records(state, "anthropic"))
+        assert not _has_critical_diversity(SMR.unexcused_violations(state, "anthropic"))
+
+
+def test_emit_receipt_seat_map_keeps_the_critical_diversity_row_when_a_former_fixer_is_a_maker():
+    # axis: the emitted seat map judges each receipt against the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+    stored = _stored_outside_makers_map()
+    healthy = SMR.emit_receipt_seat_map(_session_state([stored]), "anthropic")
+    assert not _has_critical_diversity(healthy.get("degradations"))
+    assert not _has_critical_diversity(healthy.get("violations"))
+    for state in (
+        _session_state([stored], former_fixer_families=["openai"]),
+        _session_state([dict(stored, makerFamilies=["anthropic", "openai"]), stored]),
+    ):
+        emitted = SMR.emit_receipt_seat_map(state, "anthropic")
+        assert _CRITICAL_DIVERSITY_ROW in emitted["degradations"]
+        assert _has_critical_diversity(emitted.get("violations"))
+    # a malformed formerFixerFamilies names no maker (E5)
+    for bad in ("openai", 7, [None, 5, ""], {"openai": 1}):
+        emitted = SMR.emit_receipt_seat_map(_session_state([stored], former_fixer_families=bad), "anthropic")
+        assert not _has_critical_diversity(emitted.get("degradations")), bad
+
+
+def test_same_family_seats_reads_a_session_with_a_former_fixer_without_error():
+    m = _unpinned_all_codex_map()
+    assert SMR.same_family_seats(_session_state([m], former_fixer_families=["openai"]), "anthropic") == []
+
+
+def test_importing_either_side_of_the_receipt_import_cycle_works_in_a_fresh_interpreter():
+    # E6: seat_map_receipts imports receipt_disclosures lazily (receipt_disclosures imports seat_map_receipts)
+    lib_dir = os.path.abspath(_LIB)
+    for module in ("seat_map_receipts", "receipt_disclosures"):
+        done = subprocess.run(
+            [sys.executable, "-B", "-c", "import " + module], cwd=lib_dir, capture_output=True, text=True,
+        )
+        assert done.returncode == 0, (module, done.stderr)

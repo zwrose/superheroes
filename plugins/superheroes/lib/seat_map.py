@@ -430,7 +430,7 @@ def _critical_families(seats: dict) -> set[str]:
     }
 
 
-def panel_outside_makers(seat_map: dict, author_family: str | None) -> bool:
+def panel_outside_makers(seat_map: dict, author_family: str | None, extra_makers=()) -> bool:
     """True when every filled seat of the panel is outside every maker's family, and at least one
     critical seat is filled (#2530). Independence is that the seats are outside the makers' families;
     a panel that shares one vendor or one family among them is not a critical-diversity breach.
@@ -439,7 +439,11 @@ def panel_outside_makers(seat_map: dict, author_family: str | None) -> bool:
     is not a dict, seats that are not a dict, an unknown author family, a `makerFamilies` that is
     present but not a list of non-empty strings, a walked seat that is not a dict or whose family does
     not resolve, a seat in a maker's family, and a map with no filled critical seat. An unfilled seat
-    is skipped here; `seat-unfilled` governs it. Callers pass the effective author family."""
+    is skipped here; `seat-unfilled` governs it. Callers pass the effective author family.
+
+    ``extra_makers`` is the rest of the session's maker set (the driver's `accumulated_maker_families`):
+    a seat in any of those families is not outside either. A non-string or empty member is ignored; the
+    default is no extra makers, which is this map's own makers alone."""
     if not isinstance(seat_map, dict):
         return False
     seats = seat_map.get("seats")
@@ -455,6 +459,8 @@ def panel_outside_makers(seat_map: dict, author_family: str | None) -> bool:
         if not isinstance(raw_makers, list) or not all(isinstance(f, str) and f for f in raw_makers):
             return False
         makers.update(raw_makers)
+    # axis: the session's other makers (a later map's omission, a replaced fixer's family) are makers here too — see bite-proof record wo_a_2530_single_vendor_panel
+    makers.update(f for f in extra_makers if isinstance(f, str) and f)
     for seat in _scanned_seats(seat_map):
         if seat not in seats:
             continue
@@ -1154,11 +1160,11 @@ def _normalize_submitted_violation(v) -> dict:
 
 
 def derived_violations(
-    seat_map: dict, driver_author_family: str | None = None,
+    seat_map: dict, driver_author_family: str | None = None, extra_makers=(),
 ) -> list[dict]:
     author_family = effective_author_family(seat_map, driver_author_family)
     if violation_basis(seat_map, driver_author_family) != VIOLATION_BASIS_NO_SEATS:
-        rederived = verify(seat_map, author_family)
+        rederived = verify(seat_map, author_family, extra_makers)
     else:
         rederived = []
 
@@ -1191,20 +1197,20 @@ def derived_violations(
 
     out = list(union.values())
     # axis: a panel wholly outside the makers' families never carries critical-diversity, submitted or derived — see bite-proof record wo_a_2530_single_vendor_panel
-    if panel_outside_makers(seat_map, author_family):
+    if panel_outside_makers(seat_map, author_family, extra_makers):
         out = [v for v in out if v.get("constraint") != "critical-diversity"]
     out.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
     return out
 
 
 def classify_violations(
-    seat_map: dict, driver_author_family: str | None = None,
+    seat_map: dict, driver_author_family: str | None = None, extra_makers=(),
 ) -> dict:
     """{'unexcused': [...], 'excusedByPin': [...], 'excusedByLiveness': [...]} (#680 R-A/R-B)."""
     empty = {"unexcused": [], "excusedByPin": [], "excusedByLiveness": []}
     if not isinstance(seat_map, dict):
         return empty
-    violations = derived_violations(seat_map, driver_author_family)
+    violations = derived_violations(seat_map, driver_author_family, extra_makers)
     raw_seats = seat_map.get("seats")
     seats = raw_seats if isinstance(raw_seats, dict) else {}
     author_family = effective_author_family(seat_map, driver_author_family)
@@ -1326,13 +1332,13 @@ def classify_violations(
 
 
 def unexcused_violations(
-    seat_map: dict, driver_author_family: str | None = None,
+    seat_map: dict, driver_author_family: str | None = None, extra_makers=(),
 ) -> list[dict]:
     """Back-compat thin wrapper — the violations that STAND."""
-    return classify_violations(seat_map, driver_author_family)["unexcused"]
+    return classify_violations(seat_map, driver_author_family, extra_makers)["unexcused"]
 
 
-def verify(seat_map: dict, author_family: str | None) -> list[dict]:
+def verify(seat_map: dict, author_family: str | None, extra_makers=()) -> list[dict]:
     seats = seat_map.get("seats")
     if not isinstance(seats, dict):
         return [{"constraint": "malformed"}]
@@ -1382,7 +1388,7 @@ def verify(seat_map: dict, author_family: str | None) -> list[dict]:
 
     critical_families = _critical_families(seats)
     # axis: a panel wholly outside the makers' families is not a critical-diversity breach — see bite-proof record wo_a_2530_single_vendor_panel
-    if len(critical_families) < required_critical_families(roster) and not panel_outside_makers(seat_map, author_family):
+    if len(critical_families) < required_critical_families(roster) and not panel_outside_makers(seat_map, author_family, extra_makers):
         violations.append({"constraint": "critical-diversity"})
 
     violations.sort(key=lambda v: (v.get("constraint", ""), v.get("seat", "")))
