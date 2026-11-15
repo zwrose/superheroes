@@ -91,7 +91,8 @@ Confirm each item from durable artifacts and the session ledger, not from memory
 
 - live build lanes and their states;
 - outstanding PR vets;
-- open owner decisions.
+- open owner decisions;
+- the last comment read on each declared inbox (`skills/showrunner/reference/owner-decisions.md` § Declared inboxes).
 
 Then **freshen the resume point** at the top of this session's ledger — it is where
 `skills/showrunner-handoff/SKILL.md` and `skills/showrunner-resume/SKILL.md` read the
