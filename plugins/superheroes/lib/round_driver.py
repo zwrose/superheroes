@@ -1473,7 +1473,7 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
         else:
             pin = _calibration_pin(state)
             # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
-            new_basis = (lane_call.call(repo_root, paths, proposed="full", stored=pin["riskAreas"]) if pin
+            new_basis = (lane_call.call_pinned(repo_root, paths, pin["riskAreas"], proposed="full") if pin
                          else lane_call.call(repo_root, paths, proposed="full"))
     except Exception:
         new_basis = {"floor": "full"}
