@@ -31,7 +31,9 @@ Verdict semantics:
 - CONFIRMED — you found the triggering input and can cite it.
 - PLAUSIBLE — the concern may be real but you could not fully prove it from the diff/repo.
 - REFUTED — the issue clearly does NOT hold (wrong, not in changed material, already
-  handled); reason must explain why.
+  handled); reason must explain why. A standing ruling says only that a finding is out of scope; it
+  is never evidence about the code, so a REFUTED that rests on a ruling rather than on the code names
+  that ruling's key (as listed) in its `reason`.
 - An issue whose `taxonomy` is `break-it-test` cites a new test file that the change does not hold
   yet; that is expected, never a reason for REFUTED. An issue of any taxonomy whose `suggestion` is
   a `break-it-test v1` block carries an attached test and is judged the same way. Judge it by its
