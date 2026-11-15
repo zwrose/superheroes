@@ -52,7 +52,7 @@ class GitHubLike(Fake):
         self.corrupt_json, self.crlf, self.part_tail = corrupt_json, crlf, part_tail
         self.damage_marker, self.drop_head, self.list_fails = damage_marker, drop_head, list_fails_after_head
         self.break_findings, self.no_transit, self.rewrite = break_findings, no_transit, rewrite
-        self.sent, self.hidden, self.listed, self.head_made = {}, set(), 0, False
+        self.sent, self.hidden, self.listed, self.head_made, self.parts_made = {}, set(), 0, False, 0
 
     def readers(self):
         return dict(super().readers(), list_comments=self._list)
@@ -80,7 +80,10 @@ class GitHubLike(Fake):
             if self.damage_marker:
                 stored = " " + stored
         if body.startswith(rr.PART_MARKER):
-            stored += self.part_tail
+            # the text goes after the closing fence of the second part, which is short: difflib over a full-size part is slow
+            self.parts_made += 1
+            if self.parts_made == 2:
+                stored += self.part_tail
         return stored.replace("\n", "\r\n") if self.crlf else stored
 
     def _create(self, pr, repo, body):
@@ -104,11 +107,25 @@ def transits(fake):
 
 def dirty():
     """A finding body with real ESC colour codes, a BEL, a NUL and a C1 control."""
-    # the C1 control ends the text: followed by a printable byte it would read as the start of an 8-bit CSI sequence
-    return "pre " + ESC + "[31mFAIL" + ESC + "[0m bell" + BEL + " nul" + NUL + " c1" + C1_CSI
+    return "pre " + ESC + "[31mFAIL" + ESC + "[0m bell" + BEL + " nul" + NUL + " c1" + C1_CSI + " post"
 
 
-STOOD = "pre FAIL bell" + PICTURE_BEL + " nul" + PICTURE_NUL + " c1[U+009B]"
+STOOD = "pre FAIL bell" + PICTURE_BEL + " nul" + PICTURE_NUL + " c1[U+009B] post"
+
+
+def varied_findings(count, body_chars):
+    """`count` findings whose bodies are about `body_chars` long, each line numbered and built from distinct words, so
+    the transit comparison of a long, varied body stays fast (a long repetitive one makes difflib crawl)."""
+    rows = many_findings(count, 1)
+    for i, row in enumerate(rows):
+        lines, size, n = [], 0, 0
+        while size < body_chars:
+            line = f"{i}.{n}: " + " ".join(f"w{(i * 7919 + n * 104729 + k * 1299709) % 1000003:x}" for k in range(6))
+            lines.append(line)
+            size += len(line) + 1
+            n += 1
+        row["body"] = "\n".join(lines)[:body_chars]
+    return rows
 
 
 def rewritable(text):
@@ -123,7 +140,7 @@ def test_t1_a_finding_with_control_codes_is_written_and_read_back_in_stand_in_fo
     # axis: a record string holding a code GitHub rewrites reads back whole; write ok with a read that cannot parse
     fake = GitHubLike()
     if many:
-        findings = many_findings(5, 20000)
+        findings = varied_findings(5, 20000)
         findings[0] = dict(findings[0], body=dirty())
     else:
         findings = [finding(body=dirty())]
@@ -169,16 +186,17 @@ def test_t2_ansi_sequences_are_removed_and_a_lone_esc_is_stood_in():
     visible = rr._visible_controls
     assert visible("x" + ESC + "[31;1mred" + ESC + "[0m") == "xred"
     assert visible("x" + ESC + "[2 qy") == "xy"
-    assert visible("x" + C1_CSI + "31mred" + C1_CSI + "0m") == "xred"
     assert visible("x" + ESC + "]0;title" + BEL + "after") == "xafter"
     assert visible("x" + ESC + "]0;title" + ESC + BACKSLASH + "after") == "xafter"
     assert visible("x" + ESC + "]0;title" + chr(0x9C) + "after") == "xafter"
-    assert visible("x" + chr(0x9D) + "0;title" + BEL + "after") == "xafter"
     assert visible("x" + ESC + "Mi") == "xi"
     assert visible("a" + ESC + "b") == "a" + PICTURE_ESC + "b"
     assert visible("a" + ESC) == "a" + PICTURE_ESC
     assert visible(ESC + ESC + "[0m") == PICTURE_ESC
     assert visible("x" + chr(0x9D) + "no end") == "x[U+009D]no end"
+    # a C1 code never starts a removed sequence: an 8-bit CSI or OSC is stood in, and the text after it is kept
+    assert visible(chr(0x9B) + "31mX") == "[U+009B]31mX"
+    assert visible(chr(0x9D) + "0;t" + chr(7)) == "[U+009D]0;t" + chr(0x2407)
 
 
 # --- T3: dict keys ---
@@ -286,7 +304,7 @@ def test_t5_e4_crlf_framing_arrives_matched_and_refuses(tmp_path):
 def test_t5_e5_a_parts_record_whose_part_cannot_be_sliced_refuses(tmp_path, tail, leg):
     # axis: a parts record is joined again; a part with text after its closing fence is not a part
     fake = GitHubLike(part_tail=tail)
-    out = run(tmp_path, fake, findings=many_findings(5, 20000))
+    out = run(tmp_path, fake, findings=varied_findings(5, 14000))
     assert len(parts_of(fake)) >= 2
     assert ("changed" in transits(fake).values()) is (leg == "changed")
     assert ("changed" not in transits(fake).values()) is (leg == "matched")

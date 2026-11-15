@@ -2246,11 +2246,15 @@ def _secret_line_count(text):
     return sum(1 for line in text.split("\n") if _has_secret(line)) or 1
 
 
-# ANSI escape sequences, removed before the control stand-ins: 7-bit and 8-bit CSI (parameter bytes 0x30-0x3F,
-# intermediate bytes 0x20-0x2F, one final byte 0x40-0x7E), OSC (up to and including BEL, ESC backslash or 0x9C),
-# and the two-character ESC followed by one byte in 0x40-0x5F. An ESC that starts none of these is kept for its stand-in.
-_ANSI_START = re.compile("[\x1b\x9b\x9d]")
-_CSI = re.compile("(?:\x1b\\[|\x9b)[0-?]*[ -/]*[@-~]")
+# ANSI escape sequences, removed before the control stand-ins; every one starts with ESC (7-bit only): CSI (ESC [,
+# parameter bytes 0x30-0x3F, intermediate bytes 0x20-0x2F, one final byte 0x40-0x7E), OSC (ESC ], up to and including
+# BEL, ESC backslash or 0x9C), and the two-character ESC followed by one byte in 0x40-0x5F. An ESC that starts none of
+# these is kept for its stand-in. A C1 code (0x80-0x9F) is never removed on its own and never starts a removed sequence,
+# so 0x9B and 0x9D are not introducers: text after a lone one is kept and the code becomes its [U+00XX] stand-in. The
+# one C1 code removed is 0x9C, and only as the terminator of a 7-bit OSC, where it is part of that sequence.
+# axis: a C1 code never starts a removed sequence, so a lone 0x9B or 0x9D keeps the text after it — see bite-proof record wo_2490_controls
+_ANSI_START = re.compile("\x1b")
+_CSI = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
 _ESC_PAIR = re.compile("\x1b[@-_]")
 _OSC_END = re.compile("\x07|\x1b\\\\|\x9c")
 # GitHub rewrites a JSON control escape, and a raw control byte, of these codes into caret notation, which
@@ -2258,31 +2262,30 @@ _OSC_END = re.compile("\x07|\x1b\\\\|\x9c")
 # return, backspace and form feed are left as they are.
 _CONTROL_STANDINS = {
     **{c: chr(0x2400 + c) for c in (*range(0x00, 0x08), *range(0x0E, 0x20))},
-    0x7F: "␡",
+    0x7F: chr(0x2421),
     **{c: f"[U+{c:04X}]" for c in range(0x80, 0xA0)},
 }
 
 
 def _strip_ansi(text):
-    """`text` less its ANSI escape sequences. One forward pass: each unterminated OSC start is tested once against
-    the last terminator found, so adversarial input stays linear."""
+    """`text` less its 7-bit ANSI escape sequences (each starts with ESC); a C1 code is never removed here, except
+    0x9C ending an ESC ] OSC. One forward pass: each unterminated OSC start is tested once against the last
+    terminator found, so adversarial input stays linear."""
     out, at, scan, no_osc_end = [], 0, 0, False
     while True:
         m = _ANSI_START.search(text, scan)
         if m is None:
             break
-        i, lead = m.start(), text[m.start()]
-        end = None
-        if lead != "\x9d":
-            hit = _CSI.match(text, i)
-            end = hit.end() if hit else None
-        if end is None and (lead == "\x9d" or text.startswith("\x1b]", i)) and not no_osc_end:
+        i = m.start()
+        hit = _CSI.match(text, i)
+        end = hit.end() if hit else None
+        if end is None and text.startswith("\x1b]", i) and not no_osc_end:
             stop = _OSC_END.search(text, i + 1)
             if stop is None:
                 no_osc_end = True
             else:
                 end = stop.end()
-        if end is None and lead == "\x1b":
+        if end is None:
             hit = _ESC_PAIR.match(text, i)
             end = hit.end() if hit else None
         if end is None:
