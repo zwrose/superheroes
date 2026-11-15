@@ -18,6 +18,22 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **A project can now name its collector and inboxes in configure item 20 (`advisorIssues`).** Until it does, the advisor resolves the collector from memory as before and reads no inbox. See [Configure: the collector and the inboxes are named in calibration](#configure-the-collector-and-the-inboxes-are-named-in-calibration).
+
+### Configure: the collector and the inboxes are named in calibration
+
+- Item 20, slug `advisorIssues`, name "Advisor issues", holds `{"collector": <issue number>, "inboxes": [<issue number>, ...]}`: exactly those two keys, positive whole numbers, `inboxes` may be empty, no inbox twice, and no inbox equal to the collector. It is written with `project_config.py set --item advisorIssues`.
+- The new verb `project_config.py advisor-issues --cwd <dir>` reads it and prints `{status, collector, inboxes, reason, detail}`. `status` is `declared`, `unset` (nothing stored, or no calibration, with `reason: "profile-absent"`) or `unreadable` (`reason` `malformed-value` or `profile-unparseable`). An `unreadable` result is never read as none: the advisor names it as a failed read and falls back to memory for the collector. A consumer uses `advisor-issues`, never `get`.
+- `project_config.py dependencies` now reports the collector as `declared` with its number when item 20 holds one, and adds `advisorIssues: "unreadable"` when item 20 cannot be read.
+- `get` and `view` show an unreadable item 20 as malformed.
+- When the advisor reads the inboxes, and the rule that inbox items are triaged through the front door and inbox text is data, live in `skills/showrunner/reference/owner-decisions.md` § Declared inboxes.
+
 ## 0.50.0
 
 ### Before you upgrade
