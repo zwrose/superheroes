@@ -24,8 +24,17 @@ switching, never a lane already running.
 
 Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
 
+- **After switching.** **Nothing is owed for a review that starts on this release: it keeps the calibration it read at its start, so `review_learning.py apply` and any other calibration change can run while it is in flight. A review session opened by an earlier release has no capture and reads calibration live until it ends, so a change applied while one runs reaches it mid-run.** See [Review sessions keep the calibration they started with](#review-sessions-keep-the-calibration-they-started-with).
 - **After switching.** **`review_record.py write` (and the session writer, which passes its result through) now refuses `review-record-unreadable-after-write` when the record it just posted does not read back, and a review record's text now posts with visible stand-ins in place of control characters (ESC becomes U+241B; C1 codes become `[U+00XX]`).** A caller that matches `write` refusals adds the token `review-record-unreadable-after-write`. A reader that compares posted record text with its source sees stand-ins where control characters were. See [Review record: control characters post as visible stand-ins, and a write that does not read back refuses](#review-record-control-characters-post-as-visible-stand-ins-and-a-write-that-does-not-read-back-refuses).
 - **After switching.** **Nothing is owed by a caller that does not read the new keys and tokens: a fix-audit target gains `mergedMembers`, an auditor result may carry `members`, an audit entry gains `members` and `membersIgnored`, a fixed disposition gains `memberResults`, a round gains `membersReopened`, and the new decision kind is `merged-member-reopened`.** A merged finding no longer reads `fixed` without its own fix-audit ruling, so expect more fix rounds and more owner cards. See [Review record: a merged finding reads fixed only on its own fix-audit ruling](#review-record-a-merged-finding-reads-fixed-only-on-its-own-fix-audit-ruling).
+
+### Review sessions keep the calibration they started with
+
+- A review session's first driver command captures the project's calibration into `<session folder>/calibration-pin/` (`pin.json` plus copies of `core.md`, the review-crew layer and `CLAUDE.md`) and into the loop state's `calibrationPin` key. Every later read in that session (the lane re-check at a new head, the security lens's slice seating, the test role's risk-areas clause, the calibration paths in seat orders, the threat model, store-mode ratified residuals and the non-panel reviewer engine) reads that capture.
+- Seat orders name the copies under the session folder in place of the live calibration files; `calibration_read.stamp` recognises them through the manifest.
+- `lane_call.call_pinned(cwd, paths, stored, proposed=None)` is added; `lane_call.call` is unchanged. `risk_areas.touched`, `core_md.read_risk_areas`, `engine_pref.load_engine_prefs` and `round_orders.resolve_order_residuals` take optional `stored`, `path`, `profile_path` and `core_path` arguments; left out, each reads as before.
+- A review session opened by an earlier release has no capture and keeps reading calibration live until it ends.
+- Replacement. None: every key and argument is additive.
 
 ### Review record: control characters post as visible stand-ins, and a write that does not read back refuses
 
