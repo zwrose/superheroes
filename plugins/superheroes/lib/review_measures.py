@@ -41,9 +41,12 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     records left for the owner (merged members left out). `sessionsPerPrByRelease` counts each PR's in-window sessions.
     `firstSessionCertification` reads each PR's first session among all its records: certified when that session's
     latest record is `reviewed`. `silentReviewerVoids` counts the in-window sessions whose latest record is not
-    `reviewed` and lists a silence-watchdog end for a seat that did not run; it is what the held in-session reviewer
-    retry waits on (a session on 0.50.0 or later voided by a silent reviewer), and a release before 0.48.0, which
-    recorded no watchdog ends, reads unmeasured.
+    `reviewed`, has a reviewer row that did not run, and lists a silence-watchdog end for a seat that is not a row that
+    ran (a forfeited seat's end is named by its role and run dir, so it cannot be tied to its row by name; a seat a
+    later round recovered leaves no row that did not run, so its end voids nothing). It is what the held in-session
+    reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer). A release before 0.48.0, which
+    recorded no watchdog ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that
+    release's figure unmeasured.
 """
 import argparse
 import collections
@@ -272,7 +275,10 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
         put("sessionsPerPrByRelease", pr_release, len(sessions[pr]))
         # axis: certification reads the PR's first session among all its records, in the window or not — see bite-proof record i2498_by_release
         opening = first(every[pr])
-        put("firstSessionCertification", release_of(opening), review_record.cleared(_latest(opening).get("status")))
+        status = _latest(opening).get("status")
+        # axis: a first session whose status is not one the writer records reads unmeasured, never uncertified — see bite-proof record i2498_by_release
+        put("firstSessionCertification", release_of(opening),
+            review_record.cleared(status) if status in review_record.STATUSES else None)
         if pr in merged_set:
             # axis: a merged PR's cards are its distinct finding keys left for the owner, merged members out — see bite-proof record i2498_by_release
             cards = {f.get(session_contract.FINDING_KEY_FIELD) or f.get("id") for r in sessions[pr].values()
@@ -281,11 +287,15 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
             put("ownerCardsPerMergedPr", pr_release, len(cards))
         for sid, last in sessions[pr].items():
             ends = last.get("silenceWatchdogEnds", [])
-            whole = isinstance(ends, list) and all(isinstance(e, dict) and isinstance(e.get("seat"), str) for e in ends)
+            # axis: a silence end that is not a dict naming a seat, or a status the writer does not record, reads unmeasured — see bite-proof record i2498_by_release
+            whole = (isinstance(ends, list) and last.get("status") in review_record.STATUSES
+                     and all(isinstance(e, dict) and isinstance(e.get("seat"), str) and e["seat"].strip() for e in ends))
             answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
+            missing = any(x["ran"] == review_record.RAN_NOT_RUN for x in last["reviewers"])
             # axis: voided only when the session did not certify and a silence end names a seat that never answered — see bite-proof record i2498_by_release
+            # axis: a silence end counts only beside a reviewer row that did not run, so a seat a later round recovered (its row gone, its dir unbound) voids nothing — see bite-proof record i2498_by_release
             voided = (None if not whole else not review_record.cleared(last.get("status"))
-                      and any(e["seat"] not in answered for e in ends))
+                      and missing and any(e["seat"] not in answered for e in ends))
             put("silentReviewerVoids", release_of([r for r in rs if r["sessionId"] == sid]), voided)
 
     def shown(k, ver, vals):
@@ -294,6 +304,8 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
         if k == "sessionsPerPrByRelease":
             return _spread(vals)
         if k == "firstSessionCertification":
+            if None in vals:
+                return miss("%s.byRelease.%s" % (k, ver), "incomplete-evidence")
             return {"certified": sum(vals), "prs": len(vals), "share": round(sum(vals) / len(vals), 3)}
         # axis: a release before watchdog ends were recorded reads unmeasured, never zero — see bite-proof record i2498_by_release
         if versions[ver] < WATCHDOG_ENDS_SINCE:

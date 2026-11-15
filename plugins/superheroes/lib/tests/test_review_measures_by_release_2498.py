@@ -89,6 +89,33 @@ def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_a
     assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 4}}, "unplaced": 0}
 
 
+def test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not():
+    """A forfeited seat's run dir binds no row, so its end carries the role-and-dir label; a seat a later round
+    recovered leaves no row that did not run (review_record_session drops the missing row), so its end voids nothing."""
+    at, label = "2026-11-06T10:00:00Z", "reviewer (run-r1-sec)"
+    m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(label)]),
+               _rec(2, "s2", at=at, status="not-reviewed", rows=[_row("security-reviewer (round 2)"), _row(CODE)],
+                    ends=[_end(label)])])
+    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 2}}, "unplaced": 0}
+
+
+def test_an_unrecorded_status_reads_unmeasured_never_uncertified_or_voided():
+    at = "2026-11-06T10:00:00Z"
+    for status in (None, "pending"):
+        m, why = _m([_rec(1, at=at, status=status, rows=[_row(SEC, "not-run")], ends=[_end(SEC)])])
+        assert m["firstSessionCertification"]["byRelease"] == {"0.50.0": U}
+        assert m["silentReviewerVoids"]["byRelease"] == {"0.50.0": U}
+        assert why["firstSessionCertification.byRelease.0.50.0"] == "incomplete-evidence"
+        assert why["silentReviewerVoids.byRelease.0.50.0"] == "incomplete-evidence"
+
+
+def test_a_blank_watchdog_seat_reads_unmeasured_never_a_void():
+    m, why = _m([_rec(1, at="2026-11-06T10:00:00Z", status="not-reviewed", rows=[_row(SEC, "not-run")],
+                      ends=[_end(" ")])])
+    assert m["silentReviewerVoids"]["byRelease"] == {"0.50.0": U}
+    assert why["silentReviewerVoids.byRelease.0.50.0"] == "incomplete-evidence"
+
+
 def test_a_release_before_watchdog_ends_were_recorded_reads_unmeasured():
     m, why = _m([_rec(1, at="2026-11-01T10:00:00Z")], releases=[{"version": "0.47.0", "since": "2026-10-01"}])
     assert m["silentReviewerVoids"]["byRelease"] == {"0.47.0": U}
