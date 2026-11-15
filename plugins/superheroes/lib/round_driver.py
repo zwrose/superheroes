@@ -3727,6 +3727,9 @@ def _advance(state, config):
     elif step == P_SYNTHESIS:
         payload = {"findings": state.get("_verified") or [], "refuted": state.get("_refuted") or [],
                    "earlier": repeat_marks.order_list(_earlier_pool(state))}
+        if not payload["findings"]:
+            # Repeat-only order: the orchestrator dispatches the seat with `dispatch-review --nothing-to-group` (issue 2527).
+            payload["nothingToGroup"] = True
     elif step == P_SEAMS:
         payload = {"fullDiff": True, "slices": _seams_slices(state)}
     elif step == P_SECOND_TEST:
@@ -16591,12 +16594,15 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
 
 # record-result refusal: a landed panel read list that is not the list the runner graded for the run
 EVIDENCE_READ_PARTS_MISMATCH_REFUSAL = "evidence-read-parts-mismatch"
+# record-result refusal: a synthesis run opened with --nothing-to-group landed on a round that has survivors
+EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL = "evidence-nothing-to-group-mismatch"
 
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
-                                phase):
+                                phase, verified=None):
     """Bind runner telemetry to the driver's order hash.
 
+    `verified` is the round's surviving findings (`state["_verified"]`), read only for the synthesis seat.
     Returns (envelope, refusal_reason, extra, cited_head_source)."""
     if not evidence_run_dir:
         return None, None, {}, None
@@ -16610,6 +16616,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
                                                  "orderSha256": order_sha}, None
+    # axis: a run opened with --nothing-to-group cannot answer a round that has survivors — see bite-proof record wo_a_2527_nothing_to_group
+    if (phase == P_SYNTHESIS and record.get("nothingToGroup") is True
+            and isinstance(verified, list) and verified):
+        return None, EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL, {
+            "survivors": len(verified)}, None
     result_digest = record.get("resultDigest")
     result_kind = record.get("resultKind")
     if (not isinstance(result_digest, str) or not result_digest
@@ -16839,7 +16850,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
             assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir, cited_head, phase)
+                session_dir, envelope, evidence_run_dir, cited_head, phase,
+                verified=state.get("_verified"))
             if assembly_source is not None:
                 cited_head_source = assembly_source
             if ev_reason is not None:

@@ -28,6 +28,10 @@ id appears in at most one group, and a refuted finding that repeats nothing is l
 group. A repeat changes no severity and drops nothing; the driver decides what an earlier finding's
 outcome means for the repeat.
 
+When `findings` is empty the order is repeat-only: the answer is the groups of refuted findings
+that repeat an earlier one, and an empty grouping (`[]`) is the complete, correct answer when none
+repeats.
+
 Grouping **never lowers a severity**: the merged issue carries the **highest** severity among
 its members; the driver enforces this mechanically on a normalized, fail-closed vocabulary, so a
 mis-cased or off-scale severity is treated as blocking rather than ranked last. Proposing a group
