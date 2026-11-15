@@ -1602,3 +1602,436 @@ def test_jsx_gap_beside_a_failed_language_is_not_a_permanent_boundary(tmp_path):
     assert "1 .tsx/.jsx file(s) unmeasured" in reason
     # A transient lizard failure must not seed a baseline as a permanent boundary.
     assert gl.permanent_boundary(out) is False
+
+
+# ---------------------------------------------------------------------------
+# #2501: a misread lizard span reads unmeasured, never a number
+# ---------------------------------------------------------------------------
+
+# Real lizard 1.24.0 (measured): a template literal with nested ${...} braces makes it lose its
+# brace tracking, so it reports ONE row for `first` that runs to the end of the file and nothing
+# for `second` / `third`.
+_BREAK1_TS = r"""export function first(a: string): string {
+  const re = /\{+/g;
+  const t = `x ${a.replace(re, "}")} y ${`${a}{`}`;
+  if (a) {
+    return t;
+  }
+  return "";
+}
+
+export function second(x: number): number {
+  if (x) {
+    return 1;
+  }
+  return 2;
+}
+
+export function third(x: number): number {
+  if (x > 3) {
+    return 1;
+  }
+  return 2;
+}
+"""
+
+# The same loss swallows semicolon-terminated arrow / function-expression siblings.
+_SWALLOW2_TS = r"""export function first(a: string): string {
+  const t = `x ${`${a}{`}`;
+  if (a) {
+    return t;
+  }
+  return "";
+}
+
+export const second = (x: number) => (x ? 1 : 2);
+
+const third = function (y: number) { return y && 2; };
+
+export function fourth(z: number) {
+  if (z) {
+    return 1;
+  }
+}
+"""
+
+# Healthy TypeScript: lizard ends a function with a return-type annotation on the line of the
+# next declaration token (here a@3-14, though `a` really ends on line 8).
+_SEPS_TS = """import { z } from "./z";
+
+export function a(n: number): number {
+  if (n) {
+    return 1;
+  }
+  return z(n);
+}
+
+type Alias = number;
+
+// a comment
+/** doc */
+export const b = (n: number): number => {
+  if (n > 2) {
+    return 2;
+  }
+  return 3;
+};
+"""
+
+# Healthy: the overrun ends on the next NON-exported declaration's line, past type / interface /
+# comment lines.
+_QUIRK3_TS = """export function a(x: number): number {
+  if (x) {
+    return 1;
+  }
+  return 2;
+}
+
+const helper = (x: number) => {
+  return x + 1;
+};
+
+export function b(y: number): number {
+  return helper(y);
+}
+
+type Pair = [number, number];
+
+interface Shape {
+  size: number;
+}
+
+// c follows
+function c(z: number): number {
+  return z ? 1 : 2;
+}
+
+let v = function (q: number) {
+  return q;
+};
+
+export function d(w: number): number {
+  return w;
+}
+async function e() {
+  return 1;
+}
+"""
+
+# Healthy: each overload signature is its own row; the function before them ends on the first
+# signature's line.
+_OVERLOAD_TS = """export function before(a: number): number {
+  if (a) {
+    return 1;
+  }
+  return 2;
+}
+
+export function f(x: number): number;
+export function f(
+  x: string,
+): string;
+export function f(x: any): any {
+  if (x) {
+    return x;
+  }
+  const z = 1;
+  const y = z + 1;
+  return y;
+}
+"""
+
+# Healthy: functions nested in `outer`; `second` starts on outer's end line.
+_NESTED_TS = """export function outer(a: number): number {
+  const inner = (b: number) => {
+    if (b) {
+      return 1;
+    }
+    return 2;
+  };
+  function helper(c: number) {
+    if (c) { return 3; }
+    return c;
+  }
+  if (a) {
+    return inner(a);
+  }
+  const r = helper(a);
+  return r;
+}
+export function second(x: number): number {
+  if (x) {
+    return 1;
+  }
+  return 2;
+}
+"""
+
+_STEP10 = "  step();\n" * 10
+
+
+def _span_row(path, name, ccn, start, end):
+    return "20,%d,10,1,%d,%s@%d-%d@%s,%s,%s,%s ( a ),%d,%d\n" % (
+        ccn, end - start + 1, name, start, end, path, path, name, name, start, end)
+
+
+def _span_run(tmp_path, sources, lizard, **kw):
+    """Write ``sources`` ({relpath: text}) and stub lizard's stdout for them."""
+    for rel, text in sources.items():
+        _write(tmp_path, rel, text)
+    names = list(sources)
+    return _basic_tools(
+        tmp_path, numstat="".join("20\t0\t%s\n" % n for n in names), lsfiles=names,
+        lizard=lizard, **kw)
+
+
+def _span_errors(out):
+    return [e for e in out["diagnostics"]["collectorErrors"] if e.get("kind") == "span-misread"]
+
+
+def _misread_entry(path, name, start, end, rule):
+    return {"collector": "lizard", "path": path, "kind": "span-misread", "function": name,
+            "startLine": start, "endLine": end, "rule": rule}
+
+
+_MISREAD_DIGEST = {"unmeasured": True, "reason": "span-misread"}
+
+
+def test_overlapping_span_marks_only_the_crossing_row_and_the_max_ignores_it(tmp_path):
+    # a@1-10 and b@5-20 cross (1 < 5 < 10 < 20); only `a` is the misread, and `b` (CCN 12) is
+    # the file's max — a max that counts `a` reads 40.
+    run = _span_run(
+        tmp_path, {"over.ts": "  step();\n" * 20},
+        _span_row("over.ts", "a", 40, 1, 10) + _span_row("over.ts", "b", 12, 5, 20))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert _span_errors(out) == [_misread_entry("over.ts", "a", 1, 10, "crossing")]
+    assert [(c["path"], c["maxFunctionCCN"], c["worstFunction"]["name"])
+            for c in out["candidates"]] == [("over.ts", 12, "b")]
+    assert out["digest"]["files"]["hotspots:over.ts"]["ccn"] == 12
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript: 1 function(s) unmeasured" in reason
+
+
+def test_swallowed_declaration_reads_unmeasured_with_no_red_line(tmp_path):
+    # The measured break1.ts: one row for `first` that holds `second` and `third`. Its CCN sits
+    # at the red-line threshold, so a lens that scores it raises a red line.
+    ccn = gl.RED_LINE_THRESHOLDS["complexity"]
+    run = _span_run(tmp_path, {"break1.ts": _BREAK1_TS}, _span_row("break1.ts", "first", ccn, 1, 22))
+    lens = hot.HotspotsLens()
+    out = lens.collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:break1.ts": _MISREAD_DIGEST}
+    assert out["candidates"] == []
+    assert _span_errors(out) == [
+        _misread_entry("break1.ts", "first", 1, 22, "declaration-inside")]
+    assert lens.red_lines(out["candidates"]) == []
+    assert gl.classify_collect(out)[0] == "partial"
+
+
+def test_swallowed_semicolon_terminated_siblings_read_unmeasured(tmp_path):
+    assert len(_SWALLOW2_TS.splitlines()) == 17
+    run = _span_run(
+        tmp_path, {"swallow2.ts": _SWALLOW2_TS}, _span_row("swallow2.ts", "first", 14, 1, 17))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:swallow2.ts": _MISREAD_DIGEST}
+    assert out["candidates"] == []
+    assert _span_errors(out) == [
+        _misread_entry("swallow2.ts", "first", 1, 17, "declaration-inside")]
+
+
+def test_healthy_typescript_overrun_onto_the_next_declaration_stays_measured(tmp_path):
+    run = _span_run(
+        tmp_path, {"seps.ts": _SEPS_TS},
+        _span_row("seps.ts", "a", 13, 3, 14) + _span_row("seps.ts", "b", 11, 14, 19))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert gl.classify_collect(out) == ("collected", None)
+    assert gl.permanent_boundary(out) is False
+    assert [(c["path"], c["maxFunctionCCN"], c["worstFunction"]["name"])
+            for c in out["candidates"]] == [("seps.ts", 13, "a")]
+    assert out["digest"]["files"]["hotspots:seps.ts"]["ccn"] == 13
+    assert out["diagnostics"]["coverageGaps"] == []
+    assert out["diagnostics"]["collectorErrors"] == []
+    assert "span-misread" not in json.dumps(out)
+
+
+def test_healthy_overrun_over_plain_declarations_and_overloads_stays_measured(tmp_path):
+    quirk = "".join(_span_row("quirk3.ts", name, ccn, s, e) for name, ccn, s, e in (
+        ("a", 11, 1, 8), ("helper", 12, 8, 10), ("b", 13, 12, 14), ("c", 14, 23, 27),
+        ("v", 15, 27, 29), ("d", 16, 31, 34), ("e", 17, 34, 36)))
+    overload = "".join(_span_row("overload.ts", name, ccn, s, e) for name, ccn, s, e in (
+        ("before", 11, 1, 8), ("f", 12, 8, 8), ("f", 18, 9, 11), ("f", 13, 12, 19)))
+    assert len(_QUIRK3_TS.splitlines()) == 36
+    assert len(_OVERLOAD_TS.splitlines()) == 19
+    run = _span_run(
+        tmp_path, {"quirk3.ts": _QUIRK3_TS, "overload.ts": _OVERLOAD_TS}, quirk + overload)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert gl.classify_collect(out) == ("collected", None)
+    assert {c["path"]: c["maxFunctionCCN"] for c in out["candidates"]} == {
+        "quirk3.ts": 17, "overload.ts": 18}
+    assert out["diagnostics"]["collectorErrors"] == []
+
+
+def test_nested_functions_are_nesting_not_a_misread(tmp_path):
+    rows = "".join(_span_row("nested.ts", name, ccn, s, e) for name, ccn, s, e in (
+        ("outer", 13, 1, 18), ("inner", 11, 2, 7), ("helper", 12, 8, 11), ("second", 10, 18, 23)))
+    assert len(_NESTED_TS.splitlines()) == 23
+    run = _span_run(tmp_path, {"nested.ts": _NESTED_TS}, rows)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert gl.classify_collect(out) == ("collected", None)
+    assert out["diagnostics"]["collectorErrors"] == []
+    assert [(c["path"], c["maxFunctionCCN"], c["worstFunction"]["name"])
+            for c in out["candidates"]] == [("nested.ts", 13, "outer")]
+
+
+# Each row is (id, source, the columns from 9 on, expected startLine, expected endLine).
+_SPAN_INVALID_CASES = [
+    ("e1-ten-columns", _STEP10, ",2", 2, None),
+    ("e1-nine-columns", _STEP10, "", None, None),
+    ("e2-start-not-integer", _STEP10, ",x,5", None, 5),
+    ("e2-end-not-integer", _STEP10, ",2,y", 2, None),
+    ("e3-end-before-start", _STEP10, ",8,3", 8, 3),
+    ("e4-start-below-one", _STEP10, ",0,5", 0, 5),
+    ("e5-start-past-end-of-file", _STEP10, ",12,14", 12, 14),
+    ("e5-end-past-end-of-file", _STEP10, ",2,11", 2, 11),
+    ("e8-empty-file", "", ",1,5", 1, 5),
+]
+
+
+@pytest.mark.parametrize(
+    "source, tail, start, end", [c[1:] for c in _SPAN_INVALID_CASES],
+    ids=[c[0] for c in _SPAN_INVALID_CASES])
+def test_span_invalid_edges_read_unmeasured(tmp_path, source, tail, start, end):
+    row = "20,15,10,1,5,f@1-5@bad.ts,bad.ts,f,f ( a )%s\n" % tail
+    run = _span_run(tmp_path, {"bad.ts": source}, row)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:bad.ts": _MISREAD_DIGEST}
+    assert out["candidates"] == []
+    assert _span_errors(out) == [_misread_entry("bad.ts", "f", start, end, "span-invalid")]
+    assert gl.classify_collect(out)[0] == "partial"
+
+
+def test_the_note_counts_functions_not_files(tmp_path):
+    sources = {"p.ts": _STEP10, "q.ts": _STEP10, "ok.ts": "x\n" * 20}
+    lizard = (_span_row("p.ts", "f1", 20, 2, 11) + _span_row("p.ts", "f2", 21, 3, 12)
+              + _span_row("q.ts", "g", 22, 1, 20) + _lizard_row("ok.ts", 12))
+    run = _span_run(tmp_path, sources, lizard)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    line = "javascript: 3 function(s) unmeasured — " + hot.SPAN_UNMEASURED_DETAIL
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert line in reason
+    assert "javascript: 2 function(s)" not in reason
+    assert line in out["diagnostics"]["coverageGaps"]
+    assert gl.permanent_boundary(out) is True
+    assert len(_span_errors(out)) == 3
+    assert [c["path"] for c in out["candidates"]] == ["ok.ts"]
+    files = out["digest"]["files"]
+    assert files["hotspots:p.ts"] == _MISREAD_DIGEST
+    assert files["hotspots:q.ts"] == _MISREAD_DIGEST
+
+
+def test_unreadable_source_is_a_per_file_error_and_never_a_permanent_boundary(
+        tmp_path, monkeypatch):
+    sources = {"gone.ts": "x\n" * 20, "ok.ts": "x\n" * 20}
+    run = _span_run(
+        tmp_path, sources, _lizard_row("gone.ts", 30) + _lizard_row("ok.ts", 12))
+    real = hot._read_source
+    reads = []
+
+    def read(abs_path):
+        reads.append(os.path.basename(abs_path))
+        if os.path.basename(abs_path) == "gone.ts":
+            raise OSError("unreadable")
+        return real(abs_path)
+
+    monkeypatch.setattr(hot, "_read_source", read)
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "1 file(s) unmeasured — source could not be read" in reason
+    assert gl.permanent_boundary(out) is False
+    files = out["digest"]["files"]
+    assert files["hotspots:gone.ts"] == {"unmeasured": True, "error": True}
+    assert files["hotspots:ok.ts"]["ccn"] == 12
+    assert {"collector": "lizard", "path": "gone.ts", "kind": "source-unreadable"} in (
+        out["diagnostics"]["collectorErrors"])
+    assert _span_errors(out) == []
+    assert [c["path"] for c in out["candidates"]] == ["ok.ts"]
+    assert sorted(reads) == ["gone.ts", "ok.ts"]  # each file read once
+
+
+def test_jsx_gap_and_misread_gap_together_are_one_permanent_boundary(tmp_path):
+    _write(tmp_path, "App.tsx", _CONSUMER_TSX)
+    run = _span_run(tmp_path, {"bad.ts": _STEP10}, _span_row("bad.ts", "f", 20, 2, 11))
+    run.lsfiles.append("App.tsx")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "1 .tsx/.jsx file(s) unmeasured" in reason
+    assert "1 function(s) unmeasured" in reason
+    assert gl.permanent_boundary(out) is True
+
+
+def test_misread_gap_beside_a_failed_language_is_not_a_permanent_boundary(tmp_path):
+    _write(tmp_path, "mod.py", 20)
+    run = _span_run(
+        tmp_path, {"bad.ts": _STEP10}, _span_row("bad.ts", "f", 20, 2, 11),
+        radon={"mod.py": [{"complexity": 12, "name": "m", "lineno": 1}]},
+        fail_markers={"radon": 1})
+    run.lsfiles.append("mod.py")
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert reason.startswith("partial complexity coverage — python: ")
+    assert "1 function(s) unmeasured" in reason
+    assert gl.permanent_boundary(out) is False
+
+
+def test_previously_measured_file_turning_span_misread_is_no_drift(tmp_path):
+    prev = {"files": {"hotspots:break1.ts": {"score": 50.0, "ccn": 88}},
+            "surfaceIds": ["hotspots:break1.ts"]}
+    ccn = gl.RED_LINE_THRESHOLDS["complexity"] + 10
+    run = _span_run(tmp_path, {"break1.ts": _BREAK1_TS}, _span_row("break1.ts", "first", ccn, 1, 22))
+    lens = hot.HotspotsLens()
+    out = lens.collect(_ctx(tmp_path, run, prev_digest=prev))
+
+    assert out["digest"]["files"]["hotspots:break1.ts"] == _MISREAD_DIGEST
+    assert lens.diff(prev, out["digest"]) == {"new": [], "worsened": [], "resolved": []}
+    assert lens.red_lines(out["candidates"]) == []
+
+
+def test_parse_lizard_csv_never_span_checks():
+    text = _span_row("x.ts", "a", 40, 1, 10) + _span_row("x.ts", "b", 12, 5, 20)
+    assert hot.parse_lizard_csv(text) == {
+        "x.ts": {"maxFunctionCCN": 40, "worstFunction": {"name": "a", "line": 1}}}
+    rows = hot.parse_lizard_rows(text)
+    assert [(r["name"], r["start"], r["end"]) for r in rows] == [("a", 1, 10), ("b", 5, 20)]
+    # A row whose start column is not an integer is skipped by parse_lizard_csv, as before.
+    assert hot.parse_lizard_csv("20,15,10,1,5,f@1-5@x.ts,x.ts,f,f ( a ),x,5\n") == {}
+
+
+def test_crlf_source_counts_lines_and_compares_indentation_the_same(tmp_path):
+    ccn = gl.RED_LINE_THRESHOLDS["complexity"]
+    run = _span_run(
+        tmp_path,
+        {"seps.ts": _SEPS_TS.replace("\n", "\r\n"), "break1.ts": _BREAK1_TS.replace("\n", "\r\n")},
+        _span_row("seps.ts", "a", 13, 3, 14) + _span_row("seps.ts", "b", 11, 14, 19)
+        + _span_row("break1.ts", "first", ccn, 1, 22))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    files = out["digest"]["files"]
+    assert files["hotspots:seps.ts"]["ccn"] == 13
+    assert files["hotspots:break1.ts"] == _MISREAD_DIGEST
+    assert _span_errors(out) == [
+        _misread_entry("break1.ts", "first", 1, 22, "declaration-inside")]

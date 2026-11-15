@@ -19,7 +19,9 @@ import csv
 import io
 import json
 import os
+import re
 import sys
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +55,38 @@ JSX_UNMEASURED_DETAIL = (
 def _jsx_gap(count):
     return "javascript: %d .tsx/.jsx file(s) unmeasured — %s" % (
         count, JSX_UNMEASURED_DETAIL)
+
+
+# lizard (pinned 1.24.0) also loses brace tracking in plain .js/.ts: a template literal with
+# nested ``${...}`` braces, or a regex literal holding a brace, makes it swallow the functions
+# that follow. A row whose reported span no single brace block could hold reads unmeasured.
+SPAN_UNMEASURED_REASON = "span-misread"
+SPAN_UNMEASURED_DETAIL = (
+    "lizard's reported span runs over another function or past a declaration no single "
+    "brace block could hold, so that function's complexity is unmeasured")
+SPAN_UNREADABLE_KIND = "source-unreadable"
+
+
+def _span_gap(count):
+    return "javascript: %d function(s) unmeasured — %s" % (count, SPAN_UNMEASURED_DETAIL)
+
+
+def _unreadable_gap(count):
+    return ("javascript: %d file(s) unmeasured — source could not be read for the span check"
+            % count)
+
+
+# A line that opens a declaration (function / class, or a const / let / var bound to a function
+# or arrow). Matched against the line with its leading whitespace stripped. A trailing ``;`` is
+# NOT an exemption: swallowed one-line siblings end in one. ``type``, ``interface``, ``enum``,
+# ``import``, comments and plain value declarations do not match.
+_DECL_RE = re.compile(
+    r"(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?"
+    r"(?:function|class)(?![\w$])"
+    r"|(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*"
+    r"(?::(?:[^=]|=>)*?)?=(?![=>])\s*(?:async\s+)?"
+    r"(?:function(?![\w$])|\(|<|[A-Za-z_$][\w$]*\s*=>)"
+)
 
 
 # The one hotspots red-line kind, sourced from the authoritative tuple (I3) — not a bare
@@ -184,15 +218,28 @@ def parse_radon_json(text):
     return result, error_paths
 
 
-def parse_lizard_csv(text):
-    """lizard `--csv` (no header). Columns verified against captured fixture:
-    0=nloc, 1=CCN, 2=token_count, 3=param_count, 4=length,
+def _int_or_none(raw):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_lizard_rows(text):
+    """lizard `--csv` (no header) → one dict per usable row, in order. Columns verified
+    against captured fixture: 0=nloc, 1=CCN, 2=token_count, 3=param_count, 4=length,
     5=name@start-end@file, 6=file, 7=function_name, 8=long_signature,
     9=start_line, 10=end_line.
+
+    Each dict: ``path`` (column 6), ``ccn``, ``name`` (column 7, ``"?"`` when empty),
+    ``line`` (column 9, 0 when absent or unreadable — the figure ``worstFunction`` carries),
+    ``start`` / ``end`` (columns 9 / 10, None when absent or not an integer) and
+    ``startMalformed`` (column 9 present but not an integer — ``parse_lizard_csv`` has always
+    skipped such a row). Rows skipped: fewer than 8 columns, an unparseable CCN, an empty path.
     """
-    result = {}
+    rows = []
     if not text:
-        return result
+        return rows
     reader = csv.reader(io.StringIO(text))
     for row in reader:
         # A short/garbage row is SKIPPED, never indexed past its length — the guard must
@@ -205,18 +252,49 @@ def parse_lizard_csv(text):
             ccn = int(row[1])
             path = row[6].strip()
             name = row[7].strip() or "?"
-            line = int(row[9]) if len(row) > 9 else 0
         except (TypeError, ValueError, IndexError):
             continue
         if not path:
             continue
-        cur = result.get(path)
-        if cur is None or ccn > cur["maxFunctionCCN"]:
-            result[path] = {
-                "maxFunctionCCN": ccn,
-                "worstFunction": {"name": name or "?", "line": line},
-            }
+        start = _int_or_none(row[9]) if len(row) > 9 else None
+        end = _int_or_none(row[10]) if len(row) > 10 else None
+        rows.append({
+            "path": path,
+            "ccn": ccn,
+            "name": name,
+            "line": start if start is not None else 0,
+            "start": start,
+            "end": end,
+            "startMalformed": len(row) > 9 and start is None,
+        })
+    return rows
+
+
+def _fold_row(result, key, row):
+    """Fold one row into ``result[key]``: the first row with the strictly greatest CCN wins."""
+    cur = result.get(key)
+    if cur is None or row["ccn"] > cur["maxFunctionCCN"]:
+        result[key] = {
+            "maxFunctionCCN": row["ccn"],
+            "worstFunction": {"name": row["name"] or "?", "line": row["line"]},
+        }
+
+
+def _aggregate_rows(rows):
+    """{raw path: {maxFunctionCCN, worstFunction}} over ``rows`` — no span check. A row whose
+    column 9 is present but not an integer is skipped, as it always was."""
+    result = {}
+    for row in rows:
+        if row["startMalformed"]:
+            continue
+        _fold_row(result, row["path"], row)
     return result
+
+
+def parse_lizard_csv(text):
+    """lizard `--csv` (no header) → {path: {maxFunctionCCN, worstFunction}}. Columns as in
+    ``parse_lizard_rows``. Never span-checks: every usable row counts."""
+    return _aggregate_rows(parse_lizard_rows(text))
 
 
 def relative_churn(added, deleted, current_lines):
@@ -581,36 +659,142 @@ def _run_radon(ctx, cwd, paths):
     )
 
 
+def _read_source(abs_path):
+    """The decoded text of a source file (UTF-8, undecodable bytes replaced) for the span
+    check, or raises OSError. The one read seam, so a test can swap it."""
+    with open(abs_path, "rb") as f:
+        data = f.read()
+    return data.decode("utf-8", errors="replace")
+
+
+def _leading_ws(line):
+    return len(line) - len(line.lstrip())
+
+
+def _span_rules(rows, lines):
+    """One rule per row of ONE file: None for a sound row, else the first leg that fired.
+
+    ``lines`` is the file's source split by ``splitlines()``. Legs, in order: span-invalid,
+    crossing, declaration-inside.
+    """
+    # Bites on: a lizard row whose span no single brace block could hold (invalid, crossing,
+    # or holding a declaration at or above its own indentation).
+    n = len(lines)
+    decl_nums = []
+    decl_indents = []
+    for number, line in enumerate(lines, 1):
+        stripped = line.lstrip()
+        if _DECL_RE.match(stripped):
+            decl_nums.append(number)
+            decl_indents.append(len(line) - len(stripped))
+    spans = sorted((r["start"], r["end"]) for r in rows
+                   if r["start"] is not None and r["end"] is not None)
+    starts = [s2 for s2, _ in spans]
+    rules = []
+    for row in rows:
+        s, e = row["start"], row["end"]
+        if s is None or e is None or s < 1 or e < s or s > n or e > n:
+            rules.append("span-invalid")
+            continue
+        lo = bisect_right(starts, s)
+        hi = bisect_left(starts, e)
+        if any(spans[k][1] > e for k in range(lo, hi)):
+            rules.append("crossing")
+            continue
+        indent = _leading_ws(lines[s - 1])
+        first = bisect_right(decl_nums, s)
+        last = bisect_left(decl_nums, e)
+        if any(decl_indents[k] <= indent for k in range(first, last)):
+            rules.append("declaration-inside")
+            continue
+        rules.append(None)
+    return rules
+
+
+def _check_file_spans(cwd, rel_path, rows, complexity, report):
+    """Span-check ``rows`` (all of one requested file), set ``complexity[rel_path]`` from the
+    sound rows, and record misreads / an unreadable source in ``report``."""
+    try:
+        text = _read_source(os.path.join(cwd, rel_path))
+    except OSError:
+        complexity[rel_path] = {"_unmeasured": True, "_error": True}
+        report["unreadable"].append({
+            "collector": "lizard", "path": rel_path, "kind": SPAN_UNREADABLE_KIND})
+        return
+    rules = _span_rules(rows, text.splitlines())
+    sound = [row for row, rule in zip(rows, rules) if rule is None]
+    for row, rule in zip(rows, rules):
+        if rule is None:
+            continue
+        report["misreads"].append({
+            "collector": "lizard",
+            "path": rel_path,
+            "kind": SPAN_UNMEASURED_REASON,
+            "function": row["name"] or "?",
+            "startLine": row["start"],
+            "endLine": row["end"],
+            "rule": rule,
+        })
+    if not sound:
+        complexity[rel_path] = {"_unmeasured": True, "_reason": SPAN_UNMEASURED_REASON}
+        return
+    best = {}
+    for row in sound:
+        _fold_row(best, rel_path, row)
+    complexity[rel_path] = best[rel_path]
+
+
 def _run_lizard(ctx, cwd, paths):
     """Run lizard over absolute input paths via run_tool.
 
-    Returns (complexity_dict, None) on success, or (None, reason) on failure. Empty output
-    for a needed language is a failure (I4 fail-direction — mirrors radon's empty guard),
-    never a clean zero-complexity read.
+    Returns ``(complexity_dict, span_report, None)`` on success, or ``(None, None, reason)``
+    on failure. Empty output for a needed language is a failure (I4 fail-direction — mirrors
+    radon's empty guard), never a clean zero-complexity read.
+
+    ``span_report`` is ``{"misreads": [collectorErrors entry, ...], "unreadable": [entry,
+    ...]}``. Every row of a requested file is span-checked (see ``_span_rules``); a misread row
+    contributes nothing to its file's figure, and a file with no sound row reads unmeasured. A
+    row for a path that was not an operand of this call is aggregated as it always was and not
+    checked, so ``_join_anomaly`` still sees orphan keys.
     """
+    report = {"misreads": [], "unreadable": []}
     if not paths:
-        return {}, None
+        return {}, report, None
     outputs, err = _run_batched(ctx, cwd, paths, "lizard")
     if err is not None:
-        return None, err
+        return None, None, err
     texts = [t for t in outputs if t.strip()]
     if not texts:
-        return None, "lizard returned empty output"
+        return None, None, "lizard returned empty output"
+    requested = {_normalize_one_path(cwd, p) for p in _abs_paths(cwd, paths)}
     complexity = {}
+    checked = {}  # requested repo-relative path -> its rows, in order
     for text in texts:
         try:
-            parsed = parse_lizard_csv(text)
+            rows = parse_lizard_rows(text)
         except (TypeError, ValueError, csv.Error, IndexError) as exc:
-            return None, "lizard output unparseable: %s" % exc
+            return None, None, "lizard output unparseable: %s" % exc
         # Honesty mirror of radon's guard: lizard produced NON-EMPTY output but parsing
         # yielded zero usable rows (short / garbage CSV). That is a tool malfunction, not
         # a clean zero-complexity read — degrade js rather than fail open with a silent {}.
-        if not parsed:
-            return None, (
+        # It runs on the parsed rows, before the span check: a file whose rows are all
+        # misread is not parsed-zero.
+        if not rows:
+            return None, None, (
                 "lizard reported output but parsing yielded zero usable rows "
                 "(reported-nonzero-parsed-zero)")
-        complexity.update(parsed)
-    return _normalize_complexity_paths(cwd, complexity), None
+        others = []
+        for row in rows:
+            rel = _normalize_one_path(cwd, row["path"])
+            if rel in requested:
+                checked.setdefault(rel, []).append(row)
+            else:
+                others.append(row)
+        complexity.update(_aggregate_rows(others))
+    complexity = _normalize_complexity_paths(cwd, complexity)
+    for rel, rows in checked.items():
+        _check_file_spans(cwd, rel, rows, complexity, report)
+    return complexity, report, None
 
 
 def _is_unmeasured_file(rec):
@@ -697,8 +881,8 @@ class HotspotsLens:
     required_facts = ()
     cost = {
         "collectorSeconds": 0.5,
-        "note": ("radon (py) + lizard (js/ts; .tsx/.jsx unmeasured) + git churn; "
-                 "needs git history"),
+        "note": ("radon (py) + lizard (js/ts; .tsx/.jsx unmeasured; misread spans "
+                 "unmeasured) + git churn; needs git history"),
     }
     validation_guidance = VALIDATION_GUIDANCE
     consequence_template = CONSEQUENCE_TEMPLATE
@@ -806,7 +990,7 @@ class HotspotsLens:
         # language; a clean run yielding zero complexity for function-less files is a
         # legitimate collected-empty for that language.
         (complexity, coverage, coverage_gaps, collector_errors,
-         failed_langs) = self._collect_complexity(
+         failed_langs, boundary_gaps, other_gaps) = self._collect_complexity(
             ctx, cwd, py_paths, js_paths, prev_files)
 
         # I4 fail-direction: if EVERY needed language failed (or the only needed one did),
@@ -848,20 +1032,20 @@ class HotspotsLens:
 
         # Partial: merge prevDigest for the language(s) that could not collect so a failed
         # collector never erases prior findings or emits false `resolved`.
-        partial_reason = None
+        reasons = []
         if failed_langs:
-            partial_reason = "partial complexity coverage — %s" % "; ".join(
-                "%s: %s" % (lang, reason) for lang, reason in failed_langs)
+            reasons.append("partial complexity coverage — %s" % "; ".join(
+                "%s: %s" % (lang, reason) for lang, reason in failed_langs))
             self._merge_prev_for_failed(prev_files, files_digest, failed_names)
-        # Unmeasured JSX files must reach the report, which reads only status + reason. A
-        # JSX-only gap is a permanent capability boundary; with a failed language it is not.
-        jsx_count = len(_paths_with_ext(js_paths, JSX_EXTS))
-        jsx_boundary = False
-        if jsx_count:
-            jsx_reason = _jsx_gap(jsx_count)
-            jsx_boundary = partial_reason is None
-            partial_reason = (jsx_reason if jsx_boundary
-                              else "%s; %s" % (partial_reason, jsx_reason))
+        # Unmeasured files must reach the report, which reads only status + reason. A boundary
+        # gap (.tsx/.jsx files, misread lizard spans) is a permanent capability boundary; it
+        # stays one only when no language failed and no non-boundary gap (an unreadable
+        # source, which a later sweep can read) rides beside it.
+        reasons.extend(boundary_gaps)
+        reasons.extend(other_gaps)
+        partial_reason = "; ".join(reasons) if reasons else None
+        permanent_boundary = bool(
+            boundary_gaps and not failed_langs and not other_gaps)
 
         digest = {
             "schemaVersion": SCHEMA_VERSION,
@@ -905,7 +1089,7 @@ class HotspotsLens:
         }
         if partial_reason is not None:
             result.update(gc.partial(partial_reason))
-            if jsx_boundary:
+            if permanent_boundary:
                 result[guardian_lens.PERMANENT_BOUNDARY_KEY] = True
         else:
             result.update(gc.collected())
@@ -920,13 +1104,18 @@ class HotspotsLens:
         as ``(lang, reason)`` and marked ``failed`` in coverage. A clean run yielding zero
         complexity for function-less files is a legitimate ``collected``-empty for that
         language. Returns
-        ``(complexity, coverage, coverage_gaps, collector_errors, failed_langs)``.
+        ``(complexity, coverage, coverage_gaps, collector_errors, failed_langs,
+        boundary_gaps, other_gaps)``. The last two are the gap lines that ride the partial
+        reason: ``boundary_gaps`` (.tsx/.jsx files, misread lizard spans) are permanent
+        capability boundaries; ``other_gaps`` (an unreadable source) are not.
         """
         complexity = {}
         coverage = {}
         coverage_gaps = []
         collector_errors = []
         failed_langs = []  # [(lang, reason)] — needed language that did not collect
+        boundary_gaps = []
+        other_gaps = []
 
         # ---- radon (python) --------------------------------------------------------
         if py_paths:
@@ -952,8 +1141,9 @@ class HotspotsLens:
         jsx_paths = _paths_with_ext(js_paths, JSX_EXTS)
         jsx_set = set(jsx_paths)
         lizard_paths = [p for p in js_paths if p not in jsx_set]
+        span_report = {"misreads": [], "unreadable": []}
         if lizard_paths:
-            parsed, err = _run_lizard(ctx, cwd, lizard_paths)
+            parsed, report, err = _run_lizard(ctx, cwd, lizard_paths)
             if err is not None:
                 coverage["javascript"] = "failed"
                 coverage_gaps.append(err)
@@ -961,6 +1151,7 @@ class HotspotsLens:
             else:
                 complexity.update(parsed)
                 coverage["javascript"] = "collected"
+                span_report = report
         else:
             coverage["javascript"] = "not-collected"
         # After lizard's rows, so no lizard figure for a JSX file can survive.
@@ -973,9 +1164,24 @@ class HotspotsLens:
                 "kind": JSX_UNMEASURED_REASON,
             })
         if jsx_paths:
-            coverage_gaps.append(_jsx_gap(len(jsx_paths)))
+            jsx_line = _jsx_gap(len(jsx_paths))
+            coverage_gaps.append(jsx_line)
+            boundary_gaps.append(jsx_line)
+        # Misread spans and unreadable sources: one collectorErrors entry each, one gap line
+        # per kind. The function count (not the file count) is what the span line reports.
+        collector_errors.extend(span_report["misreads"])
+        collector_errors.extend(span_report["unreadable"])
+        if span_report["misreads"]:
+            span_line = _span_gap(len(span_report["misreads"]))
+            coverage_gaps.append(span_line)
+            boundary_gaps.append(span_line)
+        if span_report["unreadable"]:
+            unreadable_line = _unreadable_gap(len(span_report["unreadable"]))
+            coverage_gaps.append(unreadable_line)
+            other_gaps.append(unreadable_line)
 
-        return complexity, coverage, coverage_gaps, collector_errors, failed_langs
+        return (complexity, coverage, coverage_gaps, collector_errors, failed_langs,
+                boundary_gaps, other_gaps)
 
     @staticmethod
     def _build_files_digest(candidates, complexity):
