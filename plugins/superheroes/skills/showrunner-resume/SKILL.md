@@ -184,7 +184,8 @@ Three instances: the one-off watch verb returns at once and never waits; the ter
 | The process listing for the duplicate check fails or is ambiguous | Do not arm that batch. Name it in the report. |
 | The outcome verb or the amendment verb refuses | Stop the transition for that lane and name it in the report. |
 | Arming fails | Name the batch in the report. Do not claim the watch is running. |
-| Item 20 is unreadable (`advisor-issues` `status: unreadable`), or an inbox read fails | Name it in line 3 of the report; never skip it. The collector falls back to durable memory. No lane's row changes. |
+| Item 20 is unreadable (`advisor-issues` `status: unreadable`) | Name it in line 3 of the report; never skip it. The collector falls back to durable memory, and no inbox can be read. No lane's row changes. |
+| An inbox read fails while item 20 reads `declared` | Name the failed inbox in line 3 of the report; never skip it. Keep the collector item 20 names, and leave that inbox's last-read record unchanged. No lane's row changes. |
 | The instance pin cannot be determined on this host | The pin rule is yours alone; if you cannot determine the instance, name that in line 1 and do not launch until you can. |
 
 ## Common mistakes
