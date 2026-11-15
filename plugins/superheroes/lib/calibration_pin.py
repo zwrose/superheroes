@@ -11,7 +11,6 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -144,9 +143,8 @@ def capture(repo_root, session_dir):
             absent_detail = refusal if label != LABEL_CLAUDE_MD else None
             files[label] = _copy(label, src, session_dir) if src else _absent(absent_detail)
         risk, prefs, residuals = _derive(repo_root, files[LABEL_CORE])
-        pin = {"schema": SCHEMA, "capturedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-               "repoRoot": repo_root, "rootRefusal": refusal, "files": files, "riskAreas": risk,
-               "enginePrefs": prefs, "residuals": residuals}
+        pin = {"schema": SCHEMA, "repoRoot": repo_root, "rootRefusal": refusal, "files": files,
+               "riskAreas": risk, "enginePrefs": prefs, "residuals": residuals}
         try:
             _write_manifest(session_dir, pin)
         except Exception:
@@ -155,7 +153,7 @@ def capture(repo_root, session_dir):
     except Exception as exc:
         detail = "%s: %s" % (type(exc).__name__, getattr(exc, "strerror", None) or "")
         entry = lambda: _entry(None, None, None, None, REASON_UNREADABLE, detail)  # noqa: E731
-        return {"schema": SCHEMA, "capturedAt": None, "repoRoot": repo_root, "rootRefusal": None,
+        return {"schema": SCHEMA, "repoRoot": repo_root, "rootRefusal": None,
                 "files": {LABEL_CORE: entry(), LABEL_LAYER: entry(), LABEL_CLAUDE_MD: entry()},
                 "riskAreas": {"declared": False, "areas": None, "malformed": [], "behind": False,
                               "reason": core_md.RISK_AREAS_REASON_UNREADABLE, "detail": _PREFIX + detail},
