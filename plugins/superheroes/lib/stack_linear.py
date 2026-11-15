@@ -58,6 +58,10 @@ REASON_HISTORY_SHALLOW = "history-shallow"
 REASON_GIT_FAILED = "git-failed"
 REASON_FIXED_ABOVE_STALE = "fixed-above-stale"
 REASON_FIXED_ABOVE_UNKNOWN_LAYER = "fixed-above-unknown-layer"
+REASON_PR_BODY_NOT_VETTED = "pr-body-not-vetted"
+
+# Every vetted layer's PR body carries exactly one line that is this marker.
+ADVISOR_VET_MARKER = "<!-- superheroes:advisor-vet -->"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\Z")
 _OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -785,6 +789,18 @@ def _prove_cli_inputs(args):
             return None, None, _prove_refused(
                 REASON_BAD_ARGUMENT,
                 "--pr-body %s file cannot be read as UTF-8 text: %s" % (pr, type(exc).__name__))
+        # axis: a --pr-body file that is not a vetted layer's body (empty, blank, a failed read's
+        # error JSON, no marker line, or two marker lines) is never read as a body with no
+        # fixed-above line; it refuses before any git command runs
+        marker_lines = sum(1 for line in bodies[int(pr)].splitlines()
+                           if line.strip() == ADVISOR_VET_MARKER)
+        if marker_lines != 1:
+            found = ("no advisor-vet marker line" if marker_lines == 0
+                     else "%d advisor-vet marker lines" % marker_lines)
+            return None, None, _prove_refused(
+                REASON_PR_BODY_NOT_VETTED,
+                "--pr-body %s file is not a vetted layer's PR body (%s; exactly one "
+                "advisor-vet marker line is required)" % (pr, found))
 
     for layer in layers:
         # axis: every layer's PR needs its own --pr-body, so no body is guessed as empty
