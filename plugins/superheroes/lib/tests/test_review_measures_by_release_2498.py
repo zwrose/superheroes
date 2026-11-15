@@ -154,6 +154,13 @@ def test_a_session_before_every_release_is_unplaced_never_counted_under_one():
     assert all(m[k] == {"byRelease": {}, "unplaced": 1} for k in RM.BY_RELEASE)
 
 
+def test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced():
+    """`_rec_ok` checks only the date prefix, so a broken time reaches placement (round-3 finding code-001)."""
+    silent = dict(status="not-reviewed", rows=[_row(SEC, "not-run")], ends=[_end(SEC)])
+    m, why = _m([_rec(1, at="2026-11-06T10:00:00Z"), _rec(2, "s2", at="2026-11-06Tbroken", **silent)])
+    assert all(m[k] == U and why[k] == "incomplete-evidence" for k in RM.BY_RELEASE)
+
+
 def test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape():
     row = RM.compute({}, FROM, UNTIL)
     old = dict(row, schema="review-loop-measures/1", measures={k: row["measures"][k] for k in RM.MEASURES_V1})

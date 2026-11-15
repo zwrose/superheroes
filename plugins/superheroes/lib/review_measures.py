@@ -36,7 +36,8 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     no finding open or left for the owner.
   - By release (#2498; no target number): a session ran on the release adopted last at or before its first in-window
     record; a PR counts under the release its first in-window session ran on. A session or PR earlier than every
-    listed release counts in `unplaced`, never under a release.
+    listed release counts in `unplaced`, never under a release; a record time that does not parse makes the measure
+    that would place it unmeasured (`incomplete-evidence`).
     `ownerCardsPerMergedPr` counts, per merged PR, the distinct finding keys any of its in-window sessions' latest
     records left for the owner (merged members left out). `sessionsPerPrByRelease` counts each PR's in-window sessions.
     `firstSessionCertification` reads each PR's first session among all its records: certified when that session's
@@ -82,6 +83,7 @@ MEASURES = MEASURES_V1 + BY_RELEASE
 _SCHEMA_MEASURES = {"review-loop-measures/1": MEASURES_V1, SCHEMA: MEASURES}  # a row written before #2498 still renders
 WATCHDOG_ENDS_SINCE = (0, 48, 0)  # the first release whose records list silence-watchdog ends
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+UNPLACEABLE = object()  # a session whose record time does not parse: no release can be read for it
 ROW_KEYS = ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
 CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
 COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
@@ -250,20 +252,25 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
         return {k: miss(k, why) for k in BY_RELEASE}
 
     def release_of(recs):  # the release adopted last at or before the session's first record, else None
+        # axis: a record time that does not parse places nothing, so its measure reads unmeasured, never unplaced — see bite-proof record i2498_by_release
+        if any(_when(r["writtenAt"]) is None for r in recs):
+            return UNPLACEABLE
         t = _when(min(r["writtenAt"] for r in recs))
         # axis: a session runs on the release adopted last at or before its first record, to the second — see bite-proof record i2498_by_release
-        got = [x for x in rel if t is not None and x[0] <= t]
+        got = [x for x in rel if x[0] <= t]
         return got[-1] if got else None
 
     def first(recs):
         return min(_by_session(recs), key=lambda rs: min(r["writtenAt"] for r in rs))
 
     by = {k: collections.defaultdict(list) for k in BY_RELEASE}
-    unplaced, versions = collections.Counter(), {}
+    unplaced, versions, damaged = collections.Counter(), {}, set()
 
     def put(k, release, value):
+        if release is UNPLACEABLE:
+            damaged.add(k)
         # axis: an item earlier than every release is counted unplaced, never under a release — see bite-proof record i2498_by_release
-        if release is None:
+        elif release is None:
             unplaced[k] += 1
         else:
             versions[release[2]] = release[1]
@@ -331,6 +338,8 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
     if not merged_ok:
         out["ownerCardsPerMergedPr"] = miss("ownerCardsPerMergedPr",
                                             "no-merged-input" if merged is None else "incomplete-evidence")
+    for k in damaged:  # an item that could not be placed could belong to any release, so no release's figure stands
+        out[k] = miss(k, "incomplete-evidence")
     return out
 
 
