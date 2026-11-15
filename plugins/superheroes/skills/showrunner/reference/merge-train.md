@@ -134,7 +134,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    current and never force-push, so a stack's layers carry merge commits. A direct merge accepts
    them and a merge queue drops them (`rubric/native-stacks.md` § *How a stack merges*). This item
    runs after review, the vet and the stack's merge word, and after item 3's re-read. It is the
-   advisor's work, in a clean clone the advisor owns, never a builder's worktree. The steps, in order:
+   advisor's work, in a clean clone the advisor owns, never a builder's worktree. **A cloud advisor
+   hands every stack to a seat that can read GraphQL before this item starts:** a cloud session's
+   queue read fails, so its `stack_merge.py merge` refuses every stack with an unmerged layer
+   (`queue-slots-unreadable`, item 5), and a stack it straightened and force-pushed would then be
+   refused at the merge. The steps, in order:
 
    (a) **Read the base for a queue.** `python3 -B <plugin root>/lib/merge_queue.py read --repo
    <owner/name> --branch <the stack's baseRefName>`. It makes two reads: the rulesets read
@@ -241,7 +245,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    to decide first whether the base has a queue. The stack's word is unchanged by a hold: the merge
    goes ahead once `slots` exits 0, after item 3's re-read again. In a cloud session
    `stack_merge.py merge` makes this check itself (it refuses `queue-slots-short`,
-   `queue-slots-never-fits` and `queue-slots-unreadable`), so a cloud advisor hands a queue-base stack to a seat that can read
+   `queue-slots-never-fits` and `queue-slots-unreadable`); its queue read fails, so it refuses every
+   stack with an unmerged layer, and a cloud advisor hands every stack to a seat that can read
    GraphQL.
 
    In a cloud session the equivalent is `python3 -B <plugin-root>/lib/stack_merge.py merge --repo
@@ -350,7 +355,7 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    behaviour-bearing or unclear hunk takes the reviewer floor. A layer GitHub left conflicting goes
    back to its builder for a bring-current merge (item 6) and then takes this identity check.
    That merge puts a merge commit back into the layer, and the base still has its queue, so the
-   remaining layers go through item 4's check and straightening again, as a whole, before step 3;
+   remaining layers go through item 4 (a) to (f) again, as a whole, before step 3;
    the heads that straightening proves are the ones steps 3 to 7 use.
 
    (3) **Fresh CI** on every moved head, selected by workflow name plus head sha.
