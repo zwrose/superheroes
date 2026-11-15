@@ -553,3 +553,55 @@ The inverse Edit removed `False and ` from the condition.
 ```
 2 passed in 1.26s
 ```
+
+## E-absent: a calibration file that cannot be found reads unknown (advisor fix order, vet 948)
+
+**Provenance:** claude / sonnet-5.5 (implementer, WO-6), maker family claude. Each Edit-tool edit was restored by the inverse Edit-tool edit; no `git checkout`, `git restore`, `git reset` or `git stash` was used. Nothing quoted is a secret, token, private URL or personal detail, so nothing is redacted. The leading `warning: The UV_NATIVE_TLS environment variable is deprecated ...` line of each run is the launcher's, left out.
+
+- **guarded element:** `plugins/superheroes/lib/review_record.py:517`, `_finding_risk`, `if got.get("detail") == "core-md-absent": return None`.
+- **axis:** a calibration file that cannot be found reads unknown (None), so a Minor of such a project stays a card; a core.md with no `riskAreas` key or an empty list still reads False.
+- **neutralization:** replaced `if got.get("detail") == "core-md-absent":` with `if False:`.
+- **detectors:** `test_6_the_production_reader_asks_the_one_risk_area_reader` (the `bare` git repository with no core.md reads None) and `test_18_a_project_whose_calibration_cannot_be_found_keeps_a_minor_as_a_card` (its first half: the record over that repository reads `awaits-owner`; under the neutralization it lists the Minor, which is the behaviour before the fix).
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/superheroes-pyc-wo6 -m pytest <the two node ids> -q -p no:xdist --tb=short`
+
+### raw red
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_6_the_production_reader_asks_the_one_risk_area_reader __________
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_review_record_certified_2493.py:143: in test_6_the_production_reader_asks_the_one_risk_area_reader
+    assert rr._finding_risk(str(bare), "src/auth/login.py") is None
+E   AssertionError: assert False is None
+E    +  where False = <function _finding_risk at 0x7f6bc2e2d4e0>('/tmp/claude-0/pytest-of-root/pytest-75/test_6_the_production_reader_a0/bare', 'src/auth/login.py')
+E    +    where <function _finding_risk at 0x7f6bc2e2d4e0> = rr._finding_risk
+E    +    and   '/tmp/claude-0/pytest-of-root/pytest-75/test_6_the_production_reader_a0/bare' = str(PosixPath('/tmp/claude-0/pytest-of-root/pytest-75/test_6_the_production_reader_a0/bare'))
+_ test_18_a_project_whose_calibration_cannot_be_found_keeps_a_minor_as_a_card _
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_review_record_certified_2493.py:331: in test_18_a_project_whose_calibration_cannot_be_found_keeps_a_minor_as_a_card
+    assert rec["findings"][0]["inRiskArea"] is None
+E   assert False is None
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_certified_2493.py::test_6_the_production_reader_asks_the_one_risk_area_reader
+FAILED plugins/superheroes/lib/tests/test_review_record_certified_2493.py::test_18_a_project_whose_calibration_cannot_be_found_keeps_a_minor_as_a_card
+2 failed in 1.71s
+```
+
+### restore
+
+The inverse Edit put `if got.get("detail") == "core-md-absent":` back in place of `if False:`.
+
+### restore receipt (quoted from the file, `review_record.py:515-518`)
+
+```
+515:            # "core-md-absent" is the detail `core_md.read_risk_areas` gives when no core.md is found
+516:            # axis: a calibration file that cannot be found reads unknown, so the finding stays a card, never "declares none" — see bite-proof record i2493_wo1_record (E-absent)
+517:            if got.get("detail") == "core-md-absent":
+518:                return None
+```
+
+### raw green
+
+```
+..                                                                       [100%]
+2 passed in 1.45s
+```

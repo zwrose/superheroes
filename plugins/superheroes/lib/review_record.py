@@ -499,10 +499,11 @@ def _withheld_paths(repo_root, head_sha, paths):
 
 def _finding_risk(repo_root, file):
     """Whether a finding's file lies in a declared risk area, as the one risk-area reader (`risk_areas.touched`) reads
-    it: True when an area covers the file; False when risk areas are declared and none covers it, or the project
-    declares none at all; None when it cannot be told (no repository root, no usable file path, an unreadable or
-    malformed store, any fault). Only the exact False lets a Minor or Nit be listed for the merge verdict.
-    A project with no risk areas has no declared risk area to be in (the lane floor reads that as unclear: that is
+    it: True when an area covers the file; False when risk areas are declared and none covers it, or the project's
+    core.md declares none (no `riskAreas` key or an empty list); None when it cannot be told (no repository root,
+    no usable file path, a calibration file that cannot be found, an unreadable or malformed store, any fault).
+    Only the exact False lets a Minor or Nit be listed for the merge verdict.
+    A core.md with no risk areas has no declared risk area to be in (the lane floor reads that as unclear: that is
     its question, `risk_areas.touched` still answers not-set, and only this reader maps it)."""
     try:
         if not repo_root or not isinstance(file, str) or not file.strip():
@@ -511,6 +512,10 @@ def _finding_risk(repo_root, file):
             return None
         got = risk_areas.touched(repo_root, [file])
         if got["riskAreas"] == "not-set":
+            # "core-md-absent" is the detail `core_md.read_risk_areas` gives when no core.md is found
+            # axis: a calibration file that cannot be found reads unknown, so the finding stays a card, never "declares none" — see bite-proof record i2493_wo1_record (E-absent)
+            if got.get("detail") == "core-md-absent":
+                return None
             return False if got["reason"] in (risk_areas.REASON_MISSING, risk_areas.REASON_EMPTY) else None
         if got["unmatchable"]:
             return None

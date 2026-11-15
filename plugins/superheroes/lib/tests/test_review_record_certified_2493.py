@@ -2,13 +2,16 @@
 
 An open finding (left for the owner, or with no outcome) withholds the certificate exactly when it is Important,
 Critical, of unknown severity, or a Minor or Nit whose risk reading is not exactly False (False: risk areas are
-declared and none covers its file, or the project declares none at all). The record, its `leftForOwner` list, its
+declared and none covers it, or the project's core.md declares none (no `riskAreas` key or an empty list); None: no
+calibration file can be found, or the risk cannot be read). The record, its `leftForOwner` list, its
 awaits-owner test, the carry rule and the leftover-accepting check all ask the same two predicates in
 `review_record.py`. CI no longer decides the certificate; the record still carries it.
 """
 import ast
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,6 +37,29 @@ class Certified(Fake):
     def readers(self):
         return {**super().readers(), "withheld_paths": lambda root, sha, paths: list(self.withheld),
                 "finding_risk": lambda root, file: self.risk}
+
+
+AREA = {"name": "Auth", "covers": ["src" + "/auth"], "why": "Holds sign-in.", "undo": "Hard: a leak stays out."}
+CORE_BASE = '{"schemaVersion": 2, "verifyCommand": "npm test", "stackTags": ["node"], "projectConfiguration": %s}'
+
+
+def git_repo(path):
+    """An empty git repository at `path`, made with no user or system git configuration."""
+    path.mkdir()
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "-q", str(path)], check=True, env=env)
+    return path
+
+
+def write_core(root, project_configuration):
+    """A confirmed core.md under `root` whose `projectConfiguration` block is the given JSON text."""
+    d = root / ".claude" / "superheroes"
+    d.mkdir(parents=True)
+    (d / "core.md").write_text(
+        "<!-- superheroes-core: schemaVersion=2 status=confirmed created=2026-06-26 updated=2026-06-26 -->\n\n"
+        "## Threat model\n\nsingle-user\n\n## Canonical patterns\n\n- x: a.ts:1\n\n"
+        "```json superheroes-core\n%s\n```\n" % (CORE_BASE % project_configuration), encoding="utf-8")
+    return str(root)
 
 
 def acct(tmp_path, findings, **over):
@@ -100,33 +126,24 @@ def test_5_an_account_value_for_inriskarea_is_ignored(tmp_path):
 
 def test_6_the_production_reader_asks_the_one_risk_area_reader(tmp_path):
     """axis: the production risk reader; a file in a declared area read as outside it, or a fault read as outside it."""
-    area = {"name": "Auth", "covers": ["src" + "/auth"], "why": "Holds sign-in.", "undo": "Hard: a leak stays out."}
-
-    def core(root, block):
-        d = root / ".claude" / "superheroes"
-        d.mkdir(parents=True)
-        (d / "core.md").write_text(
-            "<!-- superheroes-core: schemaVersion=2 status=confirmed created=2026-06-26 updated=2026-06-26 -->\n\n"
-            "## Threat model\n\nsingle-user\n\n## Canonical patterns\n\n- x: a.ts:1\n\n"
-            "```json superheroes-core\n%s\n```\n" % block, encoding="utf-8")
-        return str(root)
-
-    base = '{"schemaVersion": 2, "verifyCommand": "npm test", "stackTags": ["node"], "projectConfiguration": %s}'
     declared = tmp_path / "declared"
     declared.mkdir()
-    root = core(declared, base % ('{"riskAreas": [%s]}' % json.dumps(area)))
+    root = write_core(declared, '{"riskAreas": [%s]}' % json.dumps(AREA))
     assert rr._finding_risk(root, "src/auth/login.py") is True
     assert rr._finding_risk(root, "docs/readme.md") is False
     assert rr._finding_risk(root, "../x") is None
     empty = tmp_path / "empty"
     empty.mkdir()
-    assert rr._finding_risk(core(empty, base % '{"riskAreas": []}'), "src/auth/login.py") is False
-    bare = tmp_path / "bare"
-    bare.mkdir()
-    assert rr._finding_risk(str(bare), "src/auth/login.py") is False
+    assert rr._finding_risk(write_core(empty, '{"riskAreas": []}'), "src/auth/login.py") is False
+    nokey = tmp_path / "nokey"
+    nokey.mkdir()
+    assert rr._finding_risk(write_core(nokey, "{}"), "src/auth/login.py") is False
+    # a git repository holding no core.md: the calibration cannot be found, so the risk is unknown, never "declares none"
+    bare = git_repo(tmp_path / "bare")
+    assert rr._finding_risk(str(bare), "src/auth/login.py") is None
     broken = tmp_path / "broken"
     broken.mkdir()
-    assert rr._finding_risk(core(broken, base % '["risk"]'), "src/auth/login.py") is None
+    assert rr._finding_risk(write_core(broken, '["risk"]'), "src/auth/login.py") is None
     assert rr._finding_risk(root, None) is None
     assert rr._finding_risk(root, "") is None
     assert rr._finding_risk(None, "src/auth/login.py") is None
@@ -298,3 +315,25 @@ def test_17b_an_owner_ruling_on_a_no_outcome_important_leaves_it_open(tmp_path):
     (f,) = rec["findings"]
     assert f["outcome"] is None and rec["status"] == rr.NOT_REVIEWED
     assert "finding f-1 has no outcome" in rec["whatIsMissing"]
+
+
+def test_18_a_project_whose_calibration_cannot_be_found_keeps_a_minor_as_a_card(tmp_path):
+    """axis: E-absent; a repository with no core.md read as declaring no risk area, so its Minor is listed, not a card.
+    The readers carry no `finding_risk`, so `rr._readers` supplies the production reader (`rr._finding_risk`)."""
+    def readers():
+        got = Certified().readers()
+        del got["finding_risk"]
+        return got
+
+    minor = [finding("f1", severity="Minor", **LEFT)]
+    no_core = git_repo(tmp_path / "no_core")
+    rec = rr.build_record(account(repoRoot=str(no_core), findings=minor), readers())
+    assert rec["findings"][0]["inRiskArea"] is None
+    assert rec["status"] == rr.AWAITS_OWNER
+    assert rec["leftForOwner"] == ["f1"] and rec["listedForMerge"] == []
+    no_key = git_repo(tmp_path / "no_key")
+    write_core(no_key, "{}")
+    rec = rr.build_record(account(repoRoot=str(no_key), findings=minor), readers())
+    assert rec["findings"][0]["inRiskArea"] is False
+    assert rec["status"] == rr.REVIEWED and rec["whatIsMissing"] == []
+    assert rec["leftForOwner"] == [] and rec["listedForMerge"] == ["f1"]
