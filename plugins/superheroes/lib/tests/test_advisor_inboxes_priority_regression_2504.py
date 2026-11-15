@@ -12,17 +12,17 @@ def test_collector_detector_rejects_reversed_priority_words(monkeypatch):
     doctrine = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(doctrine)
     original_lines = doctrine._lines
-    text = "\n".join(original_lines(doctrine.DISCUSS))
-    before = (
-        "from calibration first (`project_config.py advisor-issues`) "
-        "and from the advisor's durable memory second"
-    )
-    after = (
-        "from calibration second (`project_config.py advisor-issues`) "
-        "and from the advisor's durable memory first"
-    )
-    assert text.count(before) == 1
-    reversed_lines = text.replace(before, after).splitlines()
+    # A self-contained Step 2: the source names keep their order (advisor-issues before durable
+    # memory) while the priority words are reversed, so a mention-order check alone would pass it.
+    reversed_lines = [
+        "## Step 2 — Sweep",
+        "",
+        "Resolve the collector's number from calibration second (`project_config.py advisor-issues`)"
+        " and from the advisor's durable memory first; an `unreadable` item 20 is named in the"
+        " report; ask the owner and never open a second collector.",
+        "",
+        "## Step 3 — Filter",
+    ]
 
     def read_lines(rel):
         if rel == doctrine.DISCUSS:
