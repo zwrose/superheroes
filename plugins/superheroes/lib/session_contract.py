@@ -55,6 +55,8 @@ __all__ = (
     "CARRIED_FIRST_RAISED_ROUND",
     "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
+    "MEMBER_RESULTS_FIELD",
+    "member_ruled_fixed",
     "OPEN_AT_LOOP_END_FIELD",
     "open_at_loop_end",
     "has_disposition_family",
@@ -401,10 +403,23 @@ def disposition_ledger_owner_classification(state):
         return DISPOSITION_LEDGER_OWNER_RECOGNIZED
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 OPEN_AT_LOOP_END_FIELD = "openAtLoopEnd"  # set only on a `left-for-owner` settle that was still open when its loop ended
+MEMBER_RESULTS_FIELD = "memberResults"  # on a representative's row: the fix audit's answer for each finding merged into it
 DISPOSITION_FAMILY_FIELDS = (
-    "disposition", "dispositionRound", "dispositionReceipt", "placeResults", "refutedReason",
+    "disposition", "dispositionRound", "dispositionReceipt", "placeResults", MEMBER_RESULTS_FIELD, "refutedReason",
     "outOfScopeReason", "followUp", MERGED_INTO_FIELD, OPEN_AT_LOOP_END_FIELD, "settledReason", "decidedBy",
 )
+
+
+def member_ruled_fixed(rep, key):
+    """True only when ``rep`` is a dict whose `memberResults` is a list holding at least one dict row for ``key``
+    whose `fixed` is exactly ``True`` and no row for ``key`` whose `fixed` is anything else. Every other input is
+    False. The one reader of the field: a finding merged into ``rep`` reads fixed only on its own ruling."""
+    rows = rep.get(MEMBER_RESULTS_FIELD) if isinstance(rep, dict) else None
+    if not isinstance(rows, list):
+        return False
+    answers = [row.get("fixed") for row in rows if isinstance(row, dict) and row.get(FINDING_KEY_FIELD) == key]
+    # axis: a member answered both ways is not ruled fixed — every answer for it must be true — see bite-proof record i2489_member_record
+    return bool(answers) and all(a is True for a in answers)
 
 
 def open_at_loop_end(row):

@@ -442,8 +442,11 @@ CASES = [
                  id="unattributed-out-of-scope"),
     pytest.param([ledger_row(disposition=None)], [], KEY, None, rs.STILL_OPEN, id="no-disposition"),
     pytest.param([ledger_row(dispositionSeq=1)], [], KEY, None, rs.STILL_OPEN, id="stale"),
-    pytest.param(_merged({}, {}), [], "m::t@L1", "fixed", "fixed and audited in round 2 (merged into rep-1)",
+    pytest.param(_merged({}, {}), [], "m::t@L1", None, rs.MERGED_MEMBER_UNAUDITED + " (merged into rep-1)",
                  id="merged-member"),
+    pytest.param(_merged({}, {"memberResults": [{"findingKey": "m::t@L1", "fixed": True}]}), [], "m::t@L1", "fixed",
+                 "fixed and audited in round 2; the fix audit ruled this finding's own part fixed (merged into rep-1)",
+                 id="merged-member-ruled-fixed-by-the-audit"),
     pytest.param(_merged({"raisedSeq": 9}, {}), [], "m::t@L1", None, rs.STILL_OPEN + " (merged into rep-1)",
                  id="merged-member-raised-after-the-disposition"),
 ]

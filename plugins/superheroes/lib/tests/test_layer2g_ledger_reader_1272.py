@@ -27,6 +27,7 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_record_repeat",  # fold-time: its only caller is _apply_repeat_marks, from _fold_synthesis; writes repeatOf / repeatKept, never a disposition
     "_seed_carried",  # first-next seeding: its only caller is _seed_returning_round; writes each carried finding as a raised row, never a disposition
     "_sync_reviewer_test_ledger_row",  # fold-time: its only caller is _sync_reviewer_test (the restore and the correction); writes the reviewer's test and testCorrection onto the row, never a disposition
+    "_unmerge_finding",  # fold-time and terminal: its only callers are _fold_merged_members (the audit fold) and _settle_open_findings (the terminal); clears a merged member's disposition family and re-points findings merged into it, never writes a disposition
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"
