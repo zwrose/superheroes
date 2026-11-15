@@ -3154,8 +3154,19 @@ def _settle_open_findings(state, cap=False):
     todo = []
     for key in list(ledger_by_key) + [k for k in live_by_key if k not in ledger_by_key]:
         row = ledger_by_key.get(key) or live_by_key[key]
-        if not isinstance(row, dict) or row.get("summaryEntry") or row.get(session_contract.MERGED_INTO_FIELD):
+        if not isinstance(row, dict) or row.get("summaryEntry"):
             continue
+        if row.get(session_contract.MERGED_INTO_FIELD):
+            # A finding merged into another follows that one, except under a representative the fix audit discharged
+            # (`fixed`) that never ruled this finding's own part fixed: it was never fixed or audited, so it is open.
+            rep = session_contract.resolve_merged_into_entry(row, ledger_by_key)
+            # axis: a member under a fixed representative with no ruling of its own is settled open, never skipped as merged — see bite-proof record i2489_member_loop
+            if not (isinstance(rep, dict) and rep.get("disposition") == "fixed"
+                    and not session_contract.member_ruled_fixed(rep, key)):
+                continue
+            row = _unmerge_finding(state, key) or _live_finding_by_key(state, key) or row
+            if key in ledger_by_key:
+                ledger_by_key[key] = row
         pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
         if _disposition_is_current(row) and not _restaged_after(state, key, row) and pending is None:
             continue
@@ -9350,6 +9361,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
                 child, content, _carried_owner_ruling(_row_decision(state, effective, ledger_by_key, child))))
     reported_changes = _reported_unnamed_changes(state)
     audited_head = {}
+    merged_members = _merged_members_by_representative(ledger_by_key)
 
     def target_row(f, tid):
         """One audit target row — a batch finding's and a rider's alike, so the two never drift."""
@@ -9392,6 +9404,11 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
             row[verification.FIX_GROUP_FIELD] = _audit_fix_group(f, tid)
         row["roundFindings"] = [r for r in round_findings if r["id"] != tid]
         row["reportedUnnamedChanges"] = list(reported_changes)
+        # The findings the synthesis merged into this one ride the target too: the auditor answers each one's own part,
+        # and only the representative is fixed and audited, so a member's fix is judged here or nowhere.
+        # axis: a target lists every finding merged into it, so the audit owes an answer for each — see bite-proof record i2489_member_loop
+        if merged_members.get(tid):
+            row["mergedMembers"] = copy.deepcopy(merged_members[tid])
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
         # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
         # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
@@ -9443,6 +9460,30 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
         rider["spawnedFrom"] = parent
         targets.append(rider)
     return targets
+
+
+def _merged_members_by_representative(ledger_by_key):
+    """``{representative key: [member, ...]}`` for every finding merged into another: each member is the ledger row's
+    `id` (its key) with its `title`, `consequence`, `file`, `line`, `body` and `suggestion` where the row has them,
+    members sorted by `id`. A row's representative is where its `mergedInto` chain ends
+    (``session_contract.resolve_merged_into_entry``); a row that does not resolve, a summary row and a representative
+    itself are no member. An unreadable ledger (an empty map) gives none."""
+    found = {}
+    for key, row in (ledger_by_key or {}).items():
+        if not isinstance(row, dict) or row.get("summaryEntry") or not row.get(session_contract.MERGED_INTO_FIELD):
+            continue
+        rep = session_contract.resolve_merged_into_entry(row, ledger_by_key)
+        rep_key = _finding_identity_key(rep) if isinstance(rep, dict) else None
+        if not rep_key or rep_key == key or ledger_by_key.get(rep_key) is not rep:
+            continue
+        member = {"id": key}
+        for carried in ("title", review_findings_schema.CONSEQUENCE_KEY, "file", "line", "body", "suggestion"):
+            if row.get(carried) is not None:
+                member[carried] = row[carried]
+        found.setdefault(rep_key, []).append(member)
+    for members in found.values():
+        members.sort(key=lambda m: m["id"])
+    return found
 
 
 def _kind_of_mistake_projection(finding):
@@ -9566,6 +9607,96 @@ def _audit_provenance_basis(state, artifact):
     return AUDIT_PROVENANCE_MIXED
 
 
+def _unmerge_finding(state, key):
+    """Take the finding's whole disposition family off its ledger row and its live copy (a merged row's family is its
+    `mergedInto`), so it is its own finding again. Returns the ledger row as it now stands, or None when the ledger holds none."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    row = None
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        row = dict(ledger[seen[key]])
+        _apply_disposition_family(row, {})
+        ledger[seen[key]] = row
+    live = _live_finding_by_key(state, key)
+    if live is not None:
+        _apply_disposition_family(live, {})
+    return row
+
+
+def _reopened_member_target(key, row, parent):
+    """The audit target a reopened merged member stands as, built from its ledger content, with the target it was merged into."""
+    target = {"id": key, session_contract.FINDING_KEY_FIELD: key, "identity": finding_identity(row),
+              "file": row.get("file"), "line": row.get("line"), "title": row.get("title"),
+              "severity": row.get("severity"),
+              "classKey": row.get("classKey") or review_memory.class_key(row),
+              "dimension": row.get("dimension"), "taxonomy": row.get("taxonomy"),
+              "reopenedFrom": parent}
+    for carried in (review_findings_schema.CONSEQUENCE_KEY, "body", "suggestion", session_contract.RAISED_ROUND_FIELD):
+        if row.get(carried) is not None:
+            target[carried] = row[carried]
+    return target
+
+
+def _fold_merged_members(state, outcome, targets, rider_ids, carried_audited):
+    """The audit's ruling on each finding merged into a target it discharged. Returns ``(member_results, reopened)``:
+    ``member_results`` is ``{target id: [{findingKey, fixed}]}`` for the fix disposition, a member fixed only when the
+    target's audit entry judged its own answer ``fixed: true``; ``reopened`` is the keys of every other member, each
+    now its own open finding with an audit target (appended to ``state["_auditTargets"]``), a ``not-discharged`` audit
+    entry and a place in ``outcome["notDischarged"]``. A target the audit did not discharge, a rider and a carried
+    finding keep their members merged; an unreadable ledger changes nothing."""
+    member_results, reopened = {}, []
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return member_results, reopened
+    by_id = {t["id"]: t for t in targets if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    entries = {a["id"]: a for a in outcome.get("audits") or [] if isinstance(a, dict) and isinstance(a.get("id"), str)}
+    new_targets, rows = [], []
+    for tid in outcome.get("discharged") or []:
+        listed = (by_id.get(tid) or {}).get("mergedMembers")
+        if tid in rider_ids or tid in carried_audited or not isinstance(listed, list):
+            continue
+        judged = {m["id"]: m for m in entries.get(tid, {}).get("members") or [] if isinstance(m, dict) and isinstance(m.get("id"), str)}
+        for member in listed:
+            key = member.get("id") if isinstance(member, dict) else None
+            if not isinstance(key, str) or not key:
+                continue
+            answer = judged.get(key) or {}
+            fixed = answer.get("fixed") is True
+            member_results.setdefault(tid, []).append({session_contract.FINDING_KEY_FIELD: key, "fixed": fixed})
+            # axis: a member the audit did not rule fixed is its own open finding again, never left merged into a fixed representative — see bite-proof record i2489_member_loop
+            if fixed:
+                continue
+            row = _unmerge_finding(state, key) or dict(ledger_by_key.get(key) or member)
+            row = _reopened_content(row, member)
+            why = answer.get("why") if _nonempty_str(answer.get("why")) else None
+            new_targets.append(_reopened_member_target(key, row, tid))
+            outcome["notDischarged"].append(key)
+            outcome["audits"].append({
+                "id": key, "identity": finding_identity(row), "file": row.get("file"), "line": row.get("line"),
+                "title": row.get("title"), "classKey": row.get("classKey") or review_memory.class_key(row),
+                "dimension": row.get("dimension"), "taxonomy": row.get("taxonomy"),
+                session_contract.FINDING_KEY_FIELD: key, "ruling": "not-discharged",
+                "reason": "merged into %s, whose fix the audit cleared, but the audit did not rule this finding's own part "
+                          "fixed (%s)" % (tid, why or "not answered"),
+                "reopenedFrom": tid})
+            reopened.append(key)
+            rows.append({"findingKey": key, "into": tid, "answer": answer.get("fixed") if why is not None else None})
+            _decision(state, "merged-member-reopened", key)
+    if new_targets:
+        state["_auditTargets"] = list(state.get("_auditTargets") or []) + new_targets
+        _record_round(state, "membersReopened", rows)
+    return member_results, reopened
+
+
+def _reopened_content(row, member):
+    """The reopened member's content: its ledger row, with the target's listed member content filling any part the row lacks."""
+    filled = dict(row)
+    for field, value in member.items():
+        if field != "id" and filled.get(field) is None:
+            filled[field] = value
+    return filled
+
+
 def _fold_audits(state, config, artifact, session_dir=None):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -9661,6 +9792,11 @@ def _fold_audits(state, config, artifact, session_dir=None):
         held = state["rounds"].get(str(state["round"]), {}).get("carried")
         _record_round(state, "carried", dict(held, discharged=[key for key in carried_audited if key in cleared],
                                              sentBack=list(held.get("sentBack") or []) + [key for key in carried_audited if key in carried_back]))
+    # A finding the synthesis merged into a target's finding is fixed and audited only through that target: when the audit
+    # discharges the target, each member is credited fixed only on its own answer, and every other member is its own open
+    # finding again, in this round's not-discharged set.
+    member_results, _reopened_keys = _fold_merged_members(
+        state, outcome, targets, rider_ids, carried_audited if isinstance(carried_audited, dict) else {})
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -9785,7 +9921,8 @@ def _fold_audits(state, config, artifact, session_dir=None):
             # a fix cleared as the removal of a worthless test carries the evidence it cleared on, so the review record can name it
             receipt = dict(receipt, testRemoval=copy.deepcopy(removal_by_id[tid]))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
-                            placeResults=place_answers.get(tid) or None)
+                            placeResults=place_answers.get(tid) or None,
+                            **{session_contract.MEMBER_RESULTS_FIELD: member_results.get(tid) or None})
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
         # An unresolvable notDischarged list leaves every restage mark in place (fail closed).
         reopened = state.get("restagedAfterDispositionSeq")
