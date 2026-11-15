@@ -14,6 +14,7 @@ HEADER_VALIDATED = "## Validated findings"
 HEADER_TRACKED = "## Tracked / filed"
 HEADER_VITALS = "## Vitals delta"
 HEADER_REPORT_CARD = "## Report card"
+HEADER_SKIPPED = "## Skipped trees"
 HEADER_FUNNEL = "## Candidate funnel"
 
 _STANDING_BODY = """\
@@ -221,6 +222,49 @@ def _render_report_card(lines, card):
     lines.append("")
 
 
+def _render_skipped_trees(lines, skipped):
+    """The calibrated duplication skip trees: each glob and the files it covered."""
+    lines.append(HEADER_SKIPPED)
+    lines.append("")
+    read = skipped.get("read") if isinstance(skipped, dict) else None
+    read = read if isinstance(read, dict) else {}
+    globs = read.get("globs") or []
+    reason = read.get("reason")
+    if reason:
+        # bite-proof axis: an unreadable value is stated, not silent.
+        line = ("- nothing skipped: the duplication skip trees could not be read (%s)"
+                % reason)
+        if read.get("detail"):
+            line += ": %s" % read["detail"]
+        lines.append(line)
+        lines.append("")
+        return
+    if not globs:
+        lines.append("_None._")
+        lines.append("")
+        return
+    lens_entries = skipped.get("lenses") if isinstance(skipped, dict) else None
+    dup = lens_entries.get("duplication") if isinstance(lens_entries, dict) else None
+    dup = dup if isinstance(dup, dict) else None
+    counts = {}
+    if dup is not None:
+        for item in dup.get("globs") or []:
+            if isinstance(item, dict) and isinstance(item.get("glob"), str):
+                counts[item["glob"]] = item.get("files")
+    for glob in globs:
+        if dup is None:
+            lines.append(
+                "- `%s`: file count not measured (the duplication lens did not reach "
+                "its census)" % glob)
+        else:
+            lines.append(
+                "- `%s`: %s file(s) skipped by the duplication lens"
+                % (glob, counts.get(glob, 0)))
+    if dup is not None:
+        lines.append("- %s file(s) skipped in all" % dup.get("files", 0))
+    lines.append("")
+
+
 def render(bundle, dispositions, ledger):
     """Deterministic markdown report from a collect bundle + model dispositions."""
     lines = [HEADER_TITLE, ""]
@@ -283,6 +327,9 @@ def render(bundle, dispositions, ledger):
         for note in notes:
             lines.append("- %s" % note)
         lines.append("")
+
+    # Skipped trees
+    _render_skipped_trees(lines, bundle.get("skippedTrees"))
 
     # Candidate funnel
     lines.append(HEADER_FUNNEL)

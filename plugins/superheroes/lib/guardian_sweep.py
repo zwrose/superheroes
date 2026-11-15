@@ -57,6 +57,40 @@ def _repo_root(cwd):
     return store_core.repo_root(cwd)
 
 
+def _read_duplication_skip(cwd, root):
+    """The calibrated duplication skip globs, read once per sweep. Never raises.
+
+    ``project_config`` imports this module at load, so it is imported lazily here. Any
+    failure (import, call, or a result that is not a list of strings) skips nothing and
+    says why: ``globs`` [] with reason ``duplication-skip-unreadable``. ``repoRoot`` is
+    the repository root the globs are matched from (None when it cannot be resolved).
+    """
+    try:
+        repo_root = _repo_root(cwd)
+    except Exception:
+        repo_root = None
+    try:
+        import project_config
+        res = project_config.read_duplication_skip(cwd, root)
+        globs = res["globs"]
+        if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
+            raise TypeError("globs is not a list of strings: %r" % (globs,))
+        return {
+            "globs": list(globs),
+            "reason": res.get("reason"),
+            "detail": res.get("detail"),
+            "repoRoot": repo_root,
+        }
+    except Exception as exc:
+        # bite-proof axis: a failing reader skips nothing and says so.
+        return {
+            "globs": [],
+            "reason": "duplication-skip-unreadable",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+            "repoRoot": repo_root,
+        }
+
+
 def _positive_cadence_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -800,6 +834,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     issue_cache = {}
     first_baseline_max = config.get(
         "firstBaselineValidateMax", _DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
+    # Calibrated duplication skip trees: read once per sweep, handed to every lens ctx.
+    duplication_skip = _read_duplication_skip(cwd, root)
+    skipped_by_lens = {}
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -821,6 +858,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "run": run,
             "prevDigest": None if lens_new else prev_entry.get("digest"),
             "verifyCommand": verify_command,
+            "duplicationSkip": duplication_skip,
         }
         try:
             out = lens.collect(ctx) or {}
@@ -830,6 +868,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             out, status, reason, boundary = {}, "not-collected", "malformed collect: %s" % exc, False
         except Exception as exc:
             out, status, reason, boundary = {}, "not-collected", "collect raised: %s" % exc, False
+
+        # Whatever a lens skipped is reported on every status, the not-collected skip path
+        # included — a skip is never silent.
+        if isinstance(out.get("skippedTrees"), dict):
+            skipped_by_lens[lens.name] = out["skippedTrees"]
 
         if status == "not-collected":
             degraded_lenses.append(lens.degrade(reason))
@@ -1021,6 +1064,16 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                     lrec.get("issue"), cwd=cwd,
                     deadline=issue_deadline, cache=issue_cache),
             }
+            # A filed pair touching a skipped tree is absent from this sweep because the
+            # lens never looked at it, not because it was fixed: mark it so closure
+            # leaves it filed.
+            if lens.name == "duplication" and duplication_skip["globs"]:
+                import guardian_lens_duplication
+                if guardian_lens_duplication.pair_touches_skip(
+                        rid, duplication_skip["globs"],
+                        cwd=os.path.realpath(cwd),
+                        repo_root=duplication_skip.get("repoRoot")):
+                    filed_observations[rid]["skipped"] = True
 
         if lens_surfaced:
             lens_meta[lens.name] = {
@@ -1129,6 +1182,14 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "sweptSha": swept_sha,
         "sweepId": sweep_id,
         "filedObservations": filed_observations,
+        "skippedTrees": {
+            "read": {
+                "globs": list(duplication_skip["globs"]),
+                "reason": duplication_skip["reason"],
+                "detail": duplication_skip["detail"],
+            },
+            "lenses": skipped_by_lens,
+        },
         "committed": committed,
         "storageMode": storage_mode,
     }
@@ -1216,6 +1277,9 @@ def _close_filed_records(records, observations, sweep_id):
             continue
         obs = (observations or {}).get(rid)
         if obs is None:
+            continue
+        # bite-proof axis: a filed record whose pair is in a skipped tree is never advanced.
+        if obs.get("skipped"):
             continue
         if not _issue_ready_for_closure(obs.get("issueState")):
             continue
