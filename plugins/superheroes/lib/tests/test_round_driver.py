@@ -3884,6 +3884,81 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     assert SM.classify_violations(seats, model_registry.family_for("implementer", "claude"))["excusedByPin"]
 
 
+def _legacy_pinned_single_vendor_map(moved_critical_seat=None):
+    """A map stored before #2530: every critical seat pinned to codex, the author's family (anthropic)
+    seated nowhere, and a `critical-diversity` violation and degradation submitted with it. Under the
+    old rule `classify_violations` returned that violation under `excusedByPin`. With
+    ``moved_critical_seat`` set, that one critical seat is seated in the author's family (still pinned)."""
+    SM = _load("seat_map")
+    live = ["codex"]
+    pins = {seat: {"vendor": "codex"} for seat in sorted(SM.CRITICAL_SEATS)}
+    built = SM.build(SM.PANEL_ROSTER, live, "anthropic", 0, pins=pins)
+    stored = SM.to_receipt(built, "anthropic")
+    stored.update(_nonpanel_cell_proof(live))
+    stored["seats"] = dict(stored["seats"])
+    for seat in SM.CRITICAL_SEATS:
+        assert stored["seats"][seat]["source"] == "pinned"
+        assert stored["seats"][seat]["vendor"] == "codex"
+    if moved_critical_seat is not None:
+        model, effort = model_registry.matrix_config("reviewer-deep", "claude")
+        stored["seats"][moved_critical_seat] = {
+            "vendor": "claude", "model": model, "effort": effort, "tier": "reviewer-deep",
+            "family": "anthropic", "source": "pinned",
+        }
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"] + [
+        {"constraint": "critical-diversity", "reason": "relaxed critical-diversity — no assignment spanned ≥2 families"},
+    ]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _certify_stored_map(stored):
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    _set_seat_map(state, stored)
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    return state, RD.build_receipt(state)
+
+
+def test_a_legacy_single_vendor_pinned_panel_outside_the_makers_certifies_full_panel_confirmed():
+    # axis: a legacy stored critical-diversity record on a panel outside every maker's family no longer
+    # drives seat-pin — see bite-proof record wo_a_2530_single_vendor_panel
+    SM = _load("seat_map")
+    stored = _legacy_pinned_single_vendor_map()
+    driver_family = model_registry.family_for("implementer", "claude")
+    assert driver_family == "anthropic"
+    assert SM.panel_outside_makers(stored, driver_family)
+    assert SM.classify_violations(stored, driver_family) == {
+        "unexcused": [], "excusedByPin": [], "excusedByLiveness": [],
+    }
+    state, receipt = _certify_stored_map(stored)
+    assert state["certification"]["shape"] == "full-panel-confirmed"
+    assert "seat-pin" not in state["certification"]["shapeDrivers"]
+    assert not [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
+    emitted = receipt["seatMap"]
+    assert not any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert not any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
+def test_a_legacy_pinned_panel_with_a_critical_seat_in_the_authors_family_keeps_todays_shape():
+    # the break-it twin: one critical seat moved to the author's family (anthropic, still pinned) is not
+    # outside the makers, so the record is classified exactly as before #2530. Shape measured on base.
+    SM = _load("seat_map")
+    stored = _legacy_pinned_single_vendor_map(moved_critical_seat="security-reviewer")
+    assert not SM.panel_outside_makers(stored, "anthropic")
+    state, receipt = _certify_stored_map(stored)
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert state["certification"]["shapeDrivers"] == ["seat-map-violation"]
+    assert any(
+        "critical-diversity (an alternative was available)" in line and "maker-family (seat security-reviewer)" in line
+        for line in receipt["degraded"]
+    )
+    emitted = receipt["seatMap"]
+    assert any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
 def test_seat_map_unproven_liveness_shape_driver():
     SM = _load("seat_map")
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -4529,7 +4604,16 @@ def test_assertable_seat_map_allows_excused_derived_violations():
     SM = _load("seat_map")
     m = _assertable_seat_map(["claude", "codex"], "codex")
     assert SM.unexcused_violations(m, "openai") == []
-    assert SM.derived_violations(m, "openai") != []
+    # #2530: this panel (all claude, author openai) is outside every maker's family, so it carries no
+    # critical-diversity record at all. The excused derived violation this test pins needs a panel that
+    # is not: the same map with its one shared family (anthropic) also named a maker, the record stored.
+    assert SM.derived_violations(m, "openai") == []
+    held = dict(
+        m, makerFamilies=sorted(set(m["makerFamilies"]) | {"anthropic"}),
+        violations=[{"constraint": "critical-diversity"}],
+    )
+    assert SM.unexcused_violations(held, "openai") == []
+    assert SM.derived_violations(held, "openai") != []
 
 
 def _all_run_status(dims=None):

@@ -259,18 +259,26 @@ def emit_receipt_seat_map(state, driver_author_family=None):
     base = dict(latest_with_seats(state))
     seen: set[str] = set()
     merged_degs: list = []
+    dropped_critical_diversity = False
     for entry in receipt_list:
         degs = entry["map"].get("degradations")
         if not isinstance(degs, list):
             continue
+        outside_makers = seat_map.panel_outside_makers(
+            entry["map"], seat_map.effective_author_family(entry["map"], driver_author_family),
+        )
         for row in degs:
             if isinstance(row, dict):
+                # axis: a receipt's critical-diversity row is not emitted for a panel wholly outside the makers' families — see bite-proof record wo_a_2530_single_vendor_panel
+                if outside_makers and row.get("constraint") == "critical-diversity":
+                    dropped_critical_diversity = True
+                    continue
                 key = json.dumps(row, sort_keys=True)
                 if key in seen:
                     continue
                 seen.add(key)
             merged_degs.append(row)
-    if merged_degs:
+    if merged_degs or dropped_critical_diversity:
         base["degradations"] = merged_degs
     violation_by_key: dict[tuple, dict] = {}
     for entry in receipt_list:

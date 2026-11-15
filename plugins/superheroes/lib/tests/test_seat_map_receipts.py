@@ -381,3 +381,93 @@ def test_emit_receipt_seat_map_keeps_a_legacy_author_family_as_a_maker():
                                  {"round": "2", "map": _minimal_map(authorFamily="anthropic", makerFamilies=["anthropic"])}],
              "rounds": {}}
     assert SMR.emit_receipt_seat_map(state)["makerFamilies"] == ["anthropic", "openai"]
+
+
+# --- a panel outside every maker's family is not a critical-diversity breach (#2530) -------------
+
+_CRITICAL_DIVERSITY_ROW = {
+    "constraint": "critical-diversity",
+    "reason": "relaxed critical-diversity — no assignment spanned ≥2 families",
+}
+
+
+def _stored_outside_makers_map():
+    """A map stored before #2530: every critical seat pinned to codex, no maker seated, a
+    `critical-diversity` violation and degradation submitted with it."""
+    pins = {seat: {"vendor": "codex"} for seat in sorted(seat_map.CRITICAL_SEATS)}
+    built = seat_map.build(seat_map.PANEL_ROSTER, ["codex"], "anthropic", 0, pins=pins)
+    stored = seat_map.to_receipt(built, "anthropic")
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [
+        d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"
+    ] + [dict(_CRITICAL_DIVERSITY_ROW)]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _has_critical_diversity(rows):
+    return any(isinstance(r, dict) and r.get("constraint") == "critical-diversity" for r in rows or [])
+
+
+def _emit(maps, driver_author_family=None):
+    state = {"seatMapReceipts": [{"round": str(i + 1), "map": m} for i, m in enumerate(maps)], "rounds": {}}
+    return SMR.emit_receipt_seat_map(state, driver_author_family)
+
+
+def test_emit_receipt_seat_map_drops_a_critical_diversity_row_for_a_panel_outside_the_makers():
+    # axis: a receipt's critical-diversity degradation is not emitted for a panel outside every maker's family — see bite-proof record wo_a_2530_single_vendor_panel
+    stored = _stored_outside_makers_map()
+    other = {"constraint": "pin", "reason": "pin for unknown seat nope"}
+    stored["degradations"] = stored["degradations"] + [other]
+    for driver in (None, "anthropic"):
+        emitted = _emit([stored], driver)
+        assert not _has_critical_diversity(emitted["degradations"]), driver
+        assert other in emitted["degradations"], driver
+    # when the dropped row was the only one, the map's own copy of it must not come through instead
+    only = dict(stored, degradations=[dict(_CRITICAL_DIVERSITY_ROW)])
+    for driver in (None, "anthropic"):
+        assert not _has_critical_diversity(_emit([only], driver).get("degradations")), driver
+
+
+def test_emit_receipt_seat_map_keeps_a_critical_diversity_row_when_a_maker_is_seated():
+    stored = _stored_outside_makers_map()
+    seated = dict(stored, seats=dict(stored["seats"]))
+    seated["seats"]["security-reviewer"] = dict(stored["seats"]["security-reviewer"], vendor="claude")
+    assert not seat_map.panel_outside_makers(seated, "anthropic")
+    assert _CRITICAL_DIVERSITY_ROW in _emit([seated], "anthropic")["degradations"]
+    # judged per receipt: round 1 is outside the makers and drops the row, round 2 seats a maker and keeps it
+    emitted = _emit([stored, seated], "anthropic")
+    assert emitted["degradations"].count(_CRITICAL_DIVERSITY_ROW) == 1
+    # an unknown author family keeps the row too
+    no_author = {k: v for k, v in stored.items() if k != "authorFamily"}
+    assert _CRITICAL_DIVERSITY_ROW in _emit([no_author])["degradations"]
+
+
+def test_critical_diversity_never_appears_for_a_panel_outside_every_maker():
+    # census of the chokepoint (#2530): a seat map that meets the predicate yields no critical-diversity
+    # record from derived_violations, any classify_violations bucket, a build, or the emitted receipt
+    fresh_claude = seat_map.build(seat_map.PANEL_ROSTER, ["claude"], "xai", 0)
+    fresh_codex = seat_map.build(seat_map.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0)
+    legacy = _stored_outside_makers_map()
+    maps = {
+        "fresh claude-only build": (fresh_claude, "xai"),
+        "fresh codex-only build": (fresh_codex, "anthropic"),
+        "to_receipt of a fresh build": (seat_map.to_receipt(fresh_claude, "xai"), "xai"),
+        "legacy stored record": (legacy, "anthropic"),
+        "legacy with an extra maker nobody is seated in": (dict(legacy, makerFamilies=["anthropic", "google"]), "anthropic"),
+    }
+    for label, (m, author) in maps.items():
+        assert seat_map.panel_outside_makers(m, author), label
+        assert not _has_critical_diversity(seat_map.verify(m, author)), label
+        assert not _has_critical_diversity(seat_map.derived_violations(m, author)), label
+        classified = seat_map.classify_violations(m, author)
+        for bucket in ("unexcused", "excusedByPin", "excusedByLiveness"):
+            assert not _has_critical_diversity(classified[bucket]), (label, bucket)
+        state = {"seatMapReceipts": [{"round": "1", "map": m}], "rounds": {}}
+        assert not _has_critical_diversity(SMR.unexcused_violations(state, author)), label
+        assert not _has_critical_diversity(SMR.pin_excused_records(state, author)), label
+        emitted = SMR.emit_receipt_seat_map(state, author)
+        assert not _has_critical_diversity(emitted.get("violations")), label
+        assert not _has_critical_diversity(emitted.get("degradations")), label
+        if "build" in label:
+            assert not _has_critical_diversity(m["degradations"]), label
