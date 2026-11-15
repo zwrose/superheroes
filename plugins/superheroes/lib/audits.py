@@ -536,6 +536,87 @@ def judge_places(target, result):
     return {"rows": rows, "unfixed": unfixed, "unanswered": unanswered, "ignored": ignored}
 
 
+def target_members(target):
+    """The `id` of each finding merged into the target (its `mergedMembers`), in order, none twice; empty
+    when the target names none (no key, an empty or non-list value, or entries with no usable `id`)."""
+    listed = target.get("mergedMembers") if isinstance(target, dict) else None
+    out = []
+    for member in listed if isinstance(listed, list) else ():
+        mid = member.get("id") if isinstance(member, dict) else None
+        if isinstance(mid, str) and mid.strip() and mid not in out:
+            out.append(mid)
+    return out
+
+
+def _member_row_fault(row):
+    """None when `row` is a well-formed `{id, fixed, why}` member answer, else what is wrong with it."""
+    if not isinstance(row, dict):
+        return "is not an object"
+    mid = row.get("id")
+    if not isinstance(mid, str) or not mid.strip():
+        return "has no usable `id`"
+    # axis: `fixed` must be exactly true or false — a string or a number is not an answer — see bite-proof record i2489_member_answers
+    if not isinstance(row.get("fixed"), bool):
+        return "`fixed` is not true or false"
+    if not has_usable_reason(row.get("why")):
+        return "has no usable `why`"
+    return None
+
+
+def member_answers_fault(result):
+    """None when the result's optional `members` is absent, null, or a list of `{id, fixed, why}` rows
+    (`id` a non-blank string, `fixed` a boolean, `why` a usable reason); otherwise a short reason. The
+    submit-shape guard and the fold both read this."""
+    members = result.get("members") if isinstance(result, dict) else None
+    if members is None:
+        return None
+    if not isinstance(members, list):
+        return "`members` is %s, not a list of {id, fixed, why}" % type(members).__name__
+    for i, row in enumerate(members):
+        why = _member_row_fault(row)
+        if why is not None:
+            return "`members[%d]` %s" % (i, why)
+    return None
+
+
+def judge_members(target, result):
+    """How the result answers the findings merged into the target: `None` when the target names none, else
+    `{"rows": [{id, fixed, why}], "unfixed": [id], "unanswered": [id], "ignored": [id]}`, rows in the target's
+    member order. A member counts fixed only when a result row with its `id` says `fixed: true`; one answered
+    twice is fixed only when every answer says so; an unanswered member reads `{"id": <id>, "fixed": false,
+    "why": null}`. A result row for an id the target does not list is ignored; a row whose shape is bad is
+    skipped. Judges the members only: it never reads or changes the representative's own ruling."""
+    named = target_members(target)
+    if not named:
+        return None
+    answers = {}
+    whys = {}
+    ignored = []
+    rows_in = result.get("members") if isinstance(result, dict) and isinstance(result.get("members"), list) else []
+    for row in rows_in:
+        if _member_row_fault(row) is not None:
+            continue
+        mid = row["id"]
+        if mid not in named:
+            if mid not in ignored:
+                ignored.append(mid)
+            continue
+        # a member answered twice is fixed only when every answer says so
+        # axis: a member counts fixed only when an answer for it says `fixed: true`; an unanswered member reads not fixed — see bite-proof record i2489_member_answers
+        answers[mid] = answers.get(mid, True) and row["fixed"]
+        if mid not in whys or not row["fixed"]:
+            whys[mid] = row["why"].strip()
+    rows, unfixed, unanswered = [], [], []
+    for mid in named:
+        fixed = answers.get(mid) is True
+        rows.append({"id": mid, "fixed": fixed, "why": whys.get(mid)})
+        if mid not in answers:
+            unanswered.append(mid)
+        elif not fixed:
+            unfixed.append(mid)
+    return {"rows": rows, "unfixed": unfixed, "unanswered": unanswered, "ignored": ignored}
+
+
 def _places_text(keys):
     return ", ".join(file if line is None else "%s:%s" % (file, line) for file, line in keys)
 
@@ -792,6 +873,7 @@ class _AuditFold:
         if self._fold_checks_fault(base, fid, f, r):
             return
         placed, incomplete = self._collect_places(base, fid, f, r)
+        self._collect_members(base, f, r)
         if self._fold_weakened_test(base, fid, r, match, test_match, reported, keeps_new_issues):
             return
         if self._fold_incomplete_places(base, fid, r, ruling, placed, incomplete):
@@ -962,6 +1044,17 @@ class _AuditFold:
         else:
             incomplete = []
         return placed, incomplete
+
+    def _collect_members(self, base, f, r):
+        # A target that lists the findings merged into it owes an answer for each one. The per-member results ride
+        # the audit entry (`members`) whatever the ruling, for the driver to write onto each member's finding. A
+        # member answer never changes the representative's own ruling: this only records, it returns nothing.
+        # A target naming no member is judged exactly as before and its entry gains no `members` key.
+        judged = judge_members(f, r)
+        if judged is not None:
+            base["members"] = judged["rows"]
+            if judged["ignored"]:
+                base["membersIgnored"] = judged["ignored"]
 
     def _fold_weakened_test(self, base, fid, r, match, test_match, reported, keeps_new_issues):
         # axis: a weakened committed test is blocked before an incomplete-place return, so the mandatory restore is scheduled — see bite-proof record c4_wo1_kind

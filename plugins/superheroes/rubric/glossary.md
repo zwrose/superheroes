@@ -84,7 +84,8 @@ the misses log, and brings [proposals](#proposal) to the owner.
 
 ### Gardening record
 
-The comment a [gardening pass](#gardening-pass) leaves.
+The comment a [gardening pass](#gardening-pass) leaves, or its numbered parts when it is over
+GitHub's comment limit; a read of a record reads every part.
 
 ### Gardening window
 

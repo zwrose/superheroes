@@ -1990,6 +1990,10 @@ def _scrub_ruling_object(obj):
         if field == "newIssues" and isinstance(val, list):
             out[field] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
                           for x in val]
+        # axis: the free-text `why` of each member answer is scrubbed per entry, as `newIssues` is, not passed through — see bite-proof record i2489_member_answers
+        elif field == "members" and isinstance(val, list):
+            out[field] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
+                          for x in val]
         elif isinstance(val, (str, dict)):
             out[field] = _scrub_mapping(val)
         else:
