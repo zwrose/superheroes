@@ -1814,6 +1814,20 @@ def test_overlapping_span_marks_only_the_crossing_row_and_the_max_ignores_it(tmp
     assert "javascript: 1 function(s) unmeasured" in reason
 
 
+def test_a_span_invalid_row_never_makes_a_healthy_row_crossing(tmp_path):
+    # `b` (start 3, end 50) runs past the 10-line file: span-invalid. It must not also make `a`
+    # (1-5) a crossing row; `a` stays measured and is the file's max.
+    run = _span_run(
+        tmp_path, {"inv.ts": "  step();\n" * 10},
+        _span_row("inv.ts", "a", 12, 1, 5) + _span_row("inv.ts", "b", 40, 3, 50))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert _span_errors(out) == [_misread_entry("inv.ts", "b", 3, 50, "span-invalid")]
+    assert [(c["path"], c["maxFunctionCCN"], c["worstFunction"]["name"])
+            for c in out["candidates"]] == [("inv.ts", 12, "a")]
+    assert out["digest"]["files"]["hotspots:inv.ts"]["ccn"] == 12
+
+
 def test_swallowed_declaration_reads_unmeasured_with_no_red_line(tmp_path):
     # The measured break1.ts: one row for `first` that holds `second` and `third`. Its CCN sits
     # at the red-line threshold, so a lens that scores it raises a red line.
@@ -1830,16 +1844,22 @@ def test_swallowed_declaration_reads_unmeasured_with_no_red_line(tmp_path):
     assert gl.classify_collect(out)[0] == "partial"
 
 
-def test_swallowed_semicolon_terminated_siblings_read_unmeasured(tmp_path):
-    assert len(_SWALLOW2_TS.splitlines()) == 17
+@pytest.mark.parametrize("sibling", [
+    "export const second = (x: number) => (x ? 1 : 2);",
+    "const third = function (y: number) { return y && 2; };",
+], ids=["arrow", "function-expression"])
+def test_swallowed_semicolon_terminated_siblings_read_unmeasured(tmp_path, sibling):
+    # No plain `function` sibling sits in the span: only the const/let/var branch can catch it.
+    source = _SWALLOW2_TS.split("\n\n", 1)[0] + "\n\n" + sibling + "\n\n// end\n"
+    end = len(source.splitlines())
     run = _span_run(
-        tmp_path, {"swallow2.ts": _SWALLOW2_TS}, _span_row("swallow2.ts", "first", 14, 1, 17))
+        tmp_path, {"swallow2.ts": source}, _span_row("swallow2.ts", "first", 14, 1, end))
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
     assert out["digest"]["files"] == {"hotspots:swallow2.ts": _MISREAD_DIGEST}
     assert out["candidates"] == []
     assert _span_errors(out) == [
-        _misread_entry("swallow2.ts", "first", 1, 17, "declaration-inside")]
+        _misread_entry("swallow2.ts", "first", 1, end, "declaration-inside")]
 
 
 def test_healthy_typescript_overrun_onto_the_next_declaration_stays_measured(tmp_path):
@@ -2037,8 +2057,9 @@ def test_crlf_source_counts_lines_and_compares_indentation_the_same(tmp_path):
         _misread_entry("break1.ts", "first", 1, 22, "declaration-inside")]
 
 
-# Declaration-looking text inside a block comment or a multi-line template literal is content, not a
-# declaration: the enclosing function stays measured (review finding: exclude comments and literals).
+# Declaration-looking text inside a block comment or a multi-line template literal is read like any
+# other line: the enclosing function reads unmeasured, with its reason. That is the accepted fail
+# direction (an unmeasured function, never a false red line).
 _COMMENT_TS = """export function documented(x: number) {
   /*
 function example() {
@@ -2071,14 +2092,17 @@ export const other = () => 1;
     ("comment.ts", _COMMENT_TS),
     ("template.ts", _TEMPLATE_TS),
 ], ids=["block-comment", "template-literal"])
-def test_declaration_text_inside_a_comment_or_template_is_not_a_misread(tmp_path, name, source):
+def test_declaration_text_inside_a_comment_or_template_reads_unmeasured_with_its_reason(
+        tmp_path, name, source):
     end = len(source.splitlines())
     run = _span_run(tmp_path, {name: source}, _span_row(name, "f", 15, 1, end))
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
-    assert _span_errors(out) == []
-    assert out["digest"]["files"]["hotspots:%s" % name]["ccn"] == 15
-    assert gl.classify_collect(out) == ("collected", None)
+    assert out["digest"]["files"] == {"hotspots:%s" % name: _MISREAD_DIGEST}
+    assert _span_errors(out) == [_misread_entry(name, "f", 1, end, "declaration-inside")]
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript: 1 function(s) unmeasured" in reason
 
 
 def test_a_real_declaration_after_a_closed_comment_and_template_still_reads_misread(tmp_path):
@@ -2094,8 +2118,7 @@ def test_a_real_declaration_after_a_closed_comment_and_template_still_reads_misr
         _misread_entry("mixed.ts", "f", 1, end, "declaration-inside")]
 
 
-# A backtick, quote or comment opener inside a regex literal is regex content: it never opens a
-# template or a comment (review finding: keep regex contents from shifting template state).
+# A regex holding a backtick does not hide a swallowed sibling.
 _REGEX_THEN_SIBLING_TS = """export function first(x: string) {
   const tick = /`/g;
   const open = /\\/\\*/;
@@ -2131,53 +2154,30 @@ def test_a_backtick_regex_does_not_mask_a_swallowed_sibling(tmp_path):
     assert _span_errors(out) == [_misread_entry("rx.ts", "first", 1, end, "declaration-inside")]
 
 
-def test_a_backtick_regex_and_a_division_leave_a_later_template_masked(tmp_path):
+def test_declaration_text_in_a_template_after_a_regex_reads_unmeasured_with_its_reason(tmp_path):
     end = len(_REGEX_THEN_TEMPLATE_TS.splitlines())
     run = _span_run(
         tmp_path, {"rxt.ts": _REGEX_THEN_TEMPLATE_TS}, _span_row("rxt.ts", "render", 15, 1, end))
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
-    assert _span_errors(out) == []
-    assert out["digest"]["files"]["hotspots:rxt.ts"]["ccn"] == 15
-    assert gl.classify_collect(out) == ("collected", None)
+    assert out["digest"]["files"] == {"hotspots:rxt.ts": _MISREAD_DIGEST}
+    assert _span_errors(out) == [_misread_entry("rxt.ts", "render", 1, end, "declaration-inside")]
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript: 1 function(s) unmeasured" in reason
 
 
-@pytest.mark.parametrize("source, masked", [
-    ("const a = /`/;\nfunction f() {}\n", set()),
-    ("const a = b / c / d;\nconst t = `\nfunction f() {}\n`;\n", {3, 4}),
-    ("return /'/.test(x);\nfunction f() {}\n", set()),
-    ("const a = /[/`]/;\nfunction f() {}\n", set()),
-    ("/* a ` */\nfunction f() {}\n", set()),
-    ("const s = '`';\nfunction f() {}\n", set()),
-], ids=["regex-backtick", "division-then-template", "regex-after-return", "regex-class-slash",
-        "comment-backtick", "string-backtick"])
-def test_lexical_mask_reads_regex_division_strings_and_comments(source, masked):
-    assert hot._lexically_masked(source.splitlines()) == masked
-
-
-@pytest.mark.parametrize("source, masked", [
-    # A slash after postfix ++ / -- divides: the block comment and the template after it still open.
-    ("const r = n++ / d; /*\nfunction example() {}\n*/\n", {2, 3}),
-    ("const r = n-- / `/\nfunction example() {}\n`.length;\n", {2, 3}),
-    # A slash after the ) of an if / while / for condition opens a regex, so its backtick is regex
-    # content; after any other ) it divides.
-    ("if (x) /`/.test(x);\nfunction second() {}\n", set()),
-    ("while (x) /`/.test(x);\nfunction second() {}\n", set()),
-    ("const r = (a) / `\nfunction example() {}\n`.length;\n", {2, 3}),
-], ids=["postfix-increment-then-comment", "postfix-decrement-then-template",
-        "regex-after-if-condition", "regex-after-while-condition", "division-after-paren"])
-def test_lexical_mask_reads_postfix_operators_and_condition_parens(source, masked):
-    assert hot._lexically_masked(source.splitlines()) == masked
-
-
-def test_postfix_division_before_a_comment_keeps_a_healthy_function_measured(tmp_path):
+def test_declaration_text_in_a_comment_after_a_division_reads_unmeasured_with_its_reason(tmp_path):
     source = ("function first(n, d) {\n  const ratio = n++ / d; /*\nfunction example() {}\n  */\n"
               "  return ratio;\n}\n")
     run = _span_run(tmp_path, {"pf.js": source}, _span_row("pf.js", "first", 15, 1, 6))
     out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
 
-    assert _span_errors(out) == []
-    assert out["digest"]["files"]["hotspots:pf.js"]["ccn"] == 15
+    assert out["digest"]["files"] == {"hotspots:pf.js": _MISREAD_DIGEST}
+    assert _span_errors(out) == [_misread_entry("pf.js", "first", 1, 6, "declaration-inside")]
+    status, reason = gl.classify_collect(out)
+    assert status == "partial"
+    assert "javascript: 1 function(s) unmeasured" in reason
 
 
 def test_a_regex_after_an_if_condition_does_not_mask_a_swallowed_sibling(tmp_path):
@@ -2187,3 +2187,40 @@ def test_a_regex_after_an_if_condition_does_not_mask_a_swallowed_sibling(tmp_pat
 
     assert out["digest"]["files"] == {"hotspots:ifrx.js": _MISREAD_DIGEST}
     assert _span_errors(out) == [_misread_entry("ifrx.js", "first", 1, 6, "declaration-inside")]
+
+
+_SLASH_TEMPLATE_TS = """export function first(x, obj, d, box) {
+  const t = `x ${`${x}{`}`;
+  %s
+  return t;
+}
+
+export function second() {
+  return 1;
+}
+
+export function third() {
+  return 2;
+}
+"""
+
+
+@pytest.mark.parametrize("line3", [
+    "const r = obj.if(x) / d; const url = `/api/${x}`;",
+    "const r = box.in / d; const url = `/api/${x}`;",
+    "const q = 1; export default /`/;",
+], ids=["member-call-if", "member-in", "export-default-regex"])
+def test_a_misread_behind_a_slash_and_a_template_still_reads_span_misread(tmp_path, line3):
+    # Lizard reports one row `first` that holds both siblings. With no lexical mask to be fooled by
+    # the slash, the declaration leg reads the sibling lines and the row reads unmeasured.
+    source = _SLASH_TEMPLATE_TS % line3
+    end = len(source.splitlines())
+    ccn = gl.RED_LINE_THRESHOLDS["complexity"]
+    run = _span_run(tmp_path, {"p.ts": source}, _span_row("p.ts", "first", ccn, 1, end))
+    lens = hot.HotspotsLens()
+    out = lens.collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:p.ts": _MISREAD_DIGEST}
+    assert out["candidates"] == []
+    assert _span_errors(out) == [_misread_entry("p.ts", "first", 1, end, "declaration-inside")]
+    assert lens.red_lines(out["candidates"]) == []

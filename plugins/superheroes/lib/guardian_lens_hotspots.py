@@ -671,171 +671,36 @@ def _leading_ws(line):
     return len(line) - len(line.lstrip())
 
 
-# A ``/`` starts a regex literal, not a division, where an expression may start: at the start of
-# the source, after one of these characters, or after one of these keywords.
-_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{};+-*%<>~^")
-_REGEX_AFTER_WORDS = frozenset((
-    "return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw",
-    "yield", "await", "instanceof"))
-# The ``)`` that closes one of these keywords' parenthesised condition is followed by a statement.
-_REGEX_AFTER_PAREN_WORDS = frozenset(("if", "while", "for", "with"))
-
-
-def _regex_end(line, i):
-    """Index just past the regex literal that opens at ``line[i]`` (a ``/``), flags included, or
-    None when no closing ``/`` follows on the line (a regex literal never spans lines)."""
-    j, n, in_class = i + 1, len(line), False
-    while j < n:
-        c = line[j]
-        if c == "\\":
-            j += 2
-            continue
-        if in_class:
-            in_class = c != "]"
-        elif c == "[":
-            in_class = True
-        elif c == "/":
-            j += 1
-            while j < n and (line[j].isalnum() or line[j] in "_$"):
-                j += 1
-            return j
-        j += 1
-    return None
-
-
-def _lexically_masked(lines):
-    """1-based numbers of the lines that START inside a block comment or a template literal.
-
-    Text on such a line is comment or literal content, never a declaration, so the
-    declaration-inside leg skips it. A small scanner, not a parser: it tracks ``/* */`` and
-    ``//`` comments, quoted strings (one line each), regex literals (a ``/`` where an expression
-    may start, one line each) and template literals with their ``${...}`` expressions (nested
-    templates included), so a backtick, quote or comment opener inside a string, regex or
-    comment never shifts its state. A slash after ``}`` is read as division, so a regex that
-    starts a statement right after a closing brace is the one shape it misreads.
-    """
-    masked = set()
-    stack = []  # "tpl" for an open template literal; an int brace depth for a ${...} expression
-    block = False
-    prev = ""  # the last significant code character ("a" after a literal or an identifier)
-    word = ""  # the identifier or keyword that ``prev`` ends, if any
-    parens = []  # one entry per open ``(``: True when it opens an if/while/for/with condition
-    for number, line in enumerate(lines, 1):
-        if block or (stack and stack[-1] == "tpl"):
-            masked.add(number)
-        quote = None
-        i, n = 0, len(line)
-        while i < n:
-            c = line[i]
-            nxt = line[i + 1] if i + 1 < n else ""
-            if block:
-                if c == "*" and nxt == "/":
-                    block = False
-                    i += 2
-                else:
-                    i += 1
-                continue
-            if stack and stack[-1] == "tpl":
-                if c == "\\":
-                    i += 2
-                elif c == "`":
-                    stack.pop()
-                    prev, word = "a", ""
-                    i += 1
-                elif c == "$" and nxt == "{":
-                    stack.append(0)
-                    prev, word = "{", ""
-                    i += 2
-                else:
-                    i += 1
-                continue
-            if quote:
-                if c == "\\":
-                    i += 2
-                    continue
-                if c == quote:
-                    quote = None
-                    prev, word = "a", ""
-                i += 1
-                continue
-            if c.isspace():
-                i += 1
-                continue
-            if c == "/" and nxt == "/":
-                break
-            if c == "/" and nxt == "*":
-                block = True
-                i += 2
-                continue
-            if c == "/" and (prev == "" or prev in _REGEX_AFTER_CHARS or word in _REGEX_AFTER_WORDS):
-                end = _regex_end(line, i)
-                if end is not None:
-                    prev, word = "a", ""
-                    i = end
-                    continue
-            if c.isalnum() or c in "_$":
-                start = i
-                while i < n and (line[i].isalnum() or line[i] in "_$"):
-                    i += 1
-                prev, word = "a", line[start:i]
-                continue
-            if c in "+-" and nxt == c:
-                # ``++`` / ``--``: postfix ends an expression (a slash after it divides); prefix is
-                # followed by an operand, never by a slash.
-                prev, word = "a", ""
-                i += 2
-                continue
-            if c == "(":
-                parens.append(word in _REGEX_AFTER_PAREN_WORDS)
-            elif c == ")":
-                # A ``)`` closing an ``if (…)`` / ``while (…)`` / ``for (…)`` / ``with (…)``
-                # condition is followed by a statement, so a slash after it opens a regex.
-                if parens and parens.pop():
-                    prev, word = "(", ""
-                    i += 1
-                    continue
-            if c in "'\"":
-                quote = c
-            elif c == "`":
-                stack.append("tpl")
-            elif stack and c == "{":
-                stack[-1] += 1
-            elif stack and c == "}":
-                if stack[-1] == 0:
-                    stack.pop()
-                    prev, word = "a", ""
-                    i += 1
-                    continue
-                stack[-1] -= 1
-            prev, word = c, ""
-            i += 1
-    return masked
-
-
 def _span_rules(rows, lines):
     """One rule per row of ONE file: None for a sound row, else the first leg that fired.
 
     ``lines`` is the file's source split by ``splitlines()``. Legs, in order: span-invalid,
-    crossing, declaration-inside.
+    crossing, declaration-inside. The declaration leg reads every source line; there is no
+    lexical mask, so declaration-looking text in a block comment or a multi-line template literal
+    can make a healthy function read unmeasured (always with its reason).
     """
     # Bites on: a lizard row whose span no single brace block could hold (invalid, crossing,
     # or holding a declaration at or above its own indentation).
     n = len(lines)
-    masked = _lexically_masked(lines)
     decl_nums = []
     decl_indents = []
     for number, line in enumerate(lines, 1):
         stripped = line.lstrip()
-        if number not in masked and _DECL_RE.match(stripped):
+        if _DECL_RE.match(stripped):
             decl_nums.append(number)
             decl_indents.append(len(line) - len(stripped))
-    spans = sorted((r["start"], r["end"]) for r in rows
-                   if r["start"] is not None and r["end"] is not None)
+
+    def valid(row):
+        s, e = row["start"], row["end"]
+        return (isinstance(s, int) and isinstance(e, int)
+                and 1 <= s <= e <= n)
+
+    spans = sorted((r["start"], r["end"]) for r in rows if valid(r))
     starts = [s2 for s2, _ in spans]
     rules = []
     for row in rows:
         s, e = row["start"], row["end"]
-        if s is None or e is None or s < 1 or e < s or s > n or e > n:
+        if not valid(row):
             rules.append("span-invalid")
             continue
         lo = bisect_right(starts, s)

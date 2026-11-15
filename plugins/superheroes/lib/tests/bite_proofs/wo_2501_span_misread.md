@@ -579,3 +579,205 @@ FAILED plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py::test_overla
 ---
 
 G1 and G10 share one detector node; the two reds differ (G1 red on the `collectorErrors` assertion, G10 red on the candidate's max after that assertion passed), so one node tells the two neutralizations apart.
+
+---
+
+## WO-2 (vet 943 fix order)
+
+**Provenance:** implementer work order WO-2 (issue 2501), branch `claude/issue-2501-span-overlap`, base head `b2798264`, working tree uncommitted. The order removes the lexical mask from `_span_rules` (the declaration leg now reads every source line), builds `spans` from valid rows only (FU1), and isolates the semicolon siblings (FU2).
+
+Declared guarded elements (from the order): G15, G16, G17. Each was neutralized with one targeted Edit, run alone by exact node id (unedited, no `-k`), restored with the inverse Edit (never `git checkout`, `restore`, `reset` or `stash`), and the same node id then ran green. Every run was `scripts/pinned-python -B -X pycache_prefix=/tmp/wo2-pyc -m pytest "<node id>" -q` from the worktree root (the sandbox accepted the `-X pycache_prefix` flag). The captures are unfiltered except that the launcher's one-line `UV_NATIVE_TLS` deprecation warning (the first line of every run) was dropped. They hold no secrets, tokens, private URLs or PII; the only paths are repository paths and pytest temp-directory paths; nothing was redacted. Every capture is far under the 32 KiB per-element ceiling, so nothing went to scratch. The restore receipt for each is the restored line quoted from a content search after the restore. All node ids are in `plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py`, written below without that prefix.
+
+| ID | Guarded element (`guardian_lens_hotspots.py`) | Axis | Detector (exact node id) |
+|---|---|---|---|
+| G15 | `_span_rules`, `spans` built from valid rows only (line 698) | a span-invalid row never makes a healthy row a crossing | `test_a_span_invalid_row_never_makes_a_healthy_row_crossing` |
+| G16 | `_DECL_RE`, the `const`/`let`/`var` branch (line 86) | a semicolon-terminated arrow or function-expression sibling inside a span is a declaration | `test_swallowed_semicolon_terminated_siblings_read_unmeasured` (both cases) |
+| G17 | `_span_rules`, no mask: the declaration leg reads every line (line 689) | declaration-looking text in a block comment or template literal makes the enclosing function read unmeasured, with its reason | `test_declaration_text_inside_a_comment_or_template_reads_unmeasured_with_its_reason[block-comment]` |
+
+Not bite-proven by this order: the C cases (`test_a_misread_behind_a_slash_and_a_template_still_reads_span_misread`, ids `member-call-if`, `member-in`, `export-default-regex`). They pass with or without any change in this order; they guard against a reintroduced mask. Also not neutralized: the `template-literal` case of the G17 test (G17's neutralization skips only a line starting `function example`, which the template fixture also holds, but only the `block-comment` case was named and run), the three rewritten tests' `partial` status assertions, and the deleted mask tests (removed with the mask; no replacement detector).
+
+### G15 — valid rows only in `spans`
+
+**neutralization** (`guardian_lens_hotspots.py:698`; the pre-change build, every row with an integer start and end):
+```python
+-    spans = sorted((r["start"], r["end"]) for r in rows if valid(r))
++    spans = sorted((r["start"], r["end"]) for r in rows
++                   if r["start"] is not None and r["end"] is not None)
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_a_span_invalid_row_never_makes_a_healthy_row_crossing __________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_span_invalid_row_never_0')
+
+    def test_a_span_invalid_row_never_makes_a_healthy_row_crossing(tmp_path):
+        # `b` (start 3, end 50) runs past the 10-line file: span-invalid. It must not also make `a`
+        # (1-5) a crossing row; `a` stays measured and is the file's max.
+        run = _span_run(
+            tmp_path, {"inv.ts": "  step();\n" * 10},
+            _span_row("inv.ts", "a", 12, 1, 5) + _span_row("inv.ts", "b", 40, 3, 50))
+        out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    
+>       assert _span_errors(out) == [_misread_entry("inv.ts", "b", 3, 50, "span-invalid")]
+E       AssertionError: assert [{'collector'...n': 'b', ...}] == [{'collector'...n': 'b', ...}]
+E         
+E         At index 0 diff: {'collector': 'lizard', 'path': 'inv.ts', 'kind': 'span-misread', 'function': 'a', 'startLine': 1, 'endLine': 5, 'rule': 'crossing'} != {'collector': 'lizard', 'path': 'inv.ts', 'kind': 'span-misread', 'function': 'b', 'startLine': 3, 'endLine': 50, 'rule': 'span-invalid'}
+E         Left contains one more item: {'collector': 'lizard', 'path': 'inv.ts', 'kind': 'span-misread', 'function': 'b', ...}
+E         Use -v to get more diff
+
+/home/user/wt-2501/plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py:1825: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py::test_a_span_invalid_row_never_makes_a_healthy_row_crossing
+1 failed in 0.45s
+```
+
+**restore:** the inverse Edit (the two-line build replaced by the one-line `if valid(r)` build).
+
+**restore receipt** (content search after the restore, line 698):
+```
+698:    spans = sorted((r["start"], r["end"]) for r in rows if valid(r))
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+
+### G16 — the `const`/`let`/`var` branch of `_DECL_RE`
+
+**neutralization** (`guardian_lens_hotspots.py:86`):
+```python
+-    r"|(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*"
++    r"|(?:export\s+)?(?:const_x|let_x|var_x)\s+[A-Za-z_$][\w$]*\s*"
+```
+
+**raw red:**
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_____ test_swallowed_semicolon_terminated_siblings_read_unmeasured[arrow] ______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_swallowed_semicolon_termi0')
+sibling = 'export const second = (x: number) => (x ? 1 : 2);'
+
+    @pytest.mark.parametrize("sibling", [
+        "export const second = (x: number) => (x ? 1 : 2);",
+        "const third = function (y: number) { return y && 2; };",
+    ], ids=["arrow", "function-expression"])
+    def test_swallowed_semicolon_terminated_siblings_read_unmeasured(tmp_path, sibling):
+        # No plain `function` sibling sits in the span: only the const/let/var branch can catch it.
+        source = _SWALLOW2_TS.split("\n\n", 1)[0] + "\n\n" + sibling + "\n\n// end\n"
+        end = len(source.splitlines())
+        run = _span_run(
+            tmp_path, {"swallow2.ts": source}, _span_row("swallow2.ts", "first", 14, 1, end))
+        out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    
+>       assert out["digest"]["files"] == {"hotspots:swallow2.ts": _MISREAD_DIGEST}
+E       AssertionError: assert {'hotspots:sw...5, 'ccn': 14}} == {'hotspots:sw...pan-misread'}}
+E         
+E         Differing items:
+E         {'hotspots:swallow2.ts': {'score': 25.4545, 'ccn': 14}} != {'hotspots:swallow2.ts': {'unmeasured': True, 'reason': 'span-misread'}}
+E         Use -v to get more diff
+
+/home/user/wt-2501/plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py:1859: AssertionError
+_ test_swallowed_semicolon_terminated_siblings_read_unmeasured[function-expression] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_swallowed_semicolon_termi1')
+sibling = 'const third = function (y: number) { return y && 2; };'
+
+    @pytest.mark.parametrize("sibling", [
+        "export const second = (x: number) => (x ? 1 : 2);",
+        "const third = function (y: number) { return y && 2; };",
+    ], ids=["arrow", "function-expression"])
+    def test_swallowed_semicolon_terminated_siblings_read_unmeasured(tmp_path, sibling):
+        # No plain `function` sibling sits in the span: only the const/let/var branch can catch it.
+        source = _SWALLOW2_TS.split("\n\n", 1)[0] + "\n\n" + sibling + "\n\n// end\n"
+        end = len(source.splitlines())
+        run = _span_run(
+            tmp_path, {"swallow2.ts": source}, _span_row("swallow2.ts", "first", 14, 1, end))
+        out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    
+>       assert out["digest"]["files"] == {"hotspots:swallow2.ts": _MISREAD_DIGEST}
+E       AssertionError: assert {'hotspots:sw...5, 'ccn': 14}} == {'hotspots:sw...pan-misread'}}
+E         
+E         Differing items:
+E         {'hotspots:swallow2.ts': {'score': 25.4545, 'ccn': 14}} != {'hotspots:swallow2.ts': {'unmeasured': True, 'reason': 'span-misread'}}
+E         Use -v to get more diff
+
+/home/user/wt-2501/plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py:1859: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py::test_swallowed_semicolon_terminated_siblings_read_unmeasured[arrow]
+FAILED plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py::test_swallowed_semicolon_terminated_siblings_read_unmeasured[function-expression]
+2 failed in 0.44s
+```
+
+**restore:** the inverse Edit (`(?:const_x|let_x|var_x)` back to `(?:const|let|var)`).
+
+**restore receipt** (content search after the restore, line 86):
+```
+86:    r"|(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*"
+```
+
+**raw green:**
+```
+..                                                                       [100%]
+2 passed in 0.37s
+```
+
+### G17 — no mask: the declaration leg reads comment and template lines
+
+**neutralization** (`guardian_lens_hotspots.py:689`; a skip for the fixture's comment text, standing in for a mask):
+```python
+-        if _DECL_RE.match(stripped):
++        if _DECL_RE.match(stripped) and not stripped.startswith("function example"):
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_declaration_text_inside_a_comment_or_template_reads_unmeasured_with_its_reason[block-comment] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-29/test_declaration_text_inside_a0')
+name = 'comment.ts'
+source = 'export function documented(x: number) {\n  /*\nfunction example() {\n  return 1;\n}\n   */\n  if (x) {\n    return 1;\n  }\n  return 0;\n}\n'
+
+    @pytest.mark.parametrize("name, source", [
+        ("comment.ts", _COMMENT_TS),
+        ("template.ts", _TEMPLATE_TS),
+    ], ids=["block-comment", "template-literal"])
+    def test_declaration_text_inside_a_comment_or_template_reads_unmeasured_with_its_reason(
+            tmp_path, name, source):
+        end = len(source.splitlines())
+        run = _span_run(tmp_path, {name: source}, _span_row(name, "f", 15, 1, end))
+        out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+    
+>       assert out["digest"]["files"] == {"hotspots:%s" % name: _MISREAD_DIGEST}
+E       AssertionError: assert {'hotspots:co...7, 'ccn': 15}} == {'hotspots:co...pan-misread'}}
+E         
+E         Differing items:
+E         {'hotspots:comment.ts': {'score': 27.2727, 'ccn': 15}} != {'hotspots:comment.ts': {'unmeasured': True, 'reason': 'span-misread'}}
+E         Use -v to get more diff
+
+/home/user/wt-2501/plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py:2101: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_guardian_lens_hotspots.py::test_declaration_text_inside_a_comment_or_template_reads_unmeasured_with_its_reason[block-comment]
+1 failed in 0.45s
+```
+
+**restore:** the inverse Edit (the `and not stripped.startswith(...)` clause removed).
+
+**restore receipt** (content search after the restore, line 689):
+```
+689:        if _DECL_RE.match(stripped):
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.36s
+```
