@@ -45,6 +45,10 @@ CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
 CLOUD_DEPENDENCY_HOOK_SLUG = "cloudDependencyHook"
+ADVISOR_ISSUES_SLUG = "advisorIssues"
+ADVISOR_ISSUES_DECLARED = "declared"
+ADVISOR_ISSUES_UNSET = "unset"
+ADVISOR_ISSUES_UNREADABLE = "unreadable"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -199,6 +203,14 @@ ITEMS = (
         "name": "Cloud dependency hook",
         "home": HOME_PROJECT_CONFIGURATION,
         "shape": "boolean",
+        "plugin_default": None,
+    },
+    {
+        "number": 20,
+        "slug": "advisorIssues",
+        "name": "Advisor issues",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "advisorIssues",
         "plugin_default": None,
     },
 )
@@ -370,7 +382,32 @@ def _validate_severity_ladder(value):
     return None
 
 
+def _validate_advisor_issues(value):
+    # axis: E1 the value is not a dict — see bite-proof record i2504_wo_a_advisor_issues E1
+    if not isinstance(value, dict):
+        return REASON_MALFORMED_VALUE
+    # axis: E2 the key set is not exactly collector and inboxes (missing or extra key) — see bite-proof record i2504_wo_a_advisor_issues E2
+    if set(value) != {"collector", "inboxes"}:
+        return REASON_MALFORMED_VALUE
+    collector = value["collector"]
+    # axis: E3 the collector is not a positive int, a bool included — see bite-proof record i2504_wo_a_advisor_issues E3
+    if not _positive_int(collector):
+        return REASON_MALFORMED_VALUE
+    inboxes = value["inboxes"]
+    # axis: E4 inboxes is not a list, or an entry is not a positive int — see bite-proof record i2504_wo_a_advisor_issues E4
+    if not isinstance(inboxes, list) or not all(_positive_int(n) for n in inboxes):
+        return REASON_MALFORMED_VALUE
+    # axis: E5 inboxes holds the same number twice — see bite-proof record i2504_wo_a_advisor_issues E5
+    if len(set(inboxes)) != len(inboxes):
+        return REASON_MALFORMED_VALUE
+    # axis: E6 an inbox number equals the collector number — see bite-proof record i2504_wo_a_advisor_issues E6
+    if collector in inboxes:
+        return REASON_MALFORMED_VALUE
+    return None
+
+
 _VALIDATORS = {
+    "advisorIssues": _validate_advisor_issues,
     "prose": _validate_prose,
     "nonEmptyProse": _validate_non_empty_prose,
     "proseList": _validate_prose_list,
@@ -539,12 +576,62 @@ def _resolve_item_entry(item, raw, *, guardian_cfg=None, risk_areas_read=None):
     }
 
 
+def _advisor_issues_resolve(cwd, root=None):
+    """Item 20's one read: the public result and the reader's raw value (None unless a value was
+    stored). Total: never raises, never writes."""
+    unset = {
+        "status": ADVISOR_ISSUES_UNSET, "collector": None, "inboxes": [],
+        "reason": None, "detail": None,
+    }
+    try:
+        got = core_md.read_project_config_value(cwd, ADVISOR_ISSUES_SLUG, root)
+        if got["reason"] == core_md.PROJECT_CONFIG_REASON_CORE_ABSENT:
+            return dict(unset, reason=REASON_PROFILE_ABSENT), None
+        if got["reason"] == core_md.PROJECT_CONFIG_REASON_UNREADABLE:
+            return dict(unset, status=ADVISOR_ISSUES_UNREADABLE,
+                        reason=REASON_PROFILE_UNPARSEABLE, detail=got["detail"]), None
+        if not got["present"]:
+            return unset, None
+        value = got["value"]
+        if _validate_advisor_issues(value) is not None:
+            return dict(unset, status=ADVISOR_ISSUES_UNREADABLE,
+                        reason=REASON_MALFORMED_VALUE), value
+        return dict(unset, status=ADVISOR_ISSUES_DECLARED, collector=value["collector"],
+                    inboxes=list(value["inboxes"])), value
+    except Exception as exc:  # total: any failure here reads unreadable, never as nothing declared
+        return dict(unset, status=ADVISOR_ISSUES_UNREADABLE, reason=REASON_PROFILE_UNPARSEABLE,
+                    detail="%s: %s" % (type(exc).__name__, exc)), None
+
+
+def advisor_issues(cwd, root=None):
+    """Item 20 through the one total reader: ``status`` is ``declared`` (the collector number and
+    the inbox numbers), ``unset`` (nothing declared, or no core calibration), or ``unreadable``
+    (a stored value that cannot be read is never read as nothing declared). Never raises, never
+    writes."""
+    return _advisor_issues_resolve(cwd, root)[0]
+
+
+def _advisor_issues_entry(result, raw):
+    if result["status"] == ADVISOR_ISSUES_DECLARED:
+        return {
+            "raw": raw,
+            "effective": {"collector": result["collector"], "inboxes": list(result["inboxes"])},
+            "source": "stamped",
+            "malformed": False,
+        }
+    if result["status"] == ADVISOR_ISSUES_UNREADABLE:
+        # axis: V1 an unreadable item 20 reads malformed, never as unset — see bite-proof record i2504_wo_a_advisor_issues V1
+        return {"raw": raw, "effective": None, "source": "unset", "malformed": True}
+    return {"raw": None, "effective": None, "source": "unset", "malformed": False}
+
+
 def read(cwd, root=None, *, persist_backfill=True):
     """Return every configuration item with ``raw``, ``effective``, and ``source``."""
     keyword = {} if persist_backfill else {"persist_backfill": False}
     facts = core_md.read(cwd, root, **keyword)
     guardian_cfg = guardian_sweep.read_config(cwd, root, **keyword)
     risk_areas_read = core_md.read_risk_areas(cwd, root)
+    advisor_entry = _advisor_issues_entry(*_advisor_issues_resolve(cwd, root))
     if facts is None:
         absent_items = []
         for item in ITEMS:
@@ -555,6 +642,9 @@ def read(cwd, root=None, *, persist_backfill=True):
                 raw = _guardian_cadence_raw(cwd, root, **keyword)
             else:
                 raw = None
+            if slug == ADVISOR_ISSUES_SLUG:
+                absent_items.append({"slug": slug, **advisor_entry})
+                continue
             entry = _resolve_item_entry(
                 item,
                 raw,
@@ -582,6 +672,9 @@ def read(cwd, root=None, *, persist_backfill=True):
             raw = _guardian_cadence_raw(cwd, root, **keyword)
         else:
             raw = _read_project_config_raw(mapping, slug)
+        if slug == ADVISOR_ISSUES_SLUG:
+            items.append({"slug": slug, **advisor_entry})
+            continue
         entry = _resolve_item_entry(
             item,
             raw,
@@ -1763,13 +1856,19 @@ def dependencies(cwd, root=None):
             "fallback": _DEPENDENCY_FALLBACKS["launchLedger"],
         }
 
-    if "collector" in declared:
-        out["collector"] = {"status": "declared"}
+    advisor = advisor_issues(cwd, root)
+    if advisor["status"] == ADVISOR_ISSUES_DECLARED:
+        out["collector"] = {"status": "declared", "collector": advisor["collector"]}
     else:
-        out["collector"] = {
-            "status": "absent",
-            "fallback": _DEPENDENCY_FALLBACKS["collector"],
-        }
+        if "collector" in declared:
+            out["collector"] = {"status": "declared"}
+        else:
+            out["collector"] = {
+                "status": "absent",
+                "fallback": _DEPENDENCY_FALLBACKS["collector"],
+            }
+        if advisor["status"] == ADVISOR_ISSUES_UNREADABLE:
+            out["collector"]["advisorIssues"] = ADVISOR_ISSUES_UNREADABLE
 
     if "keepOrRetireBackfill" in declared:
         out["keepOrRetireBackfill"] = {"status": "declared"}
@@ -1814,6 +1913,10 @@ def main(argv):
     dp.add_argument("--cwd", default=".")
     dp.add_argument("--root", default=None)
 
+    ap_issues = sub.add_parser("advisor-issues")
+    ap_issues.add_argument("--cwd", default=".")
+    ap_issues.add_argument("--root", default=None)
+
     mp = sub.add_parser("migrate-material-line")
     mp.add_argument("--cwd", default=".")
     mp.add_argument("--root", default=None)
@@ -1846,6 +1949,8 @@ def main(argv):
             out = set_item(
                 args.cwd, args.item, value, root=args.root,
                 account=account, project_name=args.project_name)
+    elif args.cmd == "advisor-issues":
+        out = advisor_issues(args.cwd, root=args.root)
     elif args.cmd == "migrate-material-line":
         out = migrate_material_line(
             args.cwd, root=args.root, session=args.session, date=args.date)
