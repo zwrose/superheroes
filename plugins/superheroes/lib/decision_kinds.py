@@ -40,6 +40,7 @@ DECISION_KINDS = (
     "fix-surface-unknown",
     LANE_EXPANDED_RECOMPOSE,
     "later-round-panel-retired",
+    "merged-member-reopened",
     "not-discharged",
     "out-of-scope-fix-spent",
     "owner-choice-held",
