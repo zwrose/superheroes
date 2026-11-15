@@ -2247,8 +2247,9 @@ def clear_break_it_interpreter(cwd, *, root=None):
     return result
 
 
-def read_risk_areas(cwd, root=None):
-    """Read ``projectConfiguration.riskAreas`` from core.md. Total and read-only: never raises,
+def read_risk_areas(cwd, root=None, path=None):
+    """Read ``projectConfiguration.riskAreas`` from core.md (from the file ``path`` when given, as a
+    review session's pinned copy). Total and read-only: never raises,
     never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
     a valid key reads its areas as stored; a present but invalid key reads declared True, areas
     None, reason ``risk-areas-malformed``; every other failure reads reason
@@ -2264,7 +2265,7 @@ def read_risk_areas(cwd, root=None):
     unreadable = RISK_AREAS_REASON_UNREADABLE
     try:
         try:
-            path = _size_exclude_core_path(cwd, root)
+            path = path or _size_exclude_core_path(cwd, root)
         except RepoRootUnavailable as exc:
             return dict(base, reason=unreadable,
                         detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))

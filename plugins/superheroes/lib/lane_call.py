@@ -79,10 +79,12 @@ def rank(lane):
     return LANES.index(lane) if isinstance(lane, str) and lane in LANES else -1
 
 
-def call(cwd, paths, proposed=None, root=None):
+def call(cwd, paths, proposed=None, root=None, stored=None):
     """The floor, the lane and the reasons for ``paths``. Never raises: a ``paths`` that is not a
-    list of strings goes straight to ``risk_areas.touched``, which answers ``not-set``."""
-    got = risk_areas.touched(cwd, paths, root=root)
+    list of strings goes straight to ``risk_areas.touched``, which answers ``not-set``. A ``stored``
+    risk-areas read is passed through to it."""
+    got = (risk_areas.touched(cwd, paths, root=root, stored=stored) if stored is not None
+           else risk_areas.touched(cwd, paths, root=root))
     state, unmatchable = got["riskAreas"], got["unmatchable"]
     hits = [{"name": hit["area"]["name"], "matched": list(hit["matched"])} for hit in got["touched"]]
     floor, why = None, []
