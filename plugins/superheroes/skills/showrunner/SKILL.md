@@ -549,6 +549,14 @@ above).
    **Force-push.** State the reason in chat first, then proceed only on a word the owner gives for
    that force-push after hearing the reason. The merge word does not cover it. Record the word and
    the reason on the PR's owner half, or in the thread that gave the word when there is no PR.
+   One standing exception: when the project's Canon records the owner's standing grant for this
+   straightening, that grant covers the force-push that straightens a vetted stack for a base with a
+   merge queue. It holds only after review, the vet and the stack's merge word, with every layer's
+   files proven identical by `lib/stack_linear.py prove` before the push. No separate word is asked,
+   and the reason is still stated on the stack's sheet. Anything outside those limits needs its own
+   word, and so does the straightening's force-push when the project's Canon holds no such entry. The
+   recipe is
+   [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § Merging a stack, item 4.
    **Releases and publishing.** By default you do not execute a release merge or a publish: ask in
    chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
    the moment with a word for that release.
@@ -569,7 +577,8 @@ above).
 
    **Done when:** every merge you executed sat inside a saved "Merge" verdict plus "done" on the
    PR's current sheet, met the three preconditions, was reported at once as one line, and has its
-   receipt on the PR; every force-push and every release you executed rode its own word.
+   receipt on the PR; every force-push and every release you executed rode its own word, except a
+   straightening inside the standing grant above.
 7. **Diagnose anomalies from artifacts.** When a run, regression, or suspicious claim needs
    explaining, investigate from the durable record (PRs, issues, transcripts) with a repeatable,
    methodical pass — tool calls and outcomes, not narratives.
@@ -716,7 +725,7 @@ above).
 
    **Grant scope is always enumerated, never a fuzzy noun** — state scope as
    **enumerated PRs, a time box, or a count** (not an undefined phrase like "everything in these
-   batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted.**
+   batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted** by a delegated grant scope. The owner's own standing grant for a merge-queue straightening, when the project's Canon records one, is the one exception, and it is not delegable.
    Owner involvement sorts three ways — owner capability, owner authority, a live human to unblock — defined in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` § The owner-involvement taxonomy.
    **Clear owner-capability preconditions at dispatch time — with
    the owner, before the session goes autonomous** — not via a builder preflight when nobody is there.

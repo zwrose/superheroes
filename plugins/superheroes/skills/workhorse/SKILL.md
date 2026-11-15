@@ -244,8 +244,9 @@ integration.** You merge the work orders' branches back together.
 the layer below, and each is established from the remote. Branch from the lower layer's pushed
 head, set the PR base to that branch, and link and verify membership as the stacks rubric says,
 quoting the PR's own `stackEntry` position in the PR body. Bring a moved lower layer in by a local
-`--no-ff` merge pushed plainly, bottom-up. Never hand-rebase or force-push a layer inside a lane,
-and disclose any conflict round in the PR body. On a stacked branch the verify command carries
+`--no-ff` merge pushed plainly, bottom-up. Never hand-rebase or force-push a layer inside a lane:
+the advisor alone straightens a stack at merge time for a merge-queue base, and a lane still only
+merges. Disclose any conflict round in the PR body. On a stacked branch the verify command carries
 `{baseRef}` bound to the pinned base commit (`review-code` § The verify command).
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md` when you branch, link, verify, or bring current a layer of a stack.**

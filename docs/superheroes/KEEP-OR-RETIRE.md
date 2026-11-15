@@ -1762,8 +1762,9 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 
 #### J3 — Native stacks tooling
 
-- **Component.** `stack_check.py` and `stack_merge.py`, about 2,100 lines: reading a stack's
-  membership and merging it whole.
+- **Component.** `stack_check.py`, `stack_merge.py`, `merge_queue.py` and `stack_linear.py`, about
+  2,500 lines: reading a stack's membership, merging it whole, the merge-queue read and the
+  merge-time straightening proof.
 - **Start date.** 2026-10-25.
 - **Condition.** Usage-based, 60 days: stack merges executed over the window. On firing, a proposal
   to the owner at a gardening pass.
@@ -1775,7 +1776,9 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — it works around a cloud session's proxy refusing GitHub's GraphQL API
   (`stack_check.py` falls back to REST on that refusal); a host that lets cloud sessions reach stacks
-  directly would retire most of it.
+  directly would retire most of it. The straightening (`merge_queue.py`, `stack_linear.py`) exists
+  because a merge queue drops a merge-commit stack; it would retire if GitHub's queue accepted merge
+  commits in stacks.
 
 #### J4 — The break-it runner
 
