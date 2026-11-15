@@ -1,0 +1,615 @@
+# Bite-proof record — the four by-release review-loop measures (#2498)
+
+Detector file: `plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one line of `plugins/superheroes/lib/review_measures.py` at the committed head `4aab8b51`, made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py -q -k "<one test's name fragment>" -p no:randomly`, which selects exactly one test; each capture is whole except the `UV_NATIVE_TLS` deprecation line `uv` prints first. The worktree path is shown as `<worktree>`; no secret, token, URL or personal data appears in any capture, so nothing else is redacted. After every restore, `git status --porcelain` over the file printed nothing. Light lane, orchestrator-typed: the guarded-element set below (e1 to e12, fourteen entries) is the one the reviewer's dispatch declares; none is grouped.
+
+## e1. No whole release list (`_release_measures`, the `if why:` return)
+
+- **Axis:** with `releases` missing or malformed, all four by-release measures read unmeasured with the reason, never zero.
+- **Detector:** `test_missing_or_malformed_releases_leave_all_four_unmeasured`.
+- **Neutralization:** `if why:` became `if False and why:`.
+
+The red is a crash (`TypeError` iterating a missing release list), not an assertion: without the guard nothing reads unmeasured.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_missing_or_malformed_releases_leave_all_four_unmeasured _________
+
+    def test_missing_or_malformed_releases_leave_all_four_unmeasured():
+        for releases, reason in ((None, "no-releases-input"), ([{"version": "0.50", "since": "2026-10-01"}], "incomplete-evidence"),
+                                 ([{"version": "0.50.0", "since": "soon"}], "incomplete-evidence")):
+>           m, why = _m([_rec(1)], releases=releases)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:107: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:44: in _m
+    row = RM.compute(inp, FROM, UNTIL)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/review_measures.py:412: in compute
+    m.update(_release_measures(inp, prs, every, sessions, reason, miss))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/review_measures.py:271: in _release_measures
+    pr_release = release_of(first(rs))
+                 ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+recs = [{'pr': 1, 'sessionId': 's1', 'writtenAt': '2026-11-01T10:00:00Z', 'status': 'reviewed', ...}]
+
+    def release_of(recs):  # the release adopted last at or before the session's first record, else None
+        t = _when(min(r["writtenAt"] for r in recs))
+        # axis: a session runs on the release adopted last at or before its first record, to the second — see bite-proof record i2498_by_release
+>       got = [x for x in rel if t is not None and x[0] <= t]
+                          ^^^
+E       TypeError: 'NoneType' object is not iterable
+
+<worktree>/plugins/superheroes/lib/review_measures.py:250: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_missing_or_malformed_releases_leave_all_four_unmeasured
+1 failed, 11 deselected in 0.31s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `    if why:`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.22s
+```
+
+## e2. Release placement (`release_of`, the `x[0] <= t` comparison)
+
+- **Axis:** a session runs on the release adopted last at or before its first record, to the second.
+- **Detector:** `test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day`.
+- **Neutralization:** `x[0] <= t` became `x[0].date() <= t.date()` (placement by day).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day __
+
+    def test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day():
+        m, _ = _m([_rec(1, at="2026-11-05T11:59:00Z"), _rec(2, at="2026-11-05T12:00:00Z")])
+        by = m["sessionsPerPrByRelease"]["byRelease"]
+>       assert by == {"0.49.0": {"median": 1, "p90": 1}, "0.50.0": {"median": 1, "p90": 1}}
+E       AssertionError: assert {'0.50.0': {'....0, 'p90': 1}} == {'0.49.0': {'... 1, 'p90': 1}}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'0.49.0': {'median': 1, 'p90': 1}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:52: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day
+1 failed, 11 deselected in 0.22s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        got = [x for x in rel if t is not None and x[0] <= t]`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.28s
+```
+
+## e3. Unplaced items (`release_of`, its `else None`)
+
+- **Axis:** an item earlier than every release counts in `unplaced`, never under a release.
+- **Detector:** `test_a_session_before_every_release_is_unplaced_never_counted_under_one`.
+- **Neutralization:** `return got[-1] if got else None` became `return got[-1] if got else rel[0]`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_a_session_before_every_release_is_unplaced_never_counted_under_one ____
+
+    def test_a_session_before_every_release_is_unplaced_never_counted_under_one():
+        m, _ = _m([_rec(1, at="2026-10-29T10:00:00Z")], releases=[{"version": "0.50.0", "since": "2026-11-05"}])
+>       assert all(m[k] == {"byRelease": {}, "unplaced": 1} for k in RM.BY_RELEASE)
+E       assert False
+E        +  where False = all(<generator object test_a_session_before_every_release_is_unplaced_never_counted_under_one.<locals>.<genexpr> at 0x7f4cb7e1ea40>)
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:113: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_before_every_release_is_unplaced_never_counted_under_one
+1 failed, 11 deselected in 0.27s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        return got[-1] if got else None`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.26s
+```
+
+## e4. PR placement (`pr_release = release_of(first(rs))`)
+
+- **Axis:** a PR counts under the release its first in-window session ran on.
+- **Detector:** `test_a_pr_counts_under_the_release_its_first_in_window_session_ran_on`.
+- **Neutralization:** `release_of(first(rs))` became `release_of([_latest(rs)])`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_a_pr_counts_under_the_release_its_first_in_window_session_ran_on _____
+
+    def test_a_pr_counts_under_the_release_its_first_in_window_session_ran_on():
+        m, _ = _m([_rec(1, "s1", at="2026-11-01T10:00:00Z"), _rec(1, "s2", at="2026-11-07T10:00:00Z"),
+                   _rec(1, "s3", at="2026-11-08T10:00:00Z")])
+>       assert m["sessionsPerPrByRelease"] == {"byRelease": {"0.49.0": {"median": 3, "p90": 3}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.50.0': {'median': 3, 'p90': 3}}} != {'byRelease': {'0.49.0': {'median': 3, 'p90': 3}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:58: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_pr_counts_under_the_release_its_first_in_window_session_ran_on
+1 failed, 11 deselected in 0.21s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        pr_release = release_of(first(rs))`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.23s
+```
+
+## e5. First session read (`opening = first(every[pr])`)
+
+- **Axis:** certification reads the PR's first session among all its records, in the window or not.
+- **Detector:** `test_first_session_certification_reads_the_prs_first_session_even_before_the_window`.
+- **Neutralization:** `first(every[pr])` became `first(rs)`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_first_session_certification_reads_the_prs_first_session_even_before_the_window _
+
+    def test_first_session_certification_reads_the_prs_first_session_even_before_the_window():
+        early = _rec(1, "s0", at="2026-10-21T10:00:00Z", status="not-reviewed")
+        m, _ = _m([early, _rec(1, "s1", at="2026-11-01T10:00:00Z"), _rec(2, "s2", at="2026-11-06T10:00:00Z")])
+>       assert m["firstSessionCertification"]["byRelease"] == {
+            "0.49.0": {"certified": 0, "prs": 1, "share": 0.0}, "0.50.0": {"certified": 1, "prs": 1, "share": 1.0}}
+E       AssertionError: assert {'0.49.0': {'...'share': 1.0}} == {'0.49.0': {'...'share': 1.0}}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'0.49.0': {'certified': 1, 'prs': 1, 'share': 1.0}} != {'0.49.0': {'certified': 0, 'prs': 1, 'share': 0.0}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:79: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_first_session_certification_reads_the_prs_first_session_even_before_the_window
+1 failed, 11 deselected in 0.31s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        opening = first(every[pr])`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.22s
+```
+
+## e6a. Owner cards leave merged members out (`cards`, `not review_learning._merged_member(f)`)
+
+- **Axis:** a merged member row is not a card of its own.
+- **Detector:** `test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only`.
+- **Neutralization:** `and not review_learning._merged_member(f)}` became `and not False}`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only _
+
+    def test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only():
+        merged_member = _card("k3", reason="same defect (merged into k1)")
+        m, _ = _m([_rec(1, "s1", findings=[_card("k1"), _card("k2", outcome="fixed")]),
+                   _rec(1, "s2", at="2026-11-02T10:00:00Z", findings=[_card("k1"), _card("k4"), merged_member]),
+                   _rec(5, findings=[_card("k9")])], mergedPrs=[1])
+>       assert m["ownerCardsPerMergedPr"] == {"byRelease": {"0.49.0": {"median": 2, "p90": 2, "total": 2}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.49.0': {'median': 3, 'p90': 3, 'total': 3}}} != {'byRelease': {'0.49.0': {'median': 2, 'p90': 2, 'total': 2}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only
+1 failed, 11 deselected in 0.21s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `                     and not review_learning._merged_member(f)}`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.21s
+```
+
+## e6b. Owner cards are distinct keys (`len(cards)`)
+
+- **Axis:** a key left for the owner in two sessions counts once.
+- **Detector:** `test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only`.
+- **Neutralization:** `len(cards)` became a sum over every left-for-owner row of every session (merged members still out).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only _
+
+    def test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only():
+        merged_member = _card("k3", reason="same defect (merged into k1)")
+        m, _ = _m([_rec(1, "s1", findings=[_card("k1"), _card("k2", outcome="fixed")]),
+                   _rec(1, "s2", at="2026-11-02T10:00:00Z", findings=[_card("k1"), _card("k4"), merged_member]),
+                   _rec(5, findings=[_card("k9")])], mergedPrs=[1])
+>       assert m["ownerCardsPerMergedPr"] == {"byRelease": {"0.49.0": {"median": 2, "p90": 2, "total": 2}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.49.0': {'median': 3, 'p90': 3, 'total': 3}}} != {'byRelease': {'0.49.0': {'median': 2, 'p90': 2, 'total': 2}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only
+1 failed, 11 deselected in 0.22s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            put("ownerCardsPerMergedPr", pr_release, len(cards))`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.27s
+```
+
+## e6c. Owner cards count merged PRs only (`if pr in merged_set:`)
+
+- **Axis:** a PR that did not merge contributes no cards.
+- **Detector:** `test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only`.
+- **Neutralization:** `if pr in merged_set:` became `if True or pr in merged_set:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only _
+
+    def test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only():
+        merged_member = _card("k3", reason="same defect (merged into k1)")
+        m, _ = _m([_rec(1, "s1", findings=[_card("k1"), _card("k2", outcome="fixed")]),
+                   _rec(1, "s2", at="2026-11-02T10:00:00Z", findings=[_card("k1"), _card("k4"), merged_member]),
+                   _rec(5, findings=[_card("k9")])], mergedPrs=[1])
+>       assert m["ownerCardsPerMergedPr"] == {"byRelease": {"0.49.0": {"median": 2, "p90": 2, "total": 2}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.49.0': {'median': 1.5, 'p90': 2, 'total': 3}}} != {'byRelease': {'0.49.0': {'median': 2, 'p90': 2, 'total': 2}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_owner_cards_count_distinct_keys_left_for_the_owner_across_sessions_on_merged_prs_only
+1 failed, 11 deselected in 0.22s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        if pr in merged_set:`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.28s
+```
+
+## e7a. Void needs a seat that never answered (`any(e["seat"] not in answered ...)`)
+
+- **Axis:** a silence end on a seat that later answered does not void the session.
+- **Detector:** `test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered`.
+- **Neutralization:** `and any(e["seat"] not in answered for e in ends))` became `and bool(ends))`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered _
+
+    def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered():
+        at = "2026-11-06T10:00:00Z"
+        m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(2, "s2", at=at, status="reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(3, "s3", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")])])
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 4}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.50.0': {'voided': 2, 'sessions': 4}}} != {'byRelease': {'0.50.0': {'voided': 1, 'sessions': 4}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:89: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered
+1 failed, 11 deselected in 0.23s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `                      and any(e["seat"] not in answered for e in ends))`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.20s
+```
+
+## e7b. Void needs a session that did not certify (`not review_record.cleared(...)`)
+
+- **Axis:** a `reviewed` session is never voided, whatever its silence ends.
+- **Detector:** `test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered`.
+- **Neutralization:** `else not review_record.cleared(last.get("status"))` became `else True`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered _
+
+    def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered():
+        at = "2026-11-06T10:00:00Z"
+        m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(2, "s2", at=at, status="reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(3, "s3", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")])])
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 4}}, "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.50.0': {'voided': 2, 'sessions': 4}}} != {'byRelease': {'0.50.0': {'voided': 1, 'sessions': 4}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:89: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered
+1 failed, 11 deselected in 0.25s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            voided = (None if not whole else not review_record.cleared(last.get("status"))`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.25s
+```
+
+## e8. Releases before watchdog ends were recorded (`versions[ver] < WATCHDOG_ENDS_SINCE`)
+
+- **Axis:** a release before 0.48.0 reads unmeasured for silent voids, never zero.
+- **Detector:** `test_a_release_before_watchdog_ends_were_recorded_reads_unmeasured`.
+- **Neutralization:** `if versions[ver] < WATCHDOG_ENDS_SINCE:` became `if False and versions[ver] < WATCHDOG_ENDS_SINCE:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_a_release_before_watchdog_ends_were_recorded_reads_unmeasured ______
+
+    def test_a_release_before_watchdog_ends_were_recorded_reads_unmeasured():
+        m, why = _m([_rec(1, at="2026-11-01T10:00:00Z")], releases=[{"version": "0.47.0", "since": "2026-10-01"}])
+>       assert m["silentReviewerVoids"]["byRelease"] == {"0.47.0": U}
+E       AssertionError: assert {'0.47.0': {'...sessions': 1}} == {'0.47.0': 'unmeasured'}
+E         
+E         Differing items:
+E         {'0.47.0': {'voided': 0, 'sessions': 1}} != {'0.47.0': 'unmeasured'}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:94: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_release_before_watchdog_ends_were_recorded_reads_unmeasured
+1 failed, 11 deselected in 0.25s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        if versions[ver] < WATCHDOG_ENDS_SINCE:`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.24s
+```
+
+## e9. Owner cards without a whole merged list (`if not merged_ok:`)
+
+- **Axis:** owner cards read unmeasured, never zero, with no `mergedPrs` or a damaged one.
+- **Detector:** `test_owner_cards_without_the_merged_list_read_unmeasured_never_zero`.
+- **Neutralization:** `if not merged_ok:` became `if False and not merged_ok:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_owner_cards_without_the_merged_list_read_unmeasured_never_zero ______
+
+    def test_owner_cards_without_the_merged_list_read_unmeasured_never_zero():
+        m, why = _m([_rec(1)], mergedPrs=None)
+>       assert m["ownerCardsPerMergedPr"] == U and why["ownerCardsPerMergedPr"] == "no-merged-input"
+E       AssertionError: assert ({'byRelease': {}, 'unplaced': 0} == 'unmeasured')
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_owner_cards_without_the_merged_list_read_unmeasured_never_zero
+1 failed, 11 deselected in 0.22s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `    if not merged_ok:`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.28s
+```
+
+## e10. Schema-keyed shape (`problems`, `_SCHEMA_MEASURES[row["schema"]]`)
+
+- **Axis:** a row keeps the measures of the schema it was written under, so a /1 row still renders.
+- **Detector:** `test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape`.
+- **Neutralization:** `_SCHEMA_MEASURES[row["schema"]]` became `MEASURES`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape __
+
+    def test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape():
+        row = RM.compute({}, FROM, UNTIL)
+        old = dict(row, schema="review-loop-measures/1", measures={k: row["measures"][k] for k in RM.MEASURES_V1})
+>       assert RM.problems(old) == []
+E       assert ["the measure...iewerVoids')"] == []
+E         
+E         Left contains one more item: "the measures are not ('roundsPerPr', 'sessionsPerPr', 'reviewerCostPerPr', 'seats', 'ci', 'panels', 'vetSendBacksOnCl...dingLocations', 'ownerCardsPerMergedPr', 'sessionsPerPrByRelease', 'firstSessionCertification', 'silentReviewerVoids')"
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:119: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_row_written_before_the_by_release_measures_still_has_the_fixed_shape
+1 failed, 11 deselected in 0.17s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `    m, w, measures = row["measures"], row.get("window"), _SCHEMA_MEASURES[row["schema"]]`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.21s
+```
+
+## e11. By-release shape check (`problems`)
+
+- **Axis:** a by-release measure holds a value or unmeasured per release, and a count of unplaced.
+- **Detector:** `test_a_by_release_measure_off_its_shape_is_named`.
+- **Neutralization:** `if isinstance(m.get(k), dict) and set(m[k]) == ...` became `if False and isinstance(m.get(k), dict) and ...`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_a_by_release_measure_off_its_shape_is_named _______________
+
+    def test_a_by_release_measure_off_its_shape_is_named():
+        m_row = RM.compute({"records": [_rec(1)], "releases": RELEASES, "mergedPrs": [1]}, FROM, UNTIL)
+        m_row["measures"]["sessionsPerPrByRelease"]["byRelease"]["0.49.0"] = 3
+>       assert RM.problems(m_row)
+E       AssertionError: assert []
+E        +  where [] = <function problems at 0x7f847e4edf80>({'schema': 'review-loop-measures/2', 'window': {'from': '2026-10-28', 'until': '2026-11-11'}, 'writtenAt': '2026-11-15T14:37:39Z', 'prs': 1, ...})
+E        +    where <function problems at 0x7f847e4edf80> = RM.problems
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:127: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_by_release_measure_off_its_shape_is_named
+1 failed, 11 deselected in 0.21s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            if isinstance(m.get(k), dict) and set(m[k]) == {"byRelease", "unplaced"}`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.22s
+```
+
+## e12. Malformed watchdog ends (`whole`, the per-end check)
+
+- **Axis:** a silence end that is not a dict naming a seat makes that release's void count unmeasured.
+- **Detector:** `test_malformed_watchdog_ends_read_unmeasured_for_that_release`.
+- **Neutralization:** the `whole = isinstance(ends, list) and all(...)` line became `whole = isinstance(ends, list)`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_malformed_watchdog_ends_read_unmeasured_for_that_release _________
+
+    def test_malformed_watchdog_ends_read_unmeasured_for_that_release():
+        m, why = _m([_rec(1, at="2026-11-06T10:00:00Z", ends=[{"attempt": 1}])])
+>       assert m["silentReviewerVoids"]["byRelease"] == {"0.50.0": U}
+E       AssertionError: assert {'0.50.0': {'...sessions': 1}} == {'0.50.0': 'unmeasured'}
+E         
+E         Differing items:
+E         {'0.50.0': {'voided': 0, 'sessions': 1}} != {'0.50.0': 'unmeasured'}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_malformed_watchdog_ends_read_unmeasured_for_that_release
+1 failed, 11 deselected in 0.25s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            whole = isinstance(ends, list) and all(isinstance(e, dict) and isinstance(e.get("seat"), str) for e in ends)`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 11 deselected in 0.18s
+```
