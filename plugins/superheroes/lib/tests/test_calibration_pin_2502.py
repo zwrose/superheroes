@@ -267,3 +267,21 @@ def test_absent_calibration_pins_as_absent_with_todays_text(tmp_path, monkeypatc
     assert RD._pinned_path_text(pin, "claudeMd", "CLAUDE.md", bare) == RD._claude_md_path_placeholder(bare)
     assert RD._pinned_path_text(pin, "core", "Core", bare) == RD._calibration_path_placeholder(None, "Core")
     assert json.loads(json.dumps(pin)) == pin
+
+
+def test_the_pin_reads_the_core_the_storage_mode_selects(repo, tmp_path):
+    # axis: the pinned core is the one the storage mode selects, never a stale copy the dispatch resolver prefers
+    _write_core(repo, [_SECRETS, _PAYMENTS])  # the active (global) core declares the payments area
+    stale = os.path.join(repo, core_md.in_repo_core_rel_path())
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "single-user",
+             "patterns": "- x: a.ts:1", "enginePreferences": {"reviewer": "claude"},
+             "projectConfiguration": {core_md.RISK_AREAS_KEY: [_SECRETS]}}
+    _put(stale, core_md.render_core(facts, "confirmed", "2026-06-26", "2026-06-26"))
+    _put(os.path.join(os.path.dirname(stale), "review-crew.md"), _LAYER_TEXT)  # a stale in-repo layer beside it
+    assert mode_registry.write_registry(repo, mode_registry.GLOBAL, "rk") is not None
+    assert calibration_read.resolved_paths(repo)[0] == stale  # premise: the dispatch resolver prefers the stale copy
+    assert core_md.read_risk_areas(repo)["areas"] == [_SECRETS, _PAYMENTS]  # the live readers take the global core
+    pin = calibration_pin.capture(repo, _session(tmp_path, "a"))
+    assert pin["files"]["core"]["source"] == _core_file(repo)
+    assert [a["name"] for a in pin["riskAreas"]["areas"]] == ["Secrets", "Payments"]
+    assert pin["enginePrefs"]["reviewer"] == "codex"

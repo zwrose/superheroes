@@ -83,6 +83,16 @@ def _absent(detail=None):
     return _entry(None, None, None, None, REASON_ABSENT, detail)
 
 
+def _mode_core(repo_root):
+    """The core.md the storage mode selects (the file the risk-area and engine-preference readers read), or None.
+
+    Read-only: ``_size_exclude_core_path`` never backfills the mode registry."""
+    try:
+        return core_md._size_exclude_core_path(repo_root)
+    except Exception:
+        return None
+
+
 def _derive(repo_root, core):
     """(riskAreas, enginePrefs, residuals) read from the core entry's copy, never from the live store."""
     path, reason, detail = core["path"], core["reason"], core["detail"]
@@ -135,14 +145,18 @@ def capture(repo_root, session_dir):
         first = load(session_dir)
         if first is not None:
             return first
-        core_src, layer_src, refusal = calibration_read.resolved_paths(repo_root)
+        dispatch_core, layer_src, refusal = calibration_read.resolved_paths(repo_root)
+        # axis: the pinned core is the one the storage mode selects, never a stale copy the dispatch resolver prefers
+        mode_core = _mode_core(repo_root)
+        core_src = mode_core or dispatch_core
         claude = os.path.join(repo_root, "CLAUDE.md")
         claude_src = claude if os.path.isfile(claude) else None
         files = {}
         for label, src in ((LABEL_CORE, core_src), (LABEL_LAYER, layer_src), (LABEL_CLAUDE_MD, claude_src)):
             absent_detail = refusal if label != LABEL_CLAUDE_MD else None
             files[label] = _copy(label, src, session_dir) if src else _absent(absent_detail)
-        risk, prefs, residuals = _derive(repo_root, files[LABEL_CORE])
+        # a dispatch fallback that is not a core.md (a layer or legacy profile) is shown to seats but read for no setting
+        risk, prefs, residuals = _derive(repo_root, files[LABEL_CORE] if mode_core else _absent(refusal))
         pin = {"schema": SCHEMA, "repoRoot": repo_root, "rootRefusal": refusal, "files": files,
                "riskAreas": risk, "enginePrefs": prefs, "residuals": residuals}
         try:
