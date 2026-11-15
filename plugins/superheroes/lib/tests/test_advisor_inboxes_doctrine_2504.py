@@ -6,6 +6,7 @@ resolves the collector or reads inboxes names calibration (`advisor-issues`) fir
 memory second, and the doctrine on inboxes has one home, owner-decisions § Declared inboxes.
 """
 import os
+import re
 
 PLUGIN_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 
@@ -76,10 +77,27 @@ def _need(text, needle, where):
     assert needle in text, "%s is missing %r" % (where, needle)
 
 
+# Priority is read from the words attached to each source, never from mention order alone: the
+# code spans are dropped, then calibration must carry "first" and durable memory "second" (or come
+# after a "then"), and the reversed words are refused outright.
+_CALIBRATION_FIRST = re.compile(r"\bcalibration(?: item 20)? (?:\(\) )?first\b")
+_MEMORY_SECOND = re.compile(r"\bdurable memory second\b|\bthen from (?:the advisor's )?durable memory\b")
+_REVERSED = re.compile(r"\bcalibration(?: item 20)? (?:\(\) )?second\b|\bdurable memory first\b")
+
+
 def _before(text, first, second, where):
+    # axis: calibration is ranked first and durable memory second by the priority words attached
+    # to each, not by mention order; the reversed words fail
     assert first in text, "%s is missing %r" % (where, first)
     assert second in text, "%s is missing %r" % (where, second)
-    assert text.index(first) < text.index(second), (
+    plain = " ".join(re.sub(r"`[^`]*`", "", text).split())
+    assert not _REVERSED.search(plain), (
+        "%s ranks durable memory above calibration; calibration comes first, memory second" % where)
+    calibration = _CALIBRATION_FIRST.search(plain)
+    memory = _MEMORY_SECOND.search(plain)
+    assert calibration, "%s does not say calibration comes first" % where
+    assert memory, "%s does not say durable memory comes second" % where
+    assert calibration.start() < memory.start(), (
         "%s names %r after %r; calibration comes first, memory second" % (where, first, second))
 
 
