@@ -656,6 +656,13 @@ advisor run together to keep calibration honest.
      replaces that window's row. A measure whose input is missing or damaged reads unmeasured with its
      reason, never zero. The late-finds and repeat-location measures run monthly or on a sample, and
      the row says which. The row gates nothing and is read by hand.
+     Four of its measures are counted by plugin release, with no target number: owner cards per
+     merged PR (`ownerCardsPerMergedPr`), review sessions per PR (`sessionsPerPrByRelease`),
+     first-session certification (`firstSessionCertification`), and sessions voided by a silent
+     reviewer (`silentReviewerVoids`). They read the input's `releases` (each release the project ran,
+     with the day it adopted it) and, for owner cards, `mergedPrs`. A session or PR earlier than every
+     listed release counts as unplaced. The held in-session reviewer retry waits on the fourth: it is
+     due once a session on 0.50.0 or later reads voided there.
    - **The tally counts escapes by kind as well as by seat**, as `escapesByKind`, and the per-seat
      tally stays. An escape with no kind, every escape logged before the caught-by line existed
      among them, counts as `unmeasured` for kind, never as `nothing-reachable`; a kind outside the

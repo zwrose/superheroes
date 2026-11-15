@@ -18,6 +18,12 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **The review-loop measures row gains four measures counted by plugin release, and its schema is now `review-loop-measures/2`.** At the gardening pass, add two keys to the `review_measures.py row` input: `releases`, one `{"version", "since"}` item per release the project ran (`since` is the day, or UTC time, it adopted that release), and `mergedPrs`, the window PRs that merged. Without them the new measures read unmeasured with their reason, never zero. The measures are `ownerCardsPerMergedPr`, `sessionsPerPrByRelease`, `firstSessionCertification` and `silentReviewerVoids`, each `{"byRelease": {<version>: <figure or unmeasured>}, "unplaced": <count>}`; a release before 0.48.0 reads unmeasured for `silentReviewerVoids`, since its records list no silence-watchdog ends. Rows already in the table keep their `/1` schema and still render. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).
+
 ## 0.50.0
 
 ### Before you upgrade
