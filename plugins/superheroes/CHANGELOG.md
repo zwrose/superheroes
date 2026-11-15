@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.50.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.49.0...superheroes-v0.50.0) (2026-11-15)
+
+
+### Features
+
+* **superheroes:** read a base's merge queue, and check and prove a straightened stack ([#2472](https://github.com/zwrose/superheroes/issues/2472)) ([abd146b](https://github.com/zwrose/superheroes/commit/abd146bd77643e2ea3d36a069edaa42d7a9efe16))
+* **superheroes:** refuse a PR-sheet card that depends on another question ([#2483](https://github.com/zwrose/superheroes/issues/2483)) ([88617a1](https://github.com/zwrose/superheroes/commit/88617a180926454416d4e391dd21080a950cb3b5))
+* **superheroes:** the merge path refuses a merge-commit stack on a merge-queue base ([#2473](https://github.com/zwrose/superheroes/issues/2473)) ([33da3a4](https://github.com/zwrose/superheroes/commit/33da3a43bce8073b311b106d20435417e6323242))
+* **superheroes:** the merge step holds a stack until the merge queue has a free build slot for every layer ([#2485](https://github.com/zwrose/superheroes/issues/2485)) ([5a3f965](https://github.com/zwrose/superheroes/commit/5a3f96519039b2828eef1df212da20d71760ba08))
+
+
+### Bug Fixes
+
+* **superheroes:** a codex review order states one answer contract ([#2455](https://github.com/zwrose/superheroes/issues/2455)) ([d9583a5](https://github.com/zwrose/superheroes/commit/d9583a5a58de3786aebc5a41fbf1411bdcbcce6c))
+* **superheroes:** a codex reviewer's last attempt gets its own silence limit ([#2464](https://github.com/zwrose/superheroes/issues/2464)) ([a78580f](https://github.com/zwrose/superheroes/commit/a78580f15f2e6a4c34e26e6df0dabfbf78de317a))
+* **superheroes:** a kept repeat follows its earlier finding's cited ruling ([#2484](https://github.com/zwrose/superheroes/issues/2484)) ([70c6e6f](https://github.com/zwrose/superheroes/commit/70c6e6fbe65e7b29cf55fd6349a581878ae1befc))
+* **superheroes:** a kept repeat follows its earlier finding's current outcome ([#2468](https://github.com/zwrose/superheroes/issues/2468)) ([73a9a4b](https://github.com/zwrose/superheroes/commit/73a9a4b7fd3f8454748923b340f303e06107a8c8))
+* **superheroes:** a non-empty synthesis grouping is not graded vacuous in a PR-body run ([#2477](https://github.com/zwrose/superheroes/issues/2477)) ([07a0ff0](https://github.com/zwrose/superheroes/commit/07a0ff09f40f4315320f7a92d03aac37788b3108))
+* **superheroes:** a verifier refutation that rests on a scope ruling is recorded as a ruling or left for the owner ([#2482](https://github.com/zwrose/superheroes/issues/2482)) ([af023fc](https://github.com/zwrose/superheroes/commit/af023fc1901ea7ba98f943f0df183f9c05c3b8b7))
+* **superheroes:** credit a break-it test kept in a higher stack layer ([#2465](https://github.com/zwrose/superheroes/issues/2465)) ([a71b544](https://github.com/zwrose/superheroes/commit/a71b544caaf503b1b35027ca38aee1c213b42868))
+* **superheroes:** drop a break-it test that does not load instead of demanding it be committed ([#2471](https://github.com/zwrose/superheroes/issues/2471)) ([746071a](https://github.com/zwrose/superheroes/commit/746071afac5981eda224f7fb20d926ebd316cca6))
+* **superheroes:** quiet misreads — order-lint keywords in paths, one git-origin classifier, empty ids never match ([#2466](https://github.com/zwrose/superheroes/issues/2466)) ([ca7dd25](https://github.com/zwrose/superheroes/commit/ca7dd25d04b7b35b944da28ae47c0544cd4e4515))
+* **superheroes:** run the whole-tree text tests before a plugin-Markdown push ([#2467](https://github.com/zwrose/superheroes/issues/2467)) ([376e78d](https://github.com/zwrose/superheroes/commit/376e78d7d756e013dabf7d0f455978d164d30934))
+
 ## [0.49.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.48.0...superheroes-v0.49.0) (2026-11-14)
 
 
