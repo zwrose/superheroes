@@ -1,6 +1,6 @@
 # Bite-proof record — the four by-release review-loop measures (#2498)
 
-Detector file: `plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to `plugins/superheroes/lib/review_measures.py` at a committed head (`4aab8b51` unless the entry names another; the lines the `4aab8b51` entries neutralize are unchanged since), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py -q -k "<one test's name fragment>" -p no:randomly`, which selects exactly one test; each capture is whole except the `UV_NATIVE_TLS` deprecation line `uv` prints first. The worktree path is shown as `<worktree>`; no secret, token, URL or personal data appears in any capture, so nothing else is redacted. After every restore, `git status --porcelain` over the file printed nothing. Light lane, orchestrator-typed: the guarded-element set below (e1 to e12, fifteen entries) is the one the round-1 reviewer's dispatch declares; e7c, e12b, e13 and e14 guard the round-1 fixes and are declared to the round-2 reviewer; e6d and e7d (with e7a to e7c re-run on the reworked void rule) guard the round-2 fixes and are declared to the round-3 reviewer; twenty-one entries in all; none is grouped.
+Detector file: `plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to `plugins/superheroes/lib/review_measures.py` at a committed head (`4aab8b51` unless the entry names another; the lines the `4aab8b51` entries neutralize are unchanged since), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py -q -k "<one test's name fragment>" -p no:randomly`, which selects exactly one test; each capture is whole except the `UV_NATIVE_TLS` deprecation line `uv` prints first. The worktree path is shown as `<worktree>`; no secret, token, URL or personal data appears in any capture, so nothing else is redacted. After every restore, `git status --porcelain` over the file printed nothing. Light lane, orchestrator-typed: the guarded-element set below (e1 to e12, fifteen entries) is the one the round-1 reviewer's dispatch declares; e7c, e12b, e13 and e14 guard the round-1 fixes and are declared to the round-2 reviewer; e6d and e7d (with e7a to e7c re-run on the reworked void rule) guard the round-2 fixes and are declared to the round-3 reviewer; e15 (with e2 re-run) guards the round-3 fix and is declared to the round-4 reviewer; twenty-two entries in all; none is grouped.
 
 ## e1. No whole release list (`_release_measures`, the `if why:` return)
 
@@ -67,6 +67,8 @@ FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::te
 - **Detector:** `test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day`.
 - **Neutralization:** `x[0] <= t` became `x[0].date() <= t.date()` (placement by day).
 
+Run at `98bb18ed`, re-run after the round-3 fix changed this line.
+
 **Raw red** (exit 1):
 
 ```
@@ -88,17 +90,17 @@ E         Use -v to get more diff
 <worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:52: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_runs_on_the_release_adopted_last_before_it_even_the_same_day
-1 failed, 11 deselected in 0.22s
+1 failed, 16 deselected in 0.28s
 ```
 
 **Restore:** the inverse edit put the line back.
-**Restore receipt** (the restored line, quoted): `        got = [x for x in rel if t is not None and x[0] <= t]`; `git status --porcelain` over the file printed nothing.
+**Restore receipt** (the restored line, quoted): `        got = [x for x in rel if x[0] <= t]`; `git status --porcelain` over the file printed nothing.
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed, 11 deselected in 0.28s
+1 passed, 16 deselected in 0.21s
 ```
 
 ## e3. Unplaced items (`release_of`, its `else None`)
@@ -892,4 +894,66 @@ FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::te
 ```
 .                                                                        [100%]
 1 passed, 14 deselected in 0.18s
+```
+
+## e15. A record time that does not parse (`release_of`, round-3 finding code-001)
+
+- **Axis:** a record whose time does not parse makes the measure that would place it unmeasured, never unplaced.
+- **Detector:** `test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced`.
+- **Neutralization:** `if any(_when(r["writtenAt"]) is None for r in recs):` became `if False:`.
+
+Run at `98bb18ed`. The red is a crash (`TypeError` comparing a release time with no time), not an assertion: without the guard the broken time is never read as missing evidence.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced ____
+
+    def test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced():
+        """`_rec_ok` checks only the date prefix, so a broken time reaches placement (round-3 finding code-001)."""
+        silent = dict(status="not-reviewed", rows=[_row(SEC, "not-run")], ends=[_end(SEC)])
+>       m, why = _m([_rec(1, at="2026-11-06T10:00:00Z"), _rec(2, "s2", at="2026-11-06Tbroken", **silent)])
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:160: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:44: in _m
+    row = RM.compute(inp, FROM, UNTIL)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/review_measures.py:444: in compute
+    m.update(_release_measures(inp, prs, every, sessions, reason, miss))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/review_measures.py:283: in _release_measures
+    pr_release = release_of(first(rs))
+                 ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+recs = [{'pr': 2, 'sessionId': 's2', 'writtenAt': '2026-11-06Tbroken', 'status': 'not-reviewed', ...}]
+
+    def release_of(recs):  # the release adopted last at or before the session's first record, else None
+        # axis: a record time that does not parse places nothing, so its measure reads unmeasured, never unplaced — see bite-proof record i2498_by_release
+        if False:
+            return UNPLACEABLE
+        t = _when(min(r["writtenAt"] for r in recs))
+        # axis: a session runs on the release adopted last at or before its first record, to the second — see bite-proof record i2498_by_release
+>       got = [x for x in rel if x[0] <= t]
+                                 ^^^^^^^^^
+E       TypeError: '<=' not supported between instances of 'datetime.datetime' and 'NoneType'
+
+<worktree>/plugins/superheroes/lib/review_measures.py:260: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_record_time_that_does_not_parse_reads_unmeasured_never_unplaced
+1 failed, 16 deselected in 0.29s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `        if any(_when(r["writtenAt"]) is None for r in recs):`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 3.75s
 ```
