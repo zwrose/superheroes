@@ -630,22 +630,23 @@ advisor run together to keep calibration honest.
      escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
      window".
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
-     escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
-     record writer's `read --pr <n>` returns it, and each review escape as its review's date
+     escapes only, and decides nothing. Its input is every review record of each PR, as the
+     record writer reads each (the same records the measures row reads), and each review escape as its review's date
      (`reviewedAt`), its call (`missed` or `seen-and-left`) and its kind (`kind`, spelled as in the
      entry's caught-by line). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
      included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
-     dated by that record and counts only when the date is on or after the adoption day and inside
+     dated by its latest record and counts only when the date is on or after the adoption day and inside
      the condition window. The record keeps no first date for a finding, so a catch carried from a
      review before the adoption day into a later re-review counts by the later date; the advisor
      weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
      evidence reads unmeasured, never zero: the helper's tally contract says which records and escapes
      it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
-     reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
-     is left out unread. A catch is
-     credited to the seat whose run raised it (the finding's `raisedBy`) when the record shows that
-     seat ran on the PR; when it does not (the record shows only its latest review session), that
+     reading an unmeasured tally as unmeasured rather than as nothing. The latest record places the whole PR
+     in or out of the range, every record of a counted PR is read and checked, and the records of a PR
+     left out are left out unread. A catch is
+     credited to the seat whose run raised it (the finding's `raisedBy`) when any record of the PR
+     shows that seat ran; when none does, that
      seat's `caught` count reads unmeasured. A catch whose raiser names no seat at all counts as
      unattributed. A catch with
      no recorded raiser is credited to no seat, and the `caught` count of every seat that ran on its
