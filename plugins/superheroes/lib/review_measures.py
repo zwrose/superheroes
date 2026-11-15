@@ -19,6 +19,9 @@ read it unmeasured, with that reason, never zero:
   vetReceipts   one item per vet receipt: {"pr", "at" (the receipt's time), "sentBack" (bool), "body" (its text)}
   capChoicesSince  the day the project adopted the release whose vet receipt records cap choices
   costly        {"lateFindsOnUnchangedCode" | "repeatFindingLocations": {"basis": "monthly"|"sample", "value": n, "source": "where it came from"}}
+  releases      one item per plugin release the project ran: {"version": "X.Y.Z", "since": the day (or UTC time) the
+                project adopted it}; the four by-release measures read it
+  mergedPrs     the window PRs that merged, as PR numbers; owner cards per merged PR reads it
 
 Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
   - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
@@ -31,6 +34,22 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
     no finding open or left for the owner.
+  - By release (#2498; no target number): a session ran on the release adopted last at or before its first in-window
+    record; a PR counts under the release its first in-window session ran on. A session or PR earlier than every
+    listed release counts in `unplaced`, never under a release; a PR with any record time that does not parse makes
+    all four unmeasured (`incomplete-evidence`), since its first session, and so its release, cannot be read.
+    `ownerCardsPerMergedPr` counts, per merged PR, the distinct finding keys any of its in-window sessions' latest
+    records left for the owner (merged members left out). `sessionsPerPrByRelease` counts each PR's in-window sessions.
+    `firstSessionCertification` reads each PR's first session among all its records: certified when that session's
+    latest record is `reviewed`; owner cards also leave out a repeat whose card another finding holds
+    (`review_record.repeat_held_elsewhere`). `silentReviewerVoids` reads each in-window session's latest record
+    that is not `reviewed` and has a reviewer row that did not run: `voided` when a silence-watchdog end names that
+    row, `unresolved` when an end names no row (a forfeited or recovered seat's run dir binds no row, so its end
+    carries its role and run dir and cannot be tied to the row that did not run), else neither. `voided` is what the
+    held in-session reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer); an
+    `unresolved` session is read in its record before it counts. A release before 0.48.0, which recorded no watchdog
+    ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that release's figure
+    unmeasured.
 """
 import argparse
 import collections
@@ -54,12 +73,17 @@ import review_record  # noqa: E402
 import review_seats  # noqa: E402
 import session_contract  # noqa: E402
 
-SCHEMA = "review-loop-measures/1"
+SCHEMA = "review-loop-measures/2"
 TABLE = "review-loop-measures.jsonl"
 UNMEASURED = review_learning.UNMEASURED
-MEASURES = ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "ci", "panels",
-            "vetSendBacksOnCleanLoops", "escapes", "capChoices", "lateFindsOnUnchangedCode", "repeatFindingLocations")
-ROW_KEYS = ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
+BY_RELEASE = ("ownerCardsPerMergedPr", "sessionsPerPrByRelease", "firstSessionCertification", "silentReviewerVoids")
+MEASURES_V1 = ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "ci", "panels",
+               "vetSendBacksOnCleanLoops", "escapes", "capChoices", "lateFindsOnUnchangedCode", "repeatFindingLocations")
+MEASURES = MEASURES_V1 + BY_RELEASE
+_SCHEMA_MEASURES = {"review-loop-measures/1": MEASURES_V1, SCHEMA: MEASURES}  # a row written before #2498 still renders
+WATCHDOG_ENDS_SINCE = (0, 48, 0)  # the first release whose records list silence-watchdog ends
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+ROW_KEYS =("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
 CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
 COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
 COSTLY_BASES = ("monthly", "sample")
@@ -67,7 +91,7 @@ MEASURE_KEYS = {"roundsPerPr": ("median", "p90"), "sessionsPerPr": ("median", "p
                 "reviewerCostPerPr": ("tokens", "minutes", "prsLeftOut"), "ci": ("runsPerPr", "minutesPerPr", "suiteMedianMinutes"),
                 "panels": ("sizes", "sessions"), "vetSendBacksOnCleanLoops": ("sentBack", "cleanLoopsVetted"),
                 "escapes": ("missed", "seenAndLeft", "falsePrClaims"), "capChoices": CAP_CHOICES,
-                **dict.fromkeys(COSTLY, ("basis", "value", "source"))}
+                **dict.fromkeys(COSTLY, ("basis", "value", "source")), **dict.fromkeys(BY_RELEASE, ("byRelease", "unplaced"))}
 LEFT_OUT_WHY = "a review session has no complete sessionCost"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
@@ -192,6 +216,131 @@ def _cap_outcome(choice, key, pr, later, escapes, before=frozenset()):
     return "settled" if found and all(f.get("outcome") not in _OPEN for f in found) else "not-settled"
 
 
+def _when(value):
+    """A day or a UTC time as an aware datetime (a day is its first moment), or None."""
+    if not isinstance(value, str) or _day(value, whole=False) is None:
+        return None
+    try:
+        got = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return got if got.tzinfo else got.replace(tzinfo=datetime.timezone.utc)
+
+
+def _releases(given):
+    """The `releases` input as [(since, version tuple, version)] in adoption order, or None when any item is not whole."""
+    out = []
+    for r in given:
+        v = r.get("version") if isinstance(r, dict) else None
+        mt = _VERSION_RE.fullmatch(v) if isinstance(v, str) else None
+        since = _when(r.get("since")) if isinstance(r, dict) else None
+        if mt is None or since is None:
+            return None
+        out.append((since, tuple(int(x) for x in mt.groups()), v))
+    return sorted(out)
+
+
+def _release_measures(inp, prs, every, sessions, reason, miss):
+    """The four by-release measures (#2498). `prs` holds each window PR's in-window records, `every` all its valid
+    records, `sessions` each in-window session's latest in-window record."""
+    given, merged = inp.get("releases"), inp.get("mergedPrs")
+    rel = _releases(given) if isinstance(given, list) else None
+    why = reason or ("no-releases-input" if not isinstance(given, list) else "incomplete-evidence" if rel is None else None)
+    # axis: with no whole release list, all four read unmeasured with the reason, never zero — see bite-proof record i2498_by_release
+    if why:
+        return {k: miss(k, why) for k in BY_RELEASE}
+
+    def release_of(recs):  # the release adopted last at or before the session's first record, else None
+        t = _when(min(r["writtenAt"] for r in recs))  # every time parses: the PR loop checked them first
+        # axis: a session runs on the release adopted last at or before its first record, to the second — see bite-proof record i2498_by_release
+        got = [x for x in rel if x[0] <= t]
+        return got[-1] if got else None
+
+    def first(recs):
+        return min(_by_session(recs), key=lambda rs: min(r["writtenAt"] for r in rs))
+
+    by = {k: collections.defaultdict(list) for k in BY_RELEASE}
+    unplaced, versions, damaged = collections.Counter(), {}, set()
+
+    def put(k, release, value):
+        # axis: an item earlier than every release is counted unplaced, never under a release — see bite-proof record i2498_by_release
+        if release is None:
+            unplaced[k] += 1
+        else:
+            versions[release[2]] = release[1]
+            by[k][release[2]].append(value)
+
+    merged_ok = isinstance(merged, list) and all(_pr_ok(p) for p in merged)
+    merged_set = {str(p) for p in merged} if merged_ok else set()
+    for pr, rs in prs.items():
+        # axis: a PR with any record time that does not parse cannot say which session came first, so all four read unmeasured — see bite-proof record i2498_by_release
+        if any(_when(r["writtenAt"]) is None for r in every[pr]):
+            damaged.update(BY_RELEASE)
+            continue
+        # axis: a PR counts under the release its first in-window session ran on — see bite-proof record i2498_by_release
+        pr_release = release_of(first(rs))
+        put("sessionsPerPrByRelease", pr_release, len(sessions[pr]))
+        # axis: certification reads the PR's first session among all its records, in the window or not — see bite-proof record i2498_by_release
+        opening = first(every[pr])
+        status = _latest(opening).get("status")
+        # axis: a first session whose status is not one the writer records reads unmeasured, never uncertified — see bite-proof record i2498_by_release
+        put("firstSessionCertification", release_of(opening),
+            review_record.cleared(status) if status in review_record.STATUSES else None)
+        if pr in merged_set:
+            # axis: a merged PR's cards are its distinct finding keys left for the owner, merged members out — see bite-proof record i2498_by_release
+            # axis: a repeat whose card another finding of the record holds is no card of its own — see bite-proof record i2498_by_release
+            cards = {f.get(session_contract.FINDING_KEY_FIELD) or f.get("id") for r in sessions[pr].values()
+                     for f in r["findings"] if f.get("outcome") == review_findings_schema.LEFT_FOR_OWNER
+                     and not review_learning._merged_member(f) and not review_record.repeat_held_elsewhere(f, r["findings"])}
+            put("ownerCardsPerMergedPr", pr_release, len(cards))
+        for sid, last in sessions[pr].items():
+            ends = last.get("silenceWatchdogEnds", [])
+            # axis: a silence end that is not a dict naming a seat, or a status the writer does not record, reads unmeasured — see bite-proof record i2498_by_release
+            whole = (isinstance(ends, list) and last.get("status") in review_record.STATUSES
+                     and all(isinstance(e, dict) and isinstance(e.get("seat"), str) and e["seat"].strip() for e in ends))
+            answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
+            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
+            silent = [e["seat"] for e in ends if e["seat"] not in answered] if whole else []
+            if not whole:
+                state = None
+            elif review_record.cleared(last.get("status")) or not not_run or not silent:
+                # axis: a session that certified, or whose every silent seat answered, or with no reviewer row that did not run, is no void — see bite-proof record i2498_by_release
+                state = "clear"
+            elif any(s in not_run for s in silent):
+                # axis: voided only when a silence end names a reviewer row that did not run — see bite-proof record i2498_by_release
+                state = "voided"
+            else:
+                # axis: an end naming no row (a forfeited or a recovered seat's run dir binds none) beside a row that did not run is unresolved, never a void — see bite-proof record i2498_by_release
+                state = "unresolved"
+            put("silentReviewerVoids", release_of([r for r in rs if r["sessionId"] == sid]), state)
+
+    def shown(k, ver, vals):
+        if k == "ownerCardsPerMergedPr":
+            return dict(_spread(vals), total=sum(vals))
+        if k == "sessionsPerPrByRelease":
+            return _spread(vals)
+        if k == "firstSessionCertification":
+            if None in vals:
+                return miss("%s.byRelease.%s" % (k, ver), "incomplete-evidence")
+            return {"certified": sum(vals), "prs": len(vals), "share": round(sum(vals) / len(vals), 3)}
+        # axis: a release before watchdog ends were recorded reads unmeasured, never zero — see bite-proof record i2498_by_release
+        if versions[ver] < WATCHDOG_ENDS_SINCE:
+            return miss("%s.byRelease.%s" % (k, ver), "watchdog-ends-not-recorded")
+        if None in vals:
+            return miss("%s.byRelease.%s" % (k, ver), "incomplete-evidence")
+        return {"voided": vals.count("voided"), "unresolved": vals.count("unresolved"), "sessions": len(vals)}
+
+    out = {k: {"byRelease": {v: shown(k, v, by[k][v]) for v in sorted(by[k], key=versions.get)},
+               "unplaced": unplaced[k]} for k in BY_RELEASE}
+    # axis: owner cards with no whole merged list read unmeasured, never zero — see bite-proof record i2498_by_release
+    if not merged_ok:
+        out["ownerCardsPerMergedPr"] = miss("ownerCardsPerMergedPr",
+                                            "no-merged-input" if merged is None else "incomplete-evidence")
+    for k in damaged:  # a PR that could not be placed could belong to any release, so no release's figure stands
+        out[k] = miss(k, "incomplete-evidence")
+    return out
+
+
 def compute(inp, start, end, written_at=None):
     """The window's row from the input object. Every measure is a value or "unmeasured", and each unmeasured one is
     listed in `unmeasured` with its reason."""
@@ -290,6 +439,7 @@ def compute(inp, start, end, written_at=None):
                 ran = [x for x in r["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN and "carried" not in x]
                 sizes[str(len({s for x in ran for s in review_learning._seats(x["name"])}))] += 1
         m["panels"] = {"sizes": dict(sizes), "sessions": sum(n)}
+    m.update(_release_measures(inp, prs, every, sessions, reason, miss))
 
     ci = inp.get("ciRuns")
     if not isinstance(ci, list) or reason:
@@ -378,11 +528,12 @@ def compute(inp, start, end, written_at=None):
 
 def problems(row):
     """What makes a row not the fixed shape; empty when it is."""
-    if (not isinstance(row, dict) or tuple(row) != ROW_KEYS or row.get("schema") != SCHEMA
+    if (not isinstance(row, dict) or tuple(row) != ROW_KEYS or row.get("schema") not in _SCHEMA_MEASURES
             or not isinstance(row["measures"], dict) or not isinstance(row["unmeasured"], list)):
         return ["the row's keys are not %s" % (ROW_KEYS,)]
-    m, w = row["measures"], row.get("window")
-    out = [] if tuple(m) == MEASURES else ["the measures are not %s" % (MEASURES,)]
+    # axis: a row keeps the measures of the schema it was written under, so a /1 row still renders — see bite-proof record i2498_by_release
+    m, w, measures = row["measures"], row.get("window"), _SCHEMA_MEASURES[row["schema"]]
+    out = [] if tuple(m) == measures else ["the measures are not %s" % (measures,)]
     a, b = (_day(w.get(k)) if isinstance(w, dict) else None for k in ("from", "until"))
     if a is None or b is None or b < a:
         out.append("the window is not two ISO dates in order")
@@ -390,6 +541,11 @@ def problems(row):
             if isinstance(m.get(k), dict) and set(m[k]) != set(keys)]
     if isinstance(m.get("seats"), dict) and not all(isinstance(s, dict) for s in m["seats"].values()):
         out.append("a seat is not a dict")
+    # axis: a by-release measure holds a value or unmeasured per release, and a count of unplaced — see bite-proof record i2498_by_release
+    out += ["%s is not releases of values with an unplaced count" % k for k in BY_RELEASE
+            if isinstance(m.get(k), dict) and set(m[k]) == {"byRelease", "unplaced"}
+            and not (isinstance(m[k]["byRelease"], dict) and _nat(m[k]["unplaced"])
+                     and all(isinstance(v, dict) or v == UNMEASURED for v in m[k]["byRelease"].values()))]
     named = {u.get("measure") for u in row["unmeasured"] if isinstance(u, dict) and u.get("reason")}
     out += ["%s reads unmeasured with no reason" % path for path, v in _flat(m)
             if v == UNMEASURED and not any(path == n or path.startswith("%s." % n) for n in named)]
