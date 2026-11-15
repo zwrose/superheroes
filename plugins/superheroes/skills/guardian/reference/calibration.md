@@ -1,3 +1,10 @@
+## Contents
+
+- Where the fence lives
+- Worked example
+- Keys
+- Load-bearing behaviours
+
 # Guardian calibration (`guardian-config`)
 
 The guardian hero layer (`guardian.md`) holds a single machine-readable fence that tunes sweep
