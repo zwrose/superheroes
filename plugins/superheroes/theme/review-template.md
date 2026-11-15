@@ -265,8 +265,12 @@ list. Its parts come in this order:
 3. The items, under the accepting heading.
 4. The Decided for you list, when the sheet has one, unfolded: each entry's title, ground, reason and
    **Make this mine**. See `### Decided for you` for the rest.
-5. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
-   review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
+5. The folded parts: the craft decisions put to the owner's veto, the decisions already made, the
+   Minor findings accepted when the owner merges (the `listed` part), how the review went, and on a stack
+   the stack's PRs. Each shows its count and opens on a tap. The listed part shows each finding the
+   review record lists for the merge verdict as its title and `<severity>: <reason>`, with no card;
+   [the review record reference](../skills/review-code/reference/review-record.md#what-reviewed-means)
+   says which findings it lists.
 6. The merge verdict.
 
 How the review went carries, per review, the rounds. When some reviewers read an earlier commit it adds
