@@ -16,6 +16,7 @@ import copy
 import json
 import subprocess
 
+import finding_outcomes
 import review_findings_schema
 import session_contract
 import verification
@@ -54,7 +55,11 @@ def decision_outcome(entry):
     # axis: an entry marked open at its loop's end reads as open, so its repeat is a new finding — see bite-proof record wo1_open_at_end_2445
     if session_contract.open_at_loop_end(entry):
         return None
-    return entry.get("outcome") if isinstance(entry, dict) else None
+    outcome = entry.get("outcome") if isinstance(entry, dict) else None
+    # axis: an earlier shown-wrong that rests on a scope ruling reads as open, so its repeat is judged fresh — see bite-proof record wo1_scope_ruling_2478
+    if outcome == SHOWN_WRONG and finding_outcomes.rests_on_ruling(entry.get("grade"), entry.get("reason")):
+        return None
+    return outcome
 
 
 def decide(outcome, grade_verdict, changed):
@@ -147,8 +152,13 @@ def session_entry(row, round_no, inputs):
     # axis: the pool entry carries the marker of the row the decision stands on, so an in-session repeat of an open-at-end finding reads open — see bite-proof record wo1_open_at_end_2445
     marked = {session_contract.OPEN_AT_LOOP_END_FIELD: True} \
         if isinstance(rep, dict) and "repeatKept" not in rep and _open_at_end(rep, outcome) else {}
-    return _entry("session", key, row, outcome, round=decided,
-                  family=copy.deepcopy(session_contract.disposition_family_snapshot(row)),
+    family = copy.deepcopy(session_contract.disposition_family_snapshot(row))
+    rulings = inputs[1] if isinstance(inputs, (list, tuple)) and len(inputs) > 1 else {}
+    cited = review_record_session.finding_decided_by(rep, outcome, rulings) if isinstance(rep, dict) else None
+    # axis: a pooled outcome carries the decision the record writer cites for it, so a restored kept repeat keeps that citation for the writer's re-check — see bite-proof record wo1_scope_ruling_2478
+    if isinstance(cited, dict) and not isinstance(session_contract.decided_by_of(family), dict):
+        session_contract.copy_decided_by_field({"decidedBy": cited}, family)
+    return _entry("session", key, row, outcome, round=decided, family=family,
                   grade=dict(grade) if isinstance(grade, dict) else None, **marked)
 
 
@@ -175,6 +185,8 @@ def record_entry(finding):
         marked.update({k: copy.deepcopy(finding[k]) for k in (
             review_findings_schema.CONSEQUENCE_KEY, review_findings_schema.CONSEQUENCE_KIND_KEY,
             verification.KIND_OF_MISTAKE_FIELD) if k in finding})
+    if outcome == SHOWN_WRONG:  # a shown-wrong record finding carries its grade and reason, so `decision_outcome` can tell a scope ruling from the code
+        marked.update({k: copy.deepcopy(finding[k]) for k in ("grade", "reason") if k in finding})
     # axis: a record finding's judged head is unknown, so a repeat of one closed as wrong reads as changed code — see bite-proof record c1l8_wo_a_repeat_marks
     return _entry("record", key, finding, outcome, head=None, **marked) if _text(key) else None
 
