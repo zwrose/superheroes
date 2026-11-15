@@ -129,6 +129,7 @@ def _native_verdicts_branch():
         "checks": None,
         "testMatch": None,
         "places": None,
+        "members": None,
         "readParts": None,
         "investigated": ["plugins/superheroes/lib/engine_result_channel.py"],
     }
@@ -3370,6 +3371,7 @@ class _AstraCliFakeRunner:
                 "checks": None,
                 "testMatch": None,
                 "places": None,
+                "members": None,
                 "readParts": None,
                 "investigated": ["app/session_guard.py"],
             }
