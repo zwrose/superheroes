@@ -1792,10 +1792,18 @@ def _ruling_hits(findings, key):
 def _apply_owner_rulings(findings, raw, entries):
     """Set the owner-ruling citation as decidedBy on each ruling or left-for-owner finding an entry names.
     `raw` is the account's findings as given (an entry may key by the raw findingKey the stamping replaced);
-    `findings` is the same list after the stamping. Every other outcome is left exactly as it is."""
+    `findings` is the same list after the stamping. A Minor or Nit with no outcome is an owner card like a
+    left-for-owner finding, so an entry naming one makes it left-for-owner first; the write-time re-check then
+    settles it as the ruling. Every other outcome is left exactly as it is."""
     out = list(findings)
     for e in entries:
         (j,) = _ruling_hits(raw, e["key"])
+        # axis: an owner ruling on a no-outcome Minor or Nit card is not dropped; the card reads left-for-owner and the re-check rules it — see bite-proof record i2493_wo1_record (E-ruling-card)
+        if out[j].get("outcome") not in rfs.OUTCOMES and out[j].get("severity") in LISTED_SEVERITIES:
+            reason = out[j].get("reason")
+            out[j] = dict(out[j], outcome=_LEFT_FOR_OWNER,
+                          reason=reason if isinstance(reason, str) and reason.strip()
+                          else "no outcome when the review loop ended; the owner ruled on its card")
         if out[j].get("outcome") in (_RULING, _LEFT_FOR_OWNER):
             # axis: an entry sets the citation on the finding it names, and on no other outcome — see bite-proof record wo_a_1958_owner_ruling
             out[j] = dict(out[j], decidedBy={"kind": finding_outcomes.OWNER_RULING, "ref": {"url": e["url"], "words": e["words"]}})

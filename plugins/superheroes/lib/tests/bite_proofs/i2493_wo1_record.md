@@ -513,3 +513,43 @@ The inverse Edit removed the two inserted lines.
 ...                                                                      [100%]
 3 passed in 1.21s
 ```
+
+## E-ruling-card: an owner ruling on a no-outcome Minor or Nit card (review round 1 fix, finding v0)
+
+**Provenance:** typed by the build session (claude) at the review loop's `apply-fixes` step, as review-code's fix step requires; not an implementer dispatch.
+
+- **guarded element:** `plugins/superheroes/lib/review_record.py`, `_apply_owner_rulings`, the block that reads a no-outcome Minor or Nit named by an owner-ruling entry as `left-for-owner` before the citation is set (line 1802).
+- **axis:** an owner ruling on a no-outcome Minor or Nit card is not dropped; the card reads left-for-owner and the write-time re-check rules it.
+- **neutralization:** replaced
+  `        if out[j].get("outcome") not in rfs.OUTCOMES and out[j].get("severity") in LISTED_SEVERITIES:`
+  with
+  `        if False and out[j].get("outcome") not in rfs.OUTCOMES and out[j].get("severity") in LISTED_SEVERITIES:`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_certified_2493.py::test_17_an_owner_ruling_on_a_no_outcome_minor_card_settles_it` (both parametrized cases)
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/superheroes-pyc-bp -m pytest "plugins/superheroes/lib/tests/test_review_record_certified_2493.py::test_17_an_owner_ruling_on_a_no_outcome_minor_card_settles_it" -q -p no:xdist`
+
+### raw red (decisive lines; the two tracebacks are elided, about 40 lines)
+
+```
+E       AssertionError: assert (None == 'ruling')
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_review_record_certified_2493.py:282: AssertionError
+E       AssertionError: assert (None == 'ruling')
+2 failed in 18.29s
+```
+
+### restore
+
+The inverse Edit removed `False and ` from the condition.
+
+### restore receipt
+
+`grep -c 'if False and out\[j\]' plugins/superheroes/lib/review_record.py` printed `0`, and the restored line reads:
+
+```
+1802:        if out[j].get("outcome") not in rfs.OUTCOMES and out[j].get("severity") in LISTED_SEVERITIES:
+```
+
+### raw green
+
+```
+2 passed in 1.26s
+```

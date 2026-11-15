@@ -266,3 +266,35 @@ def test_16_no_site_pairs_the_left_for_owner_outcome_with_the_repeat_test_outsid
         copies += [f"{name}:{rest.count(chr(10), 0, m.start()) + 1}" for m in pair.finditer(rest)]
     assert copies == []
     assert sorted(found) == sorted(homes)
+
+
+@pytest.mark.parametrize("reason", [None, "still open when the review loop ended"])
+def test_17_an_owner_ruling_on_a_no_outcome_minor_card_settles_it(tmp_path, reason):
+    """axis: E-ruling-card; a valid owner ruling on a no-outcome Minor card left unapplied, so the card keeps waiting."""
+    def readers(**kw):
+        return {**ruling.readers(**kw), "withheld_paths": lambda root, sha, paths: [], "finding_risk": lambda root, file: True}
+
+    card = dict(ruling.X, severity="Minor", outcome=None, reason=reason)
+    base = {**ruling.account([ruling.entry()], findings=[card]), "lane": "full", "laneReason": "the review record",
+            "makers": [{"family": "anthropic"}], "reviewers": [reviewer("r1")], "repoRoot": str(tmp_path)}
+    rec = rr.build_record(base, readers())
+    (f,) = rec["findings"]
+    assert f["outcome"] == "ruling" and f["decidedBy"]["kind"] == "owner-ruling"
+    assert rec["status"] == rr.REVIEWED and rec["leftForOwner"] == [] and rec["whatIsMissing"] == []
+    # without the ruling the same card waits for the owner
+    bare = rr.build_record({**base, "ownerRulings": []}, readers())
+    assert bare["leftForOwner"] == ["f-1"] and bare["status"] == rr.AWAITS_OWNER
+
+
+def test_17b_an_owner_ruling_on_a_no_outcome_important_leaves_it_open(tmp_path):
+    """axis: E-ruling-card; the conversion reaching an Important with no outcome, which is a missing outcome, not a card."""
+    def readers(**kw):
+        return {**ruling.readers(**kw), "withheld_paths": lambda root, sha, paths: [], "finding_risk": lambda root, file: True}
+
+    open_important = dict(ruling.X, outcome=None)
+    base = {**ruling.account([ruling.entry()], findings=[open_important]), "lane": "full", "laneReason": "the review record",
+            "makers": [{"family": "anthropic"}], "reviewers": [reviewer("r1")], "repoRoot": str(tmp_path)}
+    rec = rr.build_record(base, readers())
+    (f,) = rec["findings"]
+    assert f["outcome"] is None and rec["status"] == rr.NOT_REVIEWED
+    assert "finding f-1 has no outcome" in rec["whatIsMissing"]
