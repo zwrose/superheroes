@@ -429,7 +429,8 @@ receipt and the PR body at least.
 Copy every `transitLine` into the build record's Disclosed degradations and into the handback
 comment, as it is. A line names what changed, so the vet grades that text from your committed file
 or the engine artifact (`skills/showrunner/reference/vet-receipt.md`). No line means the read-back
-matched.
+matched. Reading the review record write's `transit` is the rule of every build, local and cloud,
+and `skills/workhorse/reference/handback.md` (the handback check) is its home.
 
 ## Handback
 

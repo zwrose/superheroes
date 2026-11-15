@@ -22,7 +22,17 @@ switching, never a lane already running.
 
 ### Before you upgrade
 
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **`review_record.py write` (and the session writer, which passes its result through) now refuses `review-record-unreadable-after-write` when the record it just posted does not read back, and a review record's text now posts with visible stand-ins in place of control characters (ESC becomes U+241B; C1 codes become `[U+00XX]`).** A caller that matches `write` refusals adds the token `review-record-unreadable-after-write`. A reader that compares posted record text with its source sees stand-ins where control characters were. See [Review record: control characters post as visible stand-ins, and a write that does not read back refuses](#review-record-control-characters-post-as-visible-stand-ins-and-a-write-that-does-not-read-back-refuses).
 - **After switching.** **Nothing is owed by a caller that does not read the new keys and tokens: a fix-audit target gains `mergedMembers`, an auditor result may carry `members`, an audit entry gains `members` and `membersIgnored`, a fixed disposition gains `memberResults`, a round gains `membersReopened`, and the new decision kind is `merged-member-reopened`.** A merged finding no longer reads `fixed` without its own fix-audit ruling, so expect more fix rounds and more owner cards. See [Review record: a merged finding reads fixed only on its own fix-audit ruling](#review-record-a-merged-finding-reads-fixed-only-on-its-own-fix-audit-ruling).
+
+### Review record: control characters post as visible stand-ins, and a write that does not read back refuses
+
+- **The stand-in.** Before a record is posted (in the same pass as the writer's credential scrub, so before the record's `sentSha256` and the parts hash are taken), every text value and key in the record has its ANSI escape sequences (terminal colour and cursor codes) removed. Every remaining control character GitHub rewrites then gets a visible stand-in: codes 00–07 and 0E–1F become the Unicode Control Pictures (`chr(0x2400 + code)`, so ESC becomes U+241B); DEL (7F) becomes U+2421; codes 80–9F become the text `[U+00XX]` (for example `[U+009B]`). Tab, newline, vertical tab, carriage return, backspace and form feed are kept. A key the stand-in changes onto a name already taken gets `-1`, `-2`, … appended, so no entry is lost. A raw-output comment (`render_raw`) gets the same stand-in. GitHub's comment storage rewrites a JSON control escape, and a raw control byte, into caret notation (backslash, `^`, a letter), which is not valid JSON, so the record was unreadable.
+- **The re-read and the refusal.** After every write whose comments were all read back (`transit` `matched` or `changed`), the writer re-lists the PR's comments and reads the new head as `read` would: the record marker, then the JSON, then the parts and their findings list. When the record does not read back, the write refuses `review-record-unreadable-after-write`. The detail starts with the head comment's url, says the comments were posted, and names where the record breaks, followed by the transit line when there is one. A write whose read-back could not be made (`transit: not-checked`) is not re-read, as before.
+- **The listing failure.** When the listing after the write fails, the writer refuses `review-record-gh-failed`.
+- Replacement. None: no key or command is removed or renamed.
 
 ### Review record: a merged finding reads fixed only on its own fix-audit ruling
 
