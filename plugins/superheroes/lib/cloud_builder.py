@@ -678,6 +678,34 @@ def _transit_not_checked(why):
     return {"transit": TRANSIT_NOT_CHECKED, "why": why}
 
 
+def _transit_changes(a, b, trim=True):
+    """`(count, changes)` for the two normalized, differing strings: the changed spans `difflib` names turning `a`
+    into `b`. `trim=True` runs the matcher only between the common prefix and the common suffix and reports
+    positions in the whole strings; `trim=False` runs it on the whole strings (reachable for tests only). Known
+    limit: in ambiguous repetitive text the trimmed run can place an edit at another offset than the untrimmed
+    one (`AAAB` to `AAAAB`: offset 3, not 0), describing the same edit with the same count."""
+    p = s = 0
+    if trim:
+        # axis: the matcher runs only on the part between the common prefix and suffix, so a full-size body with one small change stays fast — see bite-proof record wo_2490_transit_trim
+        p = len(os.path.commonprefix([a, b]))
+        # the cap keeps the prefix and the suffix from overlapping, so the middle is never negative
+        s = min(len(os.path.commonprefix([a[::-1], b[::-1]])), min(len(a), len(b)) - p)
+    changes = []
+    count = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a[p:len(a) - s], b[p:len(b) - s],
+                                                       autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        count += 1
+        if len(changes) < TRANSIT_MAX_CHANGES:
+            # back to positions in the whole strings
+            i1, i2, j1, j2 = i1 + p, i2 + p, j1 + p, j2 + p
+            changes.append({"line": a.count("\n", 0, i1) + 1, "at": i1,
+                            "sent": a[i1:i2][:TRANSIT_EXCERPT_CHARS],
+                            "found": b[j1:j2][:TRANSIT_EXCERPT_CHARS]})
+    return count, changes
+
+
 def transit_compare(sent, found):
     """Whether `found`, the text GitHub holds, is `sent`: {"transit": "matched"}, {"transit": "changed",
     "changeCount", "changes"} naming the changed spans, or {"transit": "not-checked", "why"}. Only line
@@ -703,16 +731,8 @@ def transit_compare(sent, found):
             b = b[:session_footer.start()].rstrip()
             if a == b:
                 return {"transit": TRANSIT_MATCHED}
-        changes = []
-        count = 0
-        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-            if tag == "equal":
-                continue
-            count += 1
-            if len(changes) < TRANSIT_MAX_CHANGES:
-                changes.append({"line": a.count("\n", 0, i1) + 1, "at": i1,
-                                "sent": a[i1:i2][:TRANSIT_EXCERPT_CHARS],
-                                "found": b[j1:j2][:TRANSIT_EXCERPT_CHARS]})
+        # the trim runs only here, after every `matched` return, so the matched/changed reading is unchanged
+        count, changes = _transit_changes(a, b, trim=True)
         return {"transit": TRANSIT_CHANGED, "changeCount": count, "changes": changes}
     except Exception:
         return _transit_not_checked("the comparison failed")  # axis: a failed comparison is not-checked, never matched — see bite-proof record i2383_transit_compare
