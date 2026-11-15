@@ -14,6 +14,9 @@ scripted fixer (it edits only the lock line) and auditor (it discharges only the
   arm A2  the same, the auditor answers CHECK `fixed: true` on the LOCK target: CHECK reads fixed;
   arm B   no merge: exactly as before, CHECK is left for the owner at the round cap.
 
+Each arm runs twice: in a fresh session (the panel raises both findings) and in the carried shape (session 1 left CHECK
+open, session 2 carries it, and its scoped finder raises LOCK).
+
 Bite-proof record: i2489_member_loop
 """
 import copy
@@ -29,6 +32,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import audits  # noqa: E402
+import review_diff_bytes  # noqa: E402
 import review_record_session as RS  # noqa: E402
 import round_driver as RD  # noqa: E402
 import session_contract as SC  # noqa: E402
@@ -412,3 +416,94 @@ def test_arm_b_with_no_merge_the_unfixed_finding_is_left_for_the_owner_at_the_ca
     check = by_title[CHECK_TITLE]
     assert check["outcome"] == "left-for-owner" and "still open when the loop reached its round cap" in check["reason"], check
     assert "membersReopened" not in s.state()["rounds"].get("2", {})
+
+
+# --- the same three arms in the carried shape ----------------------------------------------------------------------
+# Session 1 left CHECK open; session 2 carries it. Session 2's scoped finder raises LOCK, the synthesis merges the two,
+# the fixer edits only the lock line, and the auditor discharges only the target titled LOCK.
+
+C_LOCK, C_CHECK = "share the save lock across both writers", "validate the snapshot on initial writes"
+C_LOCK_LINE, C_CHECK_LINE = 28, 27
+
+
+def _carried_arm(tmp_path, monkeypatch, merge, member_answer):
+    carried = CF._finding(C_CHECK_LINE, title=C_CHECK, tradeoff=False)
+    fresh = {"title": C_LOCK, "severity": "Critical", "file": CF.SHARED, "line": C_LOCK_LINE, "tradeoff": False,
+             "consequence": "two writers race on save, and the initial write skips the snapshot check"}
+    s = CF._session(tmp_path, monkeypatch, [carried], change=CF.TOUCHES_NEAR_27)
+    base = CF._respond(audit="not-discharged", scoped=[fresh], verdict="CONFIRMED")
+    batches, merged = [], []
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_SYNTHESIS and not merged:
+            merged.append(True)
+            by_title = {f["title"]: f["id"] for f in payload["findings"]}
+            assert {C_CHECK, C_LOCK} <= set(by_title), by_title  # the carried finding reaches the synthesis with the fresh one
+            if not merge:
+                return {"grouping": None}
+            # CHECK is listed before LOCK, and LOCK is the more severe: LOCK is the representative
+            art = {"grouping": [{"group_id": "g1", "member_ids": [by_title[C_CHECK], by_title[C_LOCK]],
+                                 "rationale": "same root cause"}]}
+            vendor = RD._nonpanel_selection(s.state(), s.dir, RD.P_SYNTHESIS)[0]
+            if vendor:
+                art["synthesisVendor"] = vendor
+            return art
+        if phase == RD.P_APPLY_FIXES:
+            batches.append((rnd, [f["title"] for f in payload["batch"]]))
+            # the fixer edits only the lock line, in a real commit: it never adds the snapshot check
+            s.repo.write(CF.SHARED, CF._shared(**{str(C_LOCK_LINE): "edited_c = %d  # lock shared\n" % (rnd + 1)}))
+            s.repo.commit("share the save lock (round %d)" % rnd)
+            proc = review_diff_bytes.run_git_diff_three_dot(s.repo.root, s.base, s.repo.git("rev-parse", "HEAD"), timeout=60)
+            return {"fixes": [{"file": CF.SHARED}], "headDiff": proc.stdout.decode("utf-8"), "changedSubjects": ["Code"]}
+        out = base(phase, payload, rnd)
+        if phase == RD.P_AUDITS:
+            by_id = {t["id"]: t for t in payload["targets"]}
+            for result in out["results"]:
+                target = by_id[result["id"]]
+                result["ruling"] = "discharged" if target["title"] == C_LOCK else "not-discharged"
+                if member_answer is not None and target.get("mergedMembers"):
+                    result["members"] = [_answer(m["id"], member_answer) for m in target["mergedMembers"]]
+        return out
+
+    terminal, seen = CF._run(s, respond, limit=80)
+    state = s.state()
+    account = RS.account_from_session(s.dir, TRRS.extras())["findings"]
+    return s, state, batches, terminal, seen, {f["title"]: f for f in account}, carried[SC.FINDING_KEY_FIELD]
+
+
+def _reopened_rounds(state):
+    return [rec["membersReopened"] for rec in state["rounds"].values() if rec.get("membersReopened")]
+
+
+def test_carried_arm_a_the_carried_finding_merged_into_the_lock_and_not_answered_is_reopened_and_never_reads_fixed(tmp_path, monkeypatch):
+    s, state, batches, terminal, seen, by_title, ckey = _carried_arm(tmp_path, monkeypatch, True, None)
+    assert batches[0][1] == [C_LOCK], "the carried CHECK was merged into LOCK, so only LOCK is fixed first: %s" % (batches,)
+    reopened = _reopened_rounds(state)
+    assert [row["findingKey"] for rows in reopened for row in rows] == [ckey], reopened
+    assert reopened[0][0]["answer"] is None
+    assert any(C_CHECK in titles for _round, titles in batches[1:]), "CHECK is in a later apply-fixes batch: %s" % (batches,)
+    assert terminal["payload"]["verdict"] != "converged", seen
+    assert by_title[C_LOCK]["outcome"] == "fixed"
+    assert by_title[C_CHECK]["outcome"] == "left-for-owner", by_title[C_CHECK]
+    assert "(merged into" not in by_title[C_CHECK]["reason"]
+
+
+def test_carried_arm_a2_the_carried_finding_the_auditor_answers_fixed_on_the_lock_target_reads_fixed_with_the_merge_in_its_reason(tmp_path, monkeypatch):
+    s, state, batches, terminal, seen, by_title, ckey = _carried_arm(tmp_path, monkeypatch, True, True)
+    assert batches[0][1] == [C_LOCK], batches
+    assert not _reopened_rounds(state), "the audit answered CHECK fixed: nothing is reopened"
+    assert by_title[C_LOCK]["outcome"] == "fixed"
+    check = by_title[C_CHECK]
+    assert check["outcome"] == "fixed", check
+    assert check["reason"].endswith(" (merged into %s)" % by_title[C_LOCK]["id"]), check
+    assert RS.merged_into(check["reason"]) == by_title[C_LOCK]["id"]
+
+
+def test_carried_arm_b_with_no_merge_the_carried_finding_is_left_for_the_owner_at_the_cap_as_before(tmp_path, monkeypatch):
+    s, state, batches, terminal, seen, by_title, ckey = _carried_arm(tmp_path, monkeypatch, False, None)
+    assert sorted(batches[0][1]) == sorted([C_LOCK, C_CHECK]), batches
+    assert not _reopened_rounds(state)
+    assert terminal["payload"]["verdict"] == "handed-back", seen
+    assert by_title[C_LOCK]["outcome"] == "fixed"
+    check = by_title[C_CHECK]
+    assert check["outcome"] == "left-for-owner" and "still open when the loop reached its round cap" in check["reason"], check
