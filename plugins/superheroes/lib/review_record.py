@@ -2305,12 +2305,13 @@ def _visible_controls(text):
 
 
 def _scrub_text(text):
-    """A record string: control codes shown as stand-ins, then withheld whole when it holds a credential-shaped
-    assignment, else scrubbed of token shapes."""
-    text = _visible_controls(text)  # axis: no record string reaches the JSON dump holding a code GitHub rewrites — see bite-proof record wo_2490_controls
-    if _has_secret(text):
+    """A record string: withheld whole when it, or its stand-in form, holds a credential-shaped assignment, else its
+    stand-in form scrubbed of token shapes."""
+    shown = _visible_controls(text)  # axis: no record string reaches the JSON dump holding a code GitHub rewrites — see bite-proof record wo_2490_controls
+    # axis: the secret check runs on the original text as well as the stand-in text, so a stand-in never hides a credential the original showed — see bite-proof record wo_2490_controls
+    if _has_secret(text) or _has_secret(shown):
         return _WITHHELD_FIELD
-    return pr_comment.scrub(text)
+    return pr_comment.scrub(shown)
 
 
 def _scrubbed(value):

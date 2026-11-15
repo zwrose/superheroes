@@ -230,6 +230,17 @@ def test_t3_a_key_that_is_secret_only_once_its_ansi_is_removed_hides_its_value()
     assert value not in json.dumps(out) and list(out.values()) == ["[REDACTED]"]
 
 
+@pytest.mark.parametrize("text", [
+    "password" + C1_CSI + ": " + "x" * 8,
+    ESC + "[password: " + "x" * 8,
+    "pass" + ESC + "[0m" + "word = " + "x" * 8,
+], ids=["c1-gap", "ansi-eats-key-letter", "secret-only-once-stood-in"])
+def test_t3_a_record_string_whose_original_or_stand_in_holds_a_credential_is_withheld(text):
+    # axis: the secret check runs on the original and the stand-in text, so neither a stand-in nor a removed sequence lets a credential through
+    assert rr._scrub_text(text) == rr._WITHHELD_FIELD
+    assert "x" * 8 not in json.dumps(rr._scrubbed({"body": text}))
+
+
 # --- T4: raw output ---
 
 def test_t4_a_raw_output_with_colour_codes_posts_no_rewritable_code_and_reads_back_matched(tmp_path):
