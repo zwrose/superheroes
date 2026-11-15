@@ -624,7 +624,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         "required": ["id", "ruling", "reason", "checks"],
         "optional": ["newIssues", "evidence", "auditorVendor", "unnamedChange",
                      "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts",
-                     "testMatch", "places"],
+                     "testMatch", "places", "members"],
         "conditional": {
             "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
         },
@@ -643,6 +643,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "unnamedChangeReverts": "list",
             "testMatch": "any",
             "places": "list",
+            "members": "list",
         },
         "elements": {
             "newIssues": {"required": [], "optional": [], "types": {}, "enums": {}},
