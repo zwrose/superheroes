@@ -218,7 +218,7 @@ The record says reviewed only when all four hold: every finding in the account h
 reason, except as the next group says; no planned review is missing and a planned reviewer ran; no raw
 output file is unread; and the final commit was read from the PR. A reviewed record means the change is
 low-risk to merge: every reviewer ran on this commit, the loop finished, and no Important or worse
-finding is open without a decision. CI is no part of the certificate: the vet and the merge read it on the
+finding is open without a decision; the record shows it as: every planned review ran, and at least one planned reviewer's run covers the final commit; a reviewer listed for an earlier commit counts only for that commit. CI is no part of the certificate: the vet and the merge read it on the
 head themselves.
 At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
 commit counts as run only for that commit, and the record shows which commit it covered; a head that

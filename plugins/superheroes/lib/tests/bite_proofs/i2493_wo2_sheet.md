@@ -326,6 +326,10 @@ Inverse Edit: `elif out == _LEFT and not ...` back to `elif waits and not _text(
 1 passed, 17 deselected in 0.92s
 ```
 
+### later change (WO-5)
+
+The red and green above were run on the clause as it read then. The clause and the key check below it now read `elif (out == _LEFT or waits) and not _text(f.get("consequence")):` (670) and `if _text(name) and (out == _LEFT or waits) and not (f.get("findingKey") or f.get("id")):` (674), so a left-for-owner repeat that another finding holds is asked for both again. The new test `test_s_record_a_held_left_for_owner_repeat_still_needs_a_consequence_and_a_key` (two parameters) ran green with the file (23 passed); **no neutralization was run for it** (the order named none and the command budget held no run for one), so it is **unproven** as a detector.
+
 ## E-account: the listed accounting target
 
 - **guarded element:** `pr_sheet.py` `_check_accounting`, `elif targets[0] == "listed" and not (isinstance(value["listed"], str) and listed_keys.get(value["listed"], 0) == 1):` (1048).
@@ -375,3 +379,118 @@ Inverse Edit: the clause back to `not (isinstance(value["listed"], str) and list
 ....                                                                     [100%]
 4 passed, 14 deselected in 1.02s
 ```
+
+## E-listed-unique: a listed key shared by two listed findings names none (WO-5)
+
+Commands for this and the next two entries: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/superheroes-pyc-wo5 -m pytest <node id> -q -p no:xdist`; the launcher's `UV_NATIVE_TLS` warning line is left out. Each neutralization and restore is one Edit-tool edit; no `git checkout`, `git restore`, `git reset` or `git stash`. Nothing quoted is secret; nothing is redacted. Captures are far under the ceilings.
+
+- **guarded element:** `pr_sheet.py` `_check_accounting`, `listed_keys.get(value["listed"], 0) == 1` (1049).
+- **axis:** a `listed` target names exactly one listed finding; a key two listed findings share names none.
+- **neutralization:** `== 1` to `>= 1` in that clause.
+- **detector:** `test_s_accounting_a_listed_key_shared_by_two_listed_findings_is_refused`
+
+### raw red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_s_accounting_a_listed_key_shared_by_two_listed_findings_is_refused ____
+
+    def test_s_accounting_a_listed_key_shared_by_two_listed_findings_is_refused():
+        """axis: E-listed-unique: a listed target needs a key that names exactly one listed finding; two sharing a key name none."""
+        first, second = minor("L1", False), minor("L2", False)
+        second["id"] = first["id"]  # the collision, built as test_pr_sheet.py's _ambiguous builds it: the two share one reviewer id
+        body = ACCEPTING + "- Minor label wording is accepted.\n"
+        bullet = pr_sheet.listed_bullets(10, body)[0][0]
+        advisor = pr_input(accounting={bullet: {"listed": first["id"]}})
+>       problems = refused([record(10, [first, second])], advisor, {10: body})
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_pr_sheet_listed_2493.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+records = [{'schema': 'review-record/1', 'pr': 10, 'sessionId': 'session-5', 'lane': {'value': 'full', 'reason': 'A new table holds money.', 'source': 'PR lane call'}, ...}]
+advisor = {'schema': 'pr-sheet-input/1', 'kind': 'pr', 'number': 10, 'title': 'Round the balance', ...}
+bodies = {10: "## What we're accepting\n\n- Minor label wording is accepted.\n"}
+
+    def refused(records, advisor, bodies):
+>       with pytest.raises(pr_sheet.Refusal) as caught:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE Refusal
+
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_pr_sheet_fixed_above_2332.py:48: Failed
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_listed_2493.py::test_s_accounting_a_listed_key_shared_by_two_listed_findings_is_refused
+1 failed in 4.84s
+```
+
+### restore
+
+Inverse Edit: `>= 1` back to `== 1`.
+
+### restore receipt
+
+```
+1049:            elif targets[0] == "listed" and not (isinstance(value["listed"], str) and listed_keys.get(value["listed"], 0) == 1):
+```
+
+### raw green
+
+```
+.                                                                        [100%]
+1 passed in 1.65s
+```
+
+## E-history-owned: the history's owned leftovers are the waiting findings (WO-5)
+
+- **guarded element:** `pr_sheet.py` `build`, the `owned` list's predicate (1443).
+- **axis:** a `whatIsMissing` leftover line of a waiting finding, a no-outcome Minor in a risk area included, is counted as an owned leftover, not printed as an incomplete record.
+- **neutralization:** the predicate `review_record.waits_for_owner(f, r["findings"])` to `f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"])`.
+- **detector:** `test_s_history_a_waiting_minor_in_an_uncleared_record_shows_the_leftover_line_and_no_incomplete_line`
+
+### raw red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_s_history_a_waiting_minor_in_an_uncleared_record_shows_the_leftover_line_and_no_incomplete_line _
+
+    def test_s_history_a_waiting_minor_in_an_uncleared_record_shows_the_leftover_line_and_no_incomplete_line():
+        """axis: E-history-owned: a waiting no-outcome Minor's whatIsMissing line is an owned leftover, not an incomplete line."""
+        waiting = minor("W1", True, outcome=None, reason=None)
+        rec = {**record(10, [waiting]), "status": "awaits-owner", "whatIsMissing": [review_record.leftover_line(waiting)]}
+        sheet = build([rec], pr_input(leftovers={waiting["findingKey"]: ENTRY}))
+        history = sheet["prSheet"]["history"]
+>       assert WORDS["historyLeftover"] in history, history
+E       AssertionError: ['2 rounds ran.', "The review record is incomplete: finding W1 waits for the owner's decision."]
+E       assert '1 finding is left for you below.' in ['2 rounds ran.', "The review record is incomplete: finding W1 waits for the owner's decision."]
+
+/home/user/wt-2493/plugins/superheroes/lib/tests/test_pr_sheet_listed_2493.py:166: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_listed_2493.py::test_s_history_a_waiting_minor_in_an_uncleared_record_shows_the_leftover_line_and_no_incomplete_line
+1 failed in 1.39s
+```
+
+### restore
+
+Inverse Edit: the predicate back to `review_record.waits_for_owner(f, r["findings"])`.
+
+### restore receipt
+
+```
+1443:        owned = [review_record.leftover_line(f) for f in r["findings"] if review_record.waits_for_owner(f, r["findings"])]
+```
+
+### raw green
+
+```
+.                                                                        [100%]
+1 passed in 0.91s
+```
+
+## E-listed-state: a listed-accounted bullet never counts toward the zero-card listed state (WO-5)
+
+- **guarded element:** `pr_sheet.py` `build`, the `left` build that leaves out `shown_listed` bullets (about 1483-1488).
+- **axis:** a bullet accounted `{"listed": key}` is left out of the bullets `nothingListed` and `canonAccounted` are read from, like a fixed-above one.
+- **detector:** `test_s_accounting_a_listed_bullet_is_not_counted_toward_the_zero_card_listed_state` (ran green with the file: 23 passed).
+- **status: unproven.** The order named a bite-proof for two elements only (E-listed-unique, E-history-owned) and a budget of two red runs, so **no neutralization was run** for this element and no red was observed. The protection of this detector is unverified until a run that drops `and bullet not in shown_listed` from the `left` build shows that test red.

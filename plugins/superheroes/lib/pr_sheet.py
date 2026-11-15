@@ -31,7 +31,8 @@ then; prSheet.canonAccounted lists the Canon entry ids (sorted, distinct) when e
 acceptance and every listed acceptance is accounted to a Canon ruling, and those surfaces say it was checked and all covered by
 Canon rulings; with neither field (a sheet built through the API with no bodies, or an earlier one) they say the sheet was not
 checked against the bodies. The two fields never come together. A fixed-above bullet (below) counts toward neither: it is left
-out of the bullets nothingListed and canonAccounted are read from. The build also reads the body's degradations list
+out of the bullets nothingListed and canonAccounted are read from. So is a bullet accounted to a listed finding, which the sheet
+shows in its listed part. The build also reads the body's degradations list
 (degradations_listed) and refuses a [costly] or unlabelled deviation whose text (after its label) appears in no What we're
 accepting line, naming the bullet; a [harmless] one never needs a line.
 A left-for-owner finding that an acceptance names with `fixed-above #<PR> <commit>` (leftover_accepting.fixed_above) is read only when
@@ -665,12 +666,12 @@ def _record(raw, n, problems):
         # axis: a null outcome is admitted only on a finding the record lists or cards (a Minor or Nit); every other null is refused — see bite-proof record i2493_wo2_sheet (E-null, E-null-important)
         elif out not in rfs.OUTCOMES and not (out is None and (review_record.listed_for_merge(f) or waits)):
             problems.append(f"{where}: finding {name!r} has outcome {out!r}, not one of {', '.join(rfs.OUTCOMES)}")
-        # axis: every finding that waits for the owner needs a consequence, whatever its outcome — see bite-proof record i2493_wo2_sheet (E-consequence)
-        elif waits and not _text(f.get("consequence")):
+        # axis: every finding that waits for the owner needs a consequence, whatever its outcome; a left-for-owner finding of any kind (a held repeat too) needs one — see bite-proof record i2493_wo2_sheet (E-consequence)
+        elif (out == _LEFT or waits) and not _text(f.get("consequence")):
             problems.append(f"{where}: left-for-owner finding {name!r} has no consequence")
         elif out in (_CRAFT, _RULING, _SHOWN_WRONG) and not _text(f.get("reason")):
             problems.append(f"{where}: {out} finding {name!r} has no reason")
-        if _text(name) and waits and not (f.get("findingKey") or f.get("id")):
+        if _text(name) and (out == _LEFT or waits) and not (f.get("findingKey") or f.get("id")):
             problems.append(f"{where}: left-for-owner finding {name!r} has no findingKey or id, so the advisor's input cannot name it")
     return rec
 
@@ -1479,7 +1480,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         "craft": craft, "alreadyDecided": decided, **({"listed": merge_listed} if merge_listed else {}),
         **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
     # axis: a fixed-above bullet is accounted by itself and never counts toward the listed state
-    left = {pr: [(bullet, text) for bullet, text in bullets if bullet not in auto] for pr, bullets in listed.items()}
+    # axis: a bullet accounted to a listed finding is shown in the listed part and never counts toward the listed state — see bite-proof record i2493_wo2_sheet (E-listed-state)
+    accounted = advisor.get("accounting", {})
+    shown_listed = {bullet for bullets in listed.values() for bullet, _ in bullets
+                    if isinstance(accounted.get(bullet), dict) and "listed" in accounted[bullet]}
+    left = {pr: [(bullet, text) for bullet, text in bullets if bullet not in auto and bullet not in shown_listed]
+            for pr, bullets in listed.items()}
     if bodies is not None and not any(left.values()):  # every covered body was read and none lists an acceptance (but a fixed-above one)
         sheet["nothingListed"] = True
     elif bodies is not None:  # at least one is listed: Canon alone covers them all when every bullet is accounted to a Canon ruling

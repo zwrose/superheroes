@@ -10,6 +10,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 import pr_sheet
+import review_record
 import sheet_prose
 from test_pr_sheet import SCHEMA, THEME, WORDS, build, problems_of
 from test_pr_sheet_fixed_above_2332 import ACCEPTING, make, pr_input, record, refused
@@ -118,6 +119,27 @@ def test_s_accounting_a_listed_target_naming_no_listed_finding_is_refused(name, 
     assert any(f'names listed "{wanted}", which names no one finding listed for the merge verdict' in p for p in problems), problems
 
 
+def test_s_accounting_a_listed_key_shared_by_two_listed_findings_is_refused():
+    """axis: E-listed-unique: a listed target needs a key that names exactly one listed finding; two sharing a key name none."""
+    first, second = minor("L1", False), minor("L2", False)
+    second["id"] = first["id"]  # the collision, built as test_pr_sheet.py's _ambiguous builds it: the two share one reviewer id
+    body = ACCEPTING + "- Minor label wording is accepted.\n"
+    bullet = pr_sheet.listed_bullets(10, body)[0][0]
+    advisor = pr_input(accounting={bullet: {"listed": first["id"]}})
+    problems = refused([record(10, [first, second])], advisor, {10: body})
+    assert any(f'names listed "{first["id"]}", which names no one finding listed for the merge verdict' in p for p in problems), problems
+
+
+def test_s_accounting_a_listed_bullet_is_not_counted_toward_the_zero_card_listed_state():
+    """axis: E-listed-state: a bullet accounted to a listed finding is shown in the listed part, so a zero-card sheet reads nothingListed."""
+    listed = minor("L1", False)
+    body = ACCEPTING + "- Minor label wording is accepted.\n"
+    bullet = pr_sheet.listed_bullets(10, body)[0][0]
+    sheet = make([record(10, [listed])], pr_input(accounting={bullet: {"listed": listed["findingKey"]}}), {10: body})
+    assert sheet["cards"] == [] and sheet["prSheet"]["nothingListed"] is True and "canonAccounted" not in sheet["prSheet"]
+    assert [e["title"] for e in sheet["prSheet"]["listed"]] == ["Title of L1"]
+
+
 def test_s_accounting_the_old_leftover_target_no_longer_names_a_listed_finding():
     """axis: E-account: a listed finding is not in leftovers, so a leftover target naming it is refused."""
     records, advisor, bodies, bullet = accounting_world(lambda listed, waiting: {"leftover": listed["findingKey"]})
@@ -133,6 +155,35 @@ def test_s_history_a_listed_minor_adds_no_history_leftover_line():
     history = sheet["prSheet"]["history"]
     assert WORDS["historyLeftover"] not in history
     assert not any(line.endswith("findings are left for you below.") for line in history), history
+
+
+def test_s_history_a_waiting_minor_in_an_uncleared_record_shows_the_leftover_line_and_no_incomplete_line():
+    """axis: E-history-owned: a waiting no-outcome Minor's whatIsMissing line is an owned leftover, not an incomplete line."""
+    waiting = minor("W1", True, outcome=None, reason=None)
+    rec = {**record(10, [waiting]), "status": "awaits-owner", "whatIsMissing": [review_record.leftover_line(waiting)]}
+    sheet = build([rec], pr_input(leftovers={waiting["findingKey"]: ENTRY}))
+    history = sheet["prSheet"]["history"]
+    assert WORDS["historyLeftover"] in history, history
+    incomplete = WORDS["historyIncomplete"].split("{what}")[0]
+    assert not any(line.startswith(incomplete) for line in history), history
+
+
+@pytest.mark.parametrize("lacks", ["consequence", "key"])
+def test_s_record_a_held_left_for_owner_repeat_still_needs_a_consequence_and_a_key(lacks):
+    """axis: E-consequence: a left-for-owner finding of any kind, a repeat another finding holds included, needs a consequence and a key."""
+    holder = minor("H1", True)
+    repeat = {**minor("H2", True), "repeatOf": {"findingKey": holder["findingKey"]}}
+    assert review_record.repeat_held_elsewhere(repeat, [holder, repeat])
+    if lacks == "consequence":
+        repeat["consequence"] = None
+    else:
+        del repeat["findingKey"], repeat["id"]
+        repeat["title"] = "Title of H2"
+    problems = problems_of([record(10, [holder, repeat])], pr_input(leftovers={holder["findingKey"]: ENTRY}))
+    if lacks == "consequence":
+        assert "record for PR #10: left-for-owner finding 'Title of H2' has no consequence" in problems, problems
+    else:
+        assert any("left-for-owner finding 'Title of H2' has no findingKey or id" in p for p in problems), problems
 
 
 def test_s_schema_a_sheet_with_a_listed_part_validates_and_an_empty_one_does_not():
