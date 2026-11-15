@@ -677,6 +677,8 @@ _REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{};+-*%<>~^")
 _REGEX_AFTER_WORDS = frozenset((
     "return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw",
     "yield", "await", "instanceof"))
+# The ``)`` that closes one of these keywords' parenthesised condition is followed by a statement.
+_REGEX_AFTER_PAREN_WORDS = frozenset(("if", "while", "for", "with"))
 
 
 def _regex_end(line, i):
@@ -709,13 +711,15 @@ def _lexically_masked(lines):
     ``//`` comments, quoted strings (one line each), regex literals (a ``/`` where an expression
     may start, one line each) and template literals with their ``${...}`` expressions (nested
     templates included), so a backtick, quote or comment opener inside a string, regex or
-    comment never shifts its state.
+    comment never shifts its state. A slash after ``}`` is read as division, so a regex that
+    starts a statement right after a closing brace is the one shape it misreads.
     """
     masked = set()
     stack = []  # "tpl" for an open template literal; an int brace depth for a ${...} expression
     block = False
     prev = ""  # the last significant code character ("a" after a literal or an identifier)
     word = ""  # the identifier or keyword that ``prev`` ends, if any
+    parens = []  # one entry per open ``(``: True when it opens an if/while/for/with condition
     for number, line in enumerate(lines, 1):
         if block or (stack and stack[-1] == "tpl"):
             masked.add(number)
@@ -775,6 +779,21 @@ def _lexically_masked(lines):
                     i += 1
                 prev, word = "a", line[start:i]
                 continue
+            if c in "+-" and nxt == c:
+                # ``++`` / ``--``: postfix ends an expression (a slash after it divides); prefix is
+                # followed by an operand, never by a slash.
+                prev, word = "a", ""
+                i += 2
+                continue
+            if c == "(":
+                parens.append(word in _REGEX_AFTER_PAREN_WORDS)
+            elif c == ")":
+                # A ``)`` closing an ``if (…)`` / ``while (…)`` / ``for (…)`` / ``with (…)``
+                # condition is followed by a statement, so a slash after it opens a regex.
+                if parens and parens.pop():
+                    prev, word = "(", ""
+                    i += 1
+                    continue
             if c in "'\"":
                 quote = c
             elif c == "`":

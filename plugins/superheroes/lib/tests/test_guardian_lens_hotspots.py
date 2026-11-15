@@ -2153,3 +2153,37 @@ def test_a_backtick_regex_and_a_division_leave_a_later_template_masked(tmp_path)
         "comment-backtick", "string-backtick"])
 def test_lexical_mask_reads_regex_division_strings_and_comments(source, masked):
     assert hot._lexically_masked(source.splitlines()) == masked
+
+
+@pytest.mark.parametrize("source, masked", [
+    # A slash after postfix ++ / -- divides: the block comment and the template after it still open.
+    ("const r = n++ / d; /*\nfunction example() {}\n*/\n", {2, 3}),
+    ("const r = n-- / `/\nfunction example() {}\n`.length;\n", {2, 3}),
+    # A slash after the ) of an if / while / for condition opens a regex, so its backtick is regex
+    # content; after any other ) it divides.
+    ("if (x) /`/.test(x);\nfunction second() {}\n", set()),
+    ("while (x) /`/.test(x);\nfunction second() {}\n", set()),
+    ("const r = (a) / `\nfunction example() {}\n`.length;\n", {2, 3}),
+], ids=["postfix-increment-then-comment", "postfix-decrement-then-template",
+        "regex-after-if-condition", "regex-after-while-condition", "division-after-paren"])
+def test_lexical_mask_reads_postfix_operators_and_condition_parens(source, masked):
+    assert hot._lexically_masked(source.splitlines()) == masked
+
+
+def test_postfix_division_before_a_comment_keeps_a_healthy_function_measured(tmp_path):
+    source = ("function first(n, d) {\n  const ratio = n++ / d; /*\nfunction example() {}\n  */\n"
+              "  return ratio;\n}\n")
+    run = _span_run(tmp_path, {"pf.js": source}, _span_row("pf.js", "first", 15, 1, 6))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert _span_errors(out) == []
+    assert out["digest"]["files"]["hotspots:pf.js"]["ccn"] == 15
+
+
+def test_a_regex_after_an_if_condition_does_not_mask_a_swallowed_sibling(tmp_path):
+    source = "function first(x) {\n  if (x) /`/.test(x);\n}\nfunction second() {\n  return 1;\n}\n"
+    run = _span_run(tmp_path, {"ifrx.js": source}, _span_row("ifrx.js", "first", 15, 1, 6))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:ifrx.js": _MISREAD_DIGEST}
+    assert _span_errors(out) == [_misread_entry("ifrx.js", "first", 1, 6, "declaration-inside")]
