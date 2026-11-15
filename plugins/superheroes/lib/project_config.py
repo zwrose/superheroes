@@ -45,6 +45,9 @@ CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
 CLOUD_DEPENDENCY_HOOK_SLUG = "cloudDependencyHook"
+DUPLICATION_SKIP_SLUG = "duplicationSkip"
+REASON_DUPLICATION_SKIP_MALFORMED = "duplication-skip-malformed"
+REASON_DUPLICATION_SKIP_UNREADABLE = "duplication-skip-unreadable"
 MATERIAL_LINE_MARKER_CANON = "standing-rulings"
 _MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
@@ -201,6 +204,14 @@ ITEMS = (
         "shape": "boolean",
         "plugin_default": None,
     },
+    {
+        "number": 20,
+        "slug": "duplicationSkip",
+        "name": "Duplication skip trees",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "globList",
+        "plugin_default": None,
+    },
 )
 
 _SLUG_INDEX = {item["slug"]: item for item in ITEMS}
@@ -322,6 +333,13 @@ def _validate_inputs_not_secret_shaped(inputs):
     return None
 
 
+def _validate_glob_list(value):
+    # axis: a duplication-skip value that is not a list of non-empty, non-absolute strings is refused at set
+    if core_md.validate_size_exclude(value):
+        return REASON_MALFORMED_VALUE
+    return None
+
+
 def _validate_boolean(value):
     if not isinstance(value, bool):
         return REASON_MALFORMED_VALUE
@@ -377,6 +395,7 @@ _VALIDATORS = {
     "pathList": _validate_path_list,
     "commandList": _validate_command_list,
     "inputPathList": _validate_input_path_list,
+    "globList": _validate_glob_list,
     "boolean": _validate_boolean,
     "conditionWindows": _validate_condition_windows,
     "guardianCadence": _validate_guardian_cadence,
@@ -395,6 +414,47 @@ def validate_item_value(item, value):
 
 def _item_by_slug(slug):
     return _SLUG_INDEX.get(slug)
+
+
+def read_duplication_skip(cwd, root=None):
+    """The globs the guardian duplication lens skips, as ``{"globs", "reason", "detail"}``.
+    Total and read-only: never raises, never writes. An absent core.md or an unset item skips
+    nothing with reason None; a valid value reads back as a copy; a malformed value or an
+    unreadable core.md skips nothing and names why."""
+    # axis: a stored value that cannot be used skips nothing and names why, and the reader never raises
+    def skip_nothing(reason=None, detail=None):
+        return {"globs": [], "reason": reason, "detail": detail}
+
+    try:
+        try:
+            path = core_md._size_exclude_core_path(cwd, root)
+        except core_md.RepoRootUnavailable as exc:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "repo-root-unavailable: %s" % core_md.gate_refusal_detail(exc),
+            )
+        if path is None:
+            return skip_nothing()
+        facts = core_md.read(cwd, root, persist_backfill=False)
+        if facts is None:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-unreadable: core.md could not be read or parsed",
+            )
+        mapping = _project_config_mapping(facts)
+        raw = _read_project_config_raw(mapping, DUPLICATION_SKIP_SLUG)
+        if raw is None:
+            return skip_nothing()
+        if validate_item_value(_item_by_slug(DUPLICATION_SKIP_SLUG), raw) is not None:
+            problems = core_md.validate_size_exclude(raw)
+            detail = problems[0]["reason"] if problems else "not a list of globs"
+            return skip_nothing(REASON_DUPLICATION_SKIP_MALFORMED, detail)
+        return {"globs": list(raw), "reason": None, "detail": None}
+    except Exception as exc:
+        return skip_nothing(
+            REASON_DUPLICATION_SKIP_UNREADABLE,
+            "unexpected %s: %s" % (type(exc).__name__, exc),
+        )
 
 
 def _guardian_cadence_raw(cwd, root, *, persist_backfill=True):
