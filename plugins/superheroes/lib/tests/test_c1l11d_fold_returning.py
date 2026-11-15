@@ -173,7 +173,8 @@ def test_c3_a_pending_record_produced_by_the_writer_settles_when_ci_turns_green(
     s = TC._empty_session(tmp_path, monkeypatch)
     fake = TC.TRRS.Fake(head=s.head)
     rec = RR.build_record(TC._acct(s), TC._readers_with(TC.TRRS.Fake(head=s.reviewed), TC._PENDING))
-    assert rec["ci"]["state"] == "pending" and rec["status"] == "not-reviewed", rec  # the writer's own pending record
+    assert rec["ci"]["state"] == "pending" and rec["status"] == "reviewed", rec  # the writer's own pending record: CI is no part of the certificate (#2493)
+    assert not [line for line in rec["whatIsMissing"] if line.startswith("CI ")], rec["whatIsMissing"]
     fake.comments.append({"id": 1, "author": "bot", "body": RR.render(rec), "url": "http://c/earlier"})
     out = TC._send(tmp_path, s, fake)
     assert out["ok"] is True and out["status"] == "reviewed", out
