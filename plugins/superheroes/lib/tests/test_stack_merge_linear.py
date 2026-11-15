@@ -181,19 +181,27 @@ def _unreadable(reason="linearity-unreadable", detail="layer 104: commit list un
     return {"ok": False, "linear": None, "reason": reason, "detail": detail, "layers": []}
 
 
+def _slots_fits():
+    return {"ok": True, "fits": True, "queue": True, "limit": 5, "queued": 0, "free": 5,
+            "layers": 3, "reads": {"rules": "ok", "graphql": "ok"}, "reason": None,
+            "detail": None, "repo": REPO, "branch": "main"}
+
+
 class _Env:
-    """Fakes for the three readers. Each answer is a value or a callable of the call's kwargs;
-    `on_call[name]` runs on every call (a test uses it to move the clock)."""
+    """Fakes for the readers (and the slots read). Each answer is a value or a callable of the
+    call's kwargs; `on_call[name]` runs on every call (a test uses it to move the clock)."""
 
     def __init__(self, monkeypatch):
         self.read_membership = _membership()
         self.merge_queue = _queue_answer(True)
         self.check_rest = _linear_ok()
-        self.calls = {"read_membership": [], "merge_queue": [], "check_rest": []}
+        self.slots = _slots_fits()
+        self.calls = {"read_membership": [], "merge_queue": [], "check_rest": [], "slots": []}
         self.on_call = {}
         monkeypatch.setattr(stack_check, "read_membership", self._fake("read_membership"))
         monkeypatch.setattr(merge_queue, "read", self._fake("merge_queue"))
         monkeypatch.setattr(stack_linear, "check_rest", self._fake("check_rest"))
+        monkeypatch.setattr(merge_queue, "slots", self._fake("slots"))
 
     def _fake(self, name):
         def _answer(**kwargs):
@@ -486,7 +494,14 @@ def _e2e_run(commits):
     with no merge_queue row, and `commits` (pull request number -> rows) for the commit pages."""
     calls = []
     pull = _fixture_text("pulls_2077.json")
-    stack = _fixture_text("stacks_2078.json")
+    # The recorded stack was read after it merged, so its members read MERGED; the gate counts
+    # only unmerged layers as needing a build slot, so the stack is served as the open stack it
+    # was when it went to merge (state open, no merged_at), every other recorded field kept.
+    recorded = json.loads(_fixture_text("stacks_2078.json"))
+    for member in recorded["pull_requests"]:
+        member["state"] = "open"
+        member["merged_at"] = None
+    stack = json.dumps(recorded)
     refused = _proc(_fixture_text("graphql_refused.stdout"), returncode=1,
                     stderr=_fixture_text("graphql_refused.stderr"))
     pages = {
@@ -532,9 +547,35 @@ def test_end_to_end_a_merge_commit_on_an_assumed_queue_base_sends_no_put(commits
     assert ["gh", "api", "repos/zwrose/superheroes/pulls/2077/commits?per_page=100&page=1"] in calls
 
 
-def test_end_to_end_linear_layers_on_an_assumed_queue_base_send_the_put_and_merge():
+def test_end_to_end_linear_layers_on_an_assumed_queue_base_are_held_slots_unreadable():
     run, calls = _e2e_run({E2E_LOWER: LINEAR_ROWS, E2E_TOP: LINEAR_ROWS})
     result = sm.merge(repo=E2E_REPO, top=E2E_TOP, sha=SHA, run=run, poll_timeout=60)
+    _assert_refusal(result, "queue-slots-unreadable")
+    assert _sent_put(calls) == []
+    assert [c for c in calls if c[:3] == ["gh", "api", "graphql"]
+            and any("maximumEntriesToBuild" in part for part in c)]
+
+
+SLOTS_QUEUE_BODY = {"data": {"repository": {"mergeQueue": {
+    "configuration": {"maximumEntriesToBuild": 5}, "entries": {"totalCount": 0}}}}}
+
+
+def test_end_to_end_linear_layers_with_a_readable_queue_that_has_room_merge():
+    """The same fake as the held test, except that the GraphQL slots query answers a queue that
+    builds 5 entries at a time and holds none; every other GraphQL read (membership, queue
+    existence) stays refused and the rules list has no merge_queue row (a classic-protection
+    queue). UNMEASURED: the slots success body is taken from GitHub's published GraphQL schema
+    (fetched 2026-11-14), not recorded from a live repository."""
+    inner, calls = _e2e_run({E2E_LOWER: LINEAR_ROWS, E2E_TOP: LINEAR_ROWS})
+
+    def _run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "graphql"] and any(
+                "maximumEntriesToBuild" in part for part in argv):
+            calls.append(list(argv))
+            return _proc(json.dumps(SLOTS_QUEUE_BODY))
+        return inner(argv, **kwargs)
+
+    result = sm.merge(repo=E2E_REPO, top=E2E_TOP, sha=SHA, run=_run, poll_timeout=60)
     _assert_merged(result)
     assert len(_sent_put(calls)) == 1
     assert calls[-1][:4] == ["gh", "api", "-X", "PUT"]
