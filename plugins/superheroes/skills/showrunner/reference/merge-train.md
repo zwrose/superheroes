@@ -176,10 +176,14 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    (e) **Prove before pushing.** `python3 -B <plugin root>/lib/stack_linear.py prove --repo-root
    <clone> --base <base> --layer <branch> <vetted head> <new head> <pr> ... --pr-body <pr> <file>
    ...`, one `--layer` and one `--pr-body` per layer, bottom to top. Save each layer's current PR
-   body to a file first (`gh api repos/<o>/<r>/pulls/<n> --jq .body`). Any refusal stops, and
-   nothing is pushed. `tree-changed` means the rebase changed a
-   file: treat it as a content change, which falls to the "content changed" branch (the
-   unequal-digest branch of `skills/showrunner/reference/vet-receipt.md` spine field 1), never a push.
+   body to a file first, by a read whose exit status is checked (`gh api repos/<o>/<r>/pulls/<n>
+   --jq .body > <file>` and its exit status 0); a non-zero exit stops the straightening, and
+   nothing is pushed. `prove` refuses `pr-body-not-vetted` for a file that does not hold exactly
+   one `<!-- superheroes:advisor-vet -->` marker line, so a failed or empty save can never read as
+   a body with no fixed-above line. Any refusal stops, and nothing is pushed. `tree-changed`
+   means the rebase changed a file: treat it as a content change, which falls to the "content
+   changed" branch (the unequal-digest branch of `skills/showrunner/reference/vet-receipt.md`
+   spine field 1), never a push.
    On `fixed-above-stale`, edit each named line in that layer's saved body file, never the PR
    itself, to the `replacement` `prove` printed (the rewritten head, whose files `prove` showed
    unchanged), and re-run `prove` on the edited files; nothing is pushed until it passes, and no PR
@@ -193,10 +197,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    refused lease (a head moved since the vet) fails the whole push: re-read and start over. A
    refused push changed no branch and no PR body, so every fixed-above line still names a commit
    its layer holds. Only after the push succeeds, publish each edited body file to its PR
-   (`gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@<file>`), read it back, and record each swap
-   with the dated re-pin line. If a publish fails after the push, save every layer's current PR
-   body again and re-run `prove` with the same layers: it names each line still stale, with its
-   replacement; publish those and run it again until it passes.
+   (`gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@<file>`), which is where the advisor edits
+   the fixed-above lines in the PR descriptions, read it back, and record each swap with the dated
+   re-pin line. If a publish fails after the push, save every layer's current PR body again by the
+   same checked read and re-run `prove` with the same layers: it names each line still stale, with
+   its replacement; publish those and run it again until it passes.
 
    (g) **Re-pin and merge.** Re-pin each layer's receipt with the `repin` line `prove` printed
    (old head, new head, equal tree hash). Wait for CI green on every new head, selected by workflow

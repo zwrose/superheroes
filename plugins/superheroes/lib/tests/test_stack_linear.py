@@ -1306,6 +1306,9 @@ def test_cli_check_needs_exactly_one_form(capsys, argv):
     assert gh.calls == []
 
 
+MARKER = "<!-- superheroes:advisor-vet -->"
+
+
 def _body_args(tmp_path, texts):
     """The `--pr-body <pr> <file>` argv for {pr: body text}, each body written to its own file."""
     argv = []
@@ -1320,7 +1323,7 @@ def test_cli_prove_proven_prints_repin_and_push(stack, capsys, tmp_path):
     argv = ["prove", "--repo-root", stack.repo, "--base", stack.base, "--remote", "upstream"]
     for i in range(3):
         argv += ["--layer", stack.branches[i], stack.vetted[i], stack.new[i], str(PRS[i])]
-    argv += _body_args(tmp_path, {pr: "no claim\n" for pr in PRS})
+    argv += _body_args(tmp_path, {pr: "no claim\n" + MARKER + "\n" for pr in PRS})
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 0
     assert result["proven"] is True and len(result["repin"]) == 3
@@ -1331,7 +1334,7 @@ def test_cli_prove_proven_prints_repin_and_push(stack, capsys, tmp_path):
 def test_cli_prove_refusal_exits_one(stack, capsys, tmp_path):
     argv = ["prove", "--repo-root", stack.repo, "--base", stack.base,
             "--layer", "l1", stack.vetted[0], stack.vetted[0], "101"]
-    argv += _body_args(tmp_path, {101: "no claim\n"})
+    argv += _body_args(tmp_path, {101: "no claim\n" + MARKER + "\n"})
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 1
     assert result["reason"] == "merge-commit-remains" and result["push"] is None
@@ -1363,7 +1366,7 @@ def test_cli_malformed_is_bad_argument_json_exit_one(capsys, argv):
 def test_cli_exit_code_is_zero_only_when_ok(stack, capsys, tmp_path):
     # a result that is a refusal exits 1 even though it printed a full JSON result
     argv = ["prove", "--repo-root", stack.repo, "--base", "no-such-ref", "--layer", "l1", "a", "b",
-            "101"] + _body_args(tmp_path, {101: "no claim\n"})
+            "101"] + _body_args(tmp_path, {101: "no claim\n" + MARKER + "\n"})
     code, result = _cli(capsys, argv, run=_GitRun())
     assert code == 1 and result["reason"] == "git-failed"
 
@@ -1377,7 +1380,8 @@ def _prove_argv(stack, *, prs=PRS):
 
 def test_cli_prove_round_trip_with_bodies_prints_the_exact_push(stack, capsys, tmp_path):
     # each --layer's branch is paired with its own heads and its own pr; the bodies are read from files
-    bodies = {101: "- F-1 %s\n" % _line(102, stack.new[1]), 102: "No claim.\n", 103: "é no claim\n"}
+    bodies = {101: "- F-1 %s\n" % _line(102, stack.new[1]) + MARKER + "\n",
+              102: "No claim.\n" + MARKER + "\n", 103: "é no claim\n" + MARKER + "\n"}
     argv = _prove_argv(stack) + _body_args(tmp_path, bodies)
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 0 and result["proven"] is True and result["fixedAbove"] == []
@@ -1392,7 +1396,8 @@ def test_cli_prove_round_trip_with_bodies_prints_the_exact_push(stack, capsys, t
 
 def test_cli_prove_stale_line_exits_one_with_the_replacement(stack, capsys, tmp_path):
     stale = _line(103, stack.vetted[2])
-    argv = _prove_argv(stack) + _body_args(tmp_path, {101: "x\n", 102: stale + "\n", 103: "y\n"})
+    argv = _prove_argv(stack) + _body_args(
+        tmp_path, {101: "x\n" + MARKER + "\n", 102: stale + "\n" + MARKER + "\n", 103: "y\n" + MARKER + "\n"})
     code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
     assert code == 1 and result["reason"] == "fixed-above-stale" and result["push"] is None
     assert result["fixedAbove"][0]["replacement"] == _line(103, stack.new[2])
@@ -1400,7 +1405,7 @@ def test_cli_prove_stale_line_exits_one_with_the_replacement(stack, capsys, tmp_
 
 def test_cli_prove_without_a_pr_body_for_every_layer_is_bad_argument(stack, capsys, tmp_path):
     run = _GitRun()
-    argv = _prove_argv(stack) + _body_args(tmp_path, {101: "x\n", 102: "y\n"})
+    argv = _prove_argv(stack) + _body_args(tmp_path, {101: "x\n" + MARKER + "\n", 102: "y\n" + MARKER + "\n"})
     code, result = _cli(capsys, argv, run=run, today=TODAY)
     assert code == 1 and result["ok"] is False and result["reason"] == "bad-argument"
     assert "--pr-body" in result["detail"] and "103" in result["detail"]
@@ -1415,7 +1420,8 @@ def test_cli_prove_pr_body_file_that_cannot_be_read_is_bad_argument(stack, capsy
     bad_utf8 = tmp_path / "latin1.md"
     bad_utf8.write_bytes(b"caf\xe9 \xff\xfe\n")
     for path in (str(tmp_path / "missing.md"), str(bad_utf8), str(tmp_path)):
-        files = _body_args(tmp_path, {101: "x\n", 102: "y\n"}) + ["--pr-body", "103", path]
+        files = _body_args(tmp_path, {101: "x\n" + MARKER + "\n", 102: "y\n" + MARKER + "\n"}) + [
+            "--pr-body", "103", path]
         code, result = _cli(capsys, _prove_argv(stack) + files, run=run, today=TODAY)
         assert code == 1 and result["reason"] == "bad-argument", path
         assert "103" in result["detail"] and "UTF-8" in result["detail"]
@@ -1433,9 +1439,9 @@ def test_cli_prove_pr_body_file_that_cannot_be_read_is_bad_argument(stack, capsy
 def test_cli_prove_bad_pr_numbers_are_bad_argument(stack, capsys, tmp_path, extra, layer_pr):
     run = _GitRun()
     path = tmp_path / "f"
-    path.write_text("x\n", encoding="utf-8")
+    path.write_text("x\n" + MARKER + "\n", encoding="utf-8")
     argv = _prove_argv(stack, prs=[101, 102, int(layer_pr) if layer_pr.lstrip("-").isdigit() else layer_pr])
-    argv += _body_args(tmp_path, {101: "x\n", 102: "y\n"})
+    argv += _body_args(tmp_path, {101: "x\n" + MARKER + "\n", 102: "y\n" + MARKER + "\n"})
     argv += [str(path) if token == "f" else token for token in extra]
     code, result = _cli(capsys, argv, run=run, today=TODAY)
     assert code == 1 and result["reason"] == "bad-argument"
@@ -1447,3 +1453,42 @@ def test_cli_prove_three_value_layer_is_the_old_form_and_bad_argument(stack, cap
             "--layer", "l1", stack.vetted[0], stack.new[0]]
     code, result = _cli(capsys, argv, run=_GitRun())
     assert code == 1 and result["reason"] == "bad-argument" and result["push"] is None
+
+
+_NOT_FOUND_JSON = ('{"message":"Not Found","documentation_url":'
+                   '"https://docs.github.com/rest/pulls/pulls#get-a-pull-request","status":"404"}')
+
+
+@pytest.mark.parametrize("text,found", [
+    ("", "no advisor-vet marker line"),
+    ("\n  \n", "no advisor-vet marker line"),
+    (_NOT_FOUND_JSON, "no advisor-vet marker line"),
+    ("A body with no marker.\n- F-1 fixed above: nothing\n", "no advisor-vet marker line"),
+    ("text " + MARKER + " more text\n", "no advisor-vet marker line"),
+    ("one\n" + MARKER + "\ntwo\n  " + MARKER + "  \n", "2 advisor-vet marker lines"),
+], ids=["empty", "blank", "github-404-json", "no-marker", "marker-inside-text", "marker-twice"])
+def test_cli_prove_pr_body_that_is_not_a_vetted_body_refuses_before_any_git(
+        stack, capsys, tmp_path, text, found):
+    # the PR body that is not vetted is PR 102; the other two are healthy
+    run = _GitRun()
+    bodies = {101: "x\n" + MARKER + "\n", 102: text, 103: "y\n" + MARKER + "\n"}
+    argv = _prove_argv(stack) + _body_args(tmp_path, bodies)
+    code, result = _cli(capsys, argv, run=run, today=TODAY)
+    assert code == 1 and result["ok"] is False and result["proven"] is False
+    assert result["reason"] == "pr-body-not-vetted" and result["push"] is None
+    assert "102" in result["detail"] and found in result["detail"]
+    assert run.calls == []
+
+
+def test_cli_prove_vetted_body_with_one_marker_line_and_no_fixed_above_line_proves(
+        stack, capsys, tmp_path):
+    bodies = {101: "- F-1 %s\n" % _line(102, stack.new[1]) + MARKER + "\n",
+              102: "No claim.\n" + MARKER + "\n", 103: "é no claim\n  " + MARKER + "  \n"}
+    argv = _prove_argv(stack) + _body_args(tmp_path, bodies)
+    code, result = _cli(capsys, argv, run=_GitRun(), today=TODAY)
+    assert code == 0 and result["proven"] is True and result["fixedAbove"] == []
+    assert result["push"] == (
+        ["git", "push", "--atomic", "origin"]
+        + ["--force-with-lease=refs/heads/%s:%s" % (stack.branches[i], stack.vetted[i]) for i in range(3)]
+        + ["%s:refs/heads/%s" % (stack.new[i], stack.branches[i]) for i in range(3)]
+    )
