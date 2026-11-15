@@ -187,7 +187,7 @@ def test_engine_preferences_are_pinned(repo, tmp_path):
 def test_store_mode_ratified_residuals_are_pinned(repo, tmp_path):
     # axis: a running session reads the calibration pinned at its start, never the live store
     state_a = RD.new_state(_config(repo), session_dir=_session(tmp_path, "a"))
-    assert state_a["calibrationPin"]["residuals"]["mode"] == "store"
+    assert state_a["calibrationPin"]["residuals"]["storage"] == "store"
     _write_core(repo, [_SECRETS], residuals="Residual: edited ruling.")
     assert state_a["calibrationPin"]["residuals"]["text"] == "Residual: original ruling."
     sources = RD._decision_sources(state_a)

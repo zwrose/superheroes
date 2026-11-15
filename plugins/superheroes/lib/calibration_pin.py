@@ -102,14 +102,14 @@ def _derive(repo_root, core):
     except Exception:
         mode = None
     if mode == mode_registry.IN_REPO:
-        return risk, prefs, {"mode": "in-repo"}
+        return risk, prefs, {"storage": "in-repo"}
     if path:
         text, prov, failure = round_orders.resolve_order_residuals(repo_root, None, core_path=path)
     elif reason == REASON_ABSENT:
         text, prov, failure = round_orders.resolve_order_residuals(repo_root, None)
     else:
         text, prov, failure = "", None, _PREFIX + str(detail)
-    return risk, prefs, {"mode": "store", "text": text, "provenance": prov, "failure": failure}
+    return risk, prefs, {"storage": "store", "text": text, "provenance": prov, "failure": failure}
 
 
 def _write_manifest(session_dir, pin):
@@ -160,4 +160,4 @@ def capture(repo_root, session_dir):
                 "riskAreas": {"declared": False, "areas": None, "malformed": [], "behind": False,
                               "reason": core_md.RISK_AREAS_REASON_UNREADABLE, "detail": _PREFIX + detail},
                 "enginePrefs": engine_pref.refusal_engine_prefs(_PREFIX + detail),
-                "residuals": {"mode": "store", "text": "", "provenance": None, "failure": _PREFIX + detail}}
+                "residuals": {"storage": "store", "text": "", "provenance": None, "failure": _PREFIX + detail}}

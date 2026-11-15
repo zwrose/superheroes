@@ -3059,7 +3059,7 @@ def _decision_sources(state):
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
     sources = finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
     pinned = (_calibration_pin(state) or {}).get("residuals")
-    if isinstance(pinned, dict) and pinned.get("mode") == "store":
+    if isinstance(pinned, dict) and pinned.get("storage") == "store":
         # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
         sources.pop("residualText", None)
         sources.pop("residualSource", None)
@@ -16006,7 +16006,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     pin = _calibration_pin(state)
     pinned_res = (pin or {}).get("residuals")
     # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
-    if isinstance(pinned_res, dict) and pinned_res.get("mode") == "store":
+    if isinstance(pinned_res, dict) and pinned_res.get("storage") == "store":
         residuals, prov, res_failure = (pinned_res.get("text"), pinned_res.get("provenance"),
                                         pinned_res.get("failure"))
     else:
