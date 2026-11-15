@@ -188,6 +188,14 @@ included), and `fixed-above-unverified` when the stack cannot be read. On a stac
 catch-up step (`rubric/native-stacks.md` § How a stack stays current), while the PR's pushed head is
 behind its lower layer's current head, or `stack-lower-unreadable` when that head cannot be read.
 
+**Read the review record write's transit result, in every build.** After every review-record write
+(`review_record.py write`, or the session writer), read its `transit`. On `matched`, nothing is owed.
+Otherwise copy its `transitLine` into the build record's Disclosed degradations as it is (and, in a
+cloud build, into the handback comment too, per `cloud.md` § Text changed in transit). On the refusal
+`review-record-unreadable-after-write` there is no handback: the record is missing, so follow
+`skills/review-code/reference/review-record.md` § When it refuses. This rule applies to local and
+cloud builds alike.
+
 A stacked light-lane layer has no draft stage of its own, so it takes one for this check: push, open
 the PR as a draft, run `vet_slot.py handback --pr <n> --repo <owner/name>` on it, fix and re-run until
 it prints `"ok": true`, then mark it ready.
