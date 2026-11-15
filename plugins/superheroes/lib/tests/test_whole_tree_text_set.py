@@ -63,6 +63,9 @@ EXEMPT = {
     _P + "test_c1l11b_returning_session.py": (
         _NO_MARKDOWN_DIR + "walks the round-1 run directory of a temp session",
         ('for root, _dirs, names in os.walk(top):',)),
+    _P + "test_calibration_pin_2502.py": (
+        _NO_MARKDOWN_DIR + "walks a temp review session's round folder to read its rendered seat orders",
+        ('for root, _dirs, names in os.walk(RR.round_dir(folder, 1)):',)),
     _P + "test_cloud_relay.py": (
         _NO_MARKDOWN_DIR + "lists the relay state directory of a temp world",
         ('assert [n for n in os.listdir(os.path.dirname(_state_file(world))) '
