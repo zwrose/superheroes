@@ -18,6 +18,21 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **Nothing is owed by a caller that does not read the new keys and tokens: a fix-audit target gains `mergedMembers`, an auditor result may carry `members`, an audit entry gains `members` and `membersIgnored`, a fixed disposition gains `memberResults`, a round gains `membersReopened`, and the new decision kind is `merged-member-reopened`.** A merged finding no longer reads `fixed` without its own fix-audit ruling, so expect more fix rounds and more owner cards. See [Review record: a merged finding reads fixed only on its own fix-audit ruling](#review-record-a-merged-finding-reads-fixed-only-on-its-own-fix-audit-ruling).
+
+### Review record: a merged finding reads fixed only on its own fix-audit ruling
+
+- Every fix-audit target carries `mergedMembers`: the findings the synthesis merged into the target's finding, each `{id, title, consequence, file, line, body, suggestion}` (absent parts left out), sorted by `id`. A target with nothing merged into it carries none.
+- The auditor's result may carry `members`, one entry per merged member, `{"id", "fixed", "why"}`. A submit is refused when `members` is not a list or an entry has no usable `id`, a non-boolean `fixed` or a blank `why`. A member counts fixed only on an answer `fixed: true` (answered twice, only when every answer says so); an unanswered member is not fixed; an answer for an id the target does not list is ignored and noted on the audit entry as `membersIgnored`. A member's answer never changes the ruling on the target's own finding, and the audit entry records the judged rows as `members`.
+- When the audit discharges the target, each member answered fixed is listed in the target finding's fixed disposition as `memberResults`, `[{"findingKey", "fixed"}]`, a disposition-family field on the representative's ledger row that is cleared with the family. Each member not answered fixed is reopened: its `mergedInto` is cleared and it gets an audit entry `not-discharged` whose reason names the representative and the member's answer (or that it was not answered). It joins the round's not-discharged targets, so the next round's fix batch takes it, the extra audit round hands the PR back with it open, and, at the cap, the end-of-loop settle leaves it for the owner. The round lists the reopened members in `membersReopened`, `[{findingKey, into, answer}]`, and each is decided `merged-member-reopened`. A target the audit did not discharge keeps its members merged, and they ride its next audit.
+- The record writer: a finding merged into another takes the representative's outcome, and its reason names the representative (` (merged into <id>)`), except `fixed`. A merged finding reads `fixed` only when the representative's `memberResults` holds `fixed: true` for it, and its reason then adds "the fix audit ruled this finding's own part fixed". A merged finding whose representative reads `fixed` (an audited fix, a fix the full panel did not raise again, or a kept repeat's `fixed`) with no such ruling has no outcome while the loop runs (reason: "its representative was fixed, but no fix audit ruled this finding's own part fixed"), so the repeat pool and the carry treat it as open. At the loop's end the settle unmerges it and settles it as an open finding, so it reads `left-for-owner` with `openAtLoopEnd`.
+- A kept repeat that moves to `fixed` when the record is written (its earlier finding reads fixed and it was graded wrong) no longer takes the findings merged into it to `fixed`: they keep their own outcome. Members still follow a repeat to a cited `ruling`.
+- Replacement. None: the keys and the token are additive; a caller that matches the new keys or the decision kind adds them.
+
 ## 0.50.0
 
 ### Before you upgrade
