@@ -285,3 +285,40 @@ def test_the_pin_reads_the_core_the_storage_mode_selects(repo, tmp_path):
     assert pin["files"]["core"]["source"] == _core_file(repo)
     assert [a["name"] for a in pin["riskAreas"]["areas"]] == ["Secrets", "Payments"]
     assert pin["enginePrefs"]["reviewer"] == "codex"
+
+
+def _record_outcome(pinned, live_text):
+    """The outcome the record writer gives a finding ruled by a cited residual, under a live residual text and an
+    optional session pin."""
+    import review_record as rr
+    import test_review_record_carried_recheck as CR
+    ruled = dict(CR.X, outcome="ruling", reason="decided by the residual",
+                 decidedBy={"kind": "residual", "ref": "residual R-7"})
+    acct = dict(CR.account([], [ruled]), **({"pinnedResiduals": pinned} if pinned is not None else {}))
+    readers = {**CR.readers(), "decision_sources": lambda root, base, answers, pr:
+               {"residualText": live_text, "residualSource": "calibration store"}}
+    rec = rr.build_record(acct, readers, prior=CR.PRIOR)
+    return next(f for f in rec["findings"] if f["id"] == CR.X["id"])["outcome"]
+
+
+def test_the_record_settles_cited_residuals_on_the_sessions_pin():
+    # axis: a session's record settles cited residuals on the read the session pinned, never the live store
+    with_r7 = {"storage": "store", "text": "- residual R-7: a known gap", "provenance": None, "failure": None}
+    without = {"storage": "store", "text": "- residual R-1: another gap", "provenance": None, "failure": None}
+    assert _record_outcome(with_r7, "- residual R-1: another gap") == "ruling"  # removed from the live store mid-run
+    assert _record_outcome(without, "- residual R-7: a known gap") != "ruling"  # added live after the session pinned
+    assert _record_outcome(None, "- residual R-7: a known gap") == "ruling"  # an account with no pin reads live
+    assert _record_outcome({"storage": "in-repo"}, "- residual R-7: a known gap") == "ruling"  # base-pinned already
+
+
+def test_the_session_account_carries_the_pinned_residuals(tmp_path):
+    # the session writer hands the record writer the residuals the session pinned; a session with no pin hands none
+    import review_record_session as rs
+    from test_review_record_session import Fake, Session, extras
+    res = {"storage": "store", "text": "- residual R-7: a known gap", "provenance": None, "failure": None}
+    os.makedirs(str(tmp_path / "a"))
+    os.makedirs(str(tmp_path / "b"))
+    pinned = Session(tmp_path / "a", calibrationPin={"residuals": res}).seat("code-reviewer")
+    assert rs.account_from_session(pinned.save(), extras(), Fake().readers())["pinnedResiduals"] == res
+    bare = Session(tmp_path / "b").seat("code-reviewer")
+    assert "pinnedResiduals" not in rs.account_from_session(bare.save(), extras(), Fake().readers())

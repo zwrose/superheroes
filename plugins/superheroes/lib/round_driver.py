@@ -3058,15 +3058,8 @@ def _decision_sources(state):
     residuals. A source that cannot be read is left out — an unresolvable decision is not on record."""
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
     sources = finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
-    pinned = (_calibration_pin(state) or {}).get("residuals")
-    if isinstance(pinned, dict) and pinned.get("storage") == "store":
-        # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
-        sources.pop("residualText", None)
-        sources.pop("residualSource", None)
-        text = pinned.get("text")
-        if not pinned.get("failure") and isinstance(text, str) and text.strip():
-            sources["residualText"], sources["residualSource"] = text, "calibration store"
-    return sources
+    # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+    return calibration_pin.overlay_residuals(sources, (_calibration_pin(state) or {}).get("residuals"))
 
 
 def _compile_drop_recorded(state, drop):

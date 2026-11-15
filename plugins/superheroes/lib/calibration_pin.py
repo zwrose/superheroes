@@ -121,6 +121,19 @@ def _derive(repo_root, core):
     return risk, prefs, {"storage": "store", "text": text, "provenance": prov, "failure": failure}
 
 
+def overlay_residuals(sources, residuals):
+    """``sources`` (a ``finding_outcomes.decision_sources`` result) with a store-mode pinned residual read in
+    place of the live one; unchanged when ``residuals`` is not a store-mode pin. The one home of the overlay:
+    the round driver and the review-record writer both read decisions through it."""
+    if isinstance(sources, dict) and isinstance(residuals, dict) and residuals.get("storage") == "store":
+        sources.pop("residualText", None)
+        sources.pop("residualSource", None)
+        text = residuals.get("text")
+        if not residuals.get("failure") and isinstance(text, str) and text.strip():
+            sources["residualText"], sources["residualSource"] = text, "calibration store"
+    return sources
+
+
 def _write_manifest(session_dir, pin):
     folder = os.path.join(session_dir, PIN_DIR)
     os.makedirs(folder, exist_ok=True)

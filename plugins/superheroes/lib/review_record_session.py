@@ -1697,6 +1697,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
             **({"silenceWatchdogEnds": watchdog_ends} if watchdog_ends else {}),
+            # the residuals the session pinned at its start, so the record settles cited decisions on the same read
+            **({"pinnedResiduals": state["calibrationPin"].get("residuals")}
+               if isinstance(state.get("calibrationPin"), dict) else {}),
             "reviewers": reviewers, "sessionCost": session_cost, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),

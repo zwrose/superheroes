@@ -2033,13 +2033,17 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         return docs
 
     def sources():
-        # Read once, and only when a cited decision needs it: Canon and residuals as the repository holds them now.
+        # Read once, and only when a cited decision needs it: Canon as the repository holds it now, and residuals as
+        # the session pinned them at its start (as the repository holds them now when the account carries no pin).
         if "sources" not in held:
             try:
                 base = rd["decision_sources"](a.get("repoRoot"), a.get("baseRef"), a.get("sheetAnswers"), a["pr"])
             except Exception:  # noqa: BLE001 — fail toward the owner: no sources means no cited decision is on record
                 base = {}
-            held["sources"] = dict(base if isinstance(base, dict) else {}, repo=a["repo"], ownerRulings=owner_ruling_comments())
+            import calibration_pin
+            # axis: a session's record settles cited residuals on the read the session pinned, never the live store
+            base = calibration_pin.overlay_residuals(dict(base if isinstance(base, dict) else {}), a.get("pinnedResiduals"))
+            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments())
         return held["sources"]
 
     def canon_on_record(g):
