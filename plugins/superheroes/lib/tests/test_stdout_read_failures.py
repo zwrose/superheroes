@@ -112,6 +112,7 @@ def _native_review_branch(kind):
             "checks": None,
             "testMatch": None,
             "places": None,
+            "members": None,
             "readParts": None,
             "investigated": investigated,
         }

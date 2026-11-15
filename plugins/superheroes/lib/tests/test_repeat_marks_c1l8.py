@@ -988,8 +988,9 @@ class _Rounds(C1L7.Round):
     fix is followed by a round whose audits decide the fix and whose scoped scan can raise a finding again: a
     finding decided in round ``n`` is an earlier finding from round ``n + 1`` on."""
 
-    def __init__(self, tmp_path, round1, scoped, verdicts=None, synth=None):
+    def __init__(self, tmp_path, round1, scoped, verdicts=None, synth=None, members_fixed=False):
         super().__init__(tmp_path, first={})
+        self.members_fixed = members_fixed  # True: the fix audit answers every `mergedMembers` entry of a target `fixed`
         self.cfg["diff"] = C1L7._DIFF + TRD._newsurf("0")
         self.cfg["repoRoot"] = self.checkout  # the repeat table reads whether the code changed between two heads
         self.round1, self.scoped, self.verdicts = list(round1), scoped, verdicts or {}
@@ -1018,6 +1019,14 @@ class _Rounds(C1L7.Round):
             return {"grouping": self.synth(rnd, payload)}
         if phase == RD.P_APPLY_FIXES:  # each fix leaves a new surface, so the next round's scoped scan runs
             return {"fixes": [], "headDiff": TRD._headf_ns(self.seen.count(RD.P_APPLY_FIXES)), "changedSubjects": ["Code"]}
+        if phase == RD.P_AUDITS and self.members_fixed:
+            out = TRD._responder()(phase, payload, rnd)
+            listed = {t["id"]: t.get("mergedMembers") or [] for t in payload.get("targets", [])}
+            for result in out["results"]:
+                if listed.get(result["id"]):
+                    result["members"] = [{"id": m["id"], "fixed": True, "why": "its own part is fixed"}
+                                         for m in listed[result["id"]]]
+            return out
         return TRD._responder()(phase, payload, rnd)
 
     def fixer_runs(self):
@@ -1041,7 +1050,7 @@ def test_t3a_a_non_representative_member_of_a_fixed_group_raised_again_is_marked
         return [seen["member"]]
 
     refuted = {(3, title): C1L7._SECOND_REFUTED for title in raws}
-    r = _Rounds(tmp_path, [first, second], scoped, verdicts=refuted,
+    r = _Rounds(tmp_path, [first, second], scoped, verdicts=refuted, members_fixed=True,
                 synth=lambda rnd, payload: [_group(*[f["id"] for f in payload["findings"]])] if rnd == 1 else None)
     r.drive()
     state = r.state()
