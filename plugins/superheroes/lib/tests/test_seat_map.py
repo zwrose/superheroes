@@ -1577,6 +1577,37 @@ def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker,
         assert diversity == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
 
 
+def _critical_diversity_buckets(classified):
+    return {
+        bucket: [v for v in rows if isinstance(v, dict) and v.get("constraint") == "critical-diversity"]
+        for bucket, rows in classified.items()
+    }
+
+
+def test_classify_violations_reads_extra_makers_exactly_as_the_maps_own_maker_families():
+    # axis: the excusal arithmetic counts the session's makers as makers, never as live alternatives — see bite-proof record wo_a_2530_single_vendor_panel
+    # The template seats the author's own family (xai), so the panel is never exempt and the
+    # critical-diversity record reaches the excusal arithmetic.
+    base = {
+        "seats": _full_seats_template(),
+        "liveVendors": ["claude", "codex", "cursor"],
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "authorFamily": "xai",
+        "degradations": [{"constraint": "critical-diversity"}],
+        "violations": [{"constraint": "critical-diversity"}],
+    }
+    others = {"anthropic", "openai"}
+    no_makers = _critical_diversity_buckets(SM.classify_violations(base))
+    via_map = _critical_diversity_buckets(
+        SM.classify_violations(dict(base, makerFamilies=sorted(others))))
+    via_extra = _critical_diversity_buckets(SM.classify_violations(base, extra_makers=others))
+    # The fixture discriminates: with no other makers, the other families read as live alternatives.
+    assert no_makers["unexcused"] == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
+    assert via_map != no_makers
+    assert via_extra == via_map
+
+
 def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatch):
     _real_matrix = SM.matrix_config
 

@@ -1282,6 +1282,8 @@ def classify_violations(
         raw_makers = seat_map.get("makerFamilies")
         maker_set = {f for f in (raw_makers if isinstance(raw_makers, list) else []) if isinstance(f, str) and f}
         maker_set.add(author_family)
+        # axis: the session's other makers are makers in the excusal arithmetic too, never live alternatives — see bite-proof record wo_a_2530_single_vendor_panel
+        maker_set.update(f for f in extra_makers if isinstance(f, str) and f)
         achievable: set[str] | None = set()
         for cs in collapsed:
             cfg = seats.get(cs)
