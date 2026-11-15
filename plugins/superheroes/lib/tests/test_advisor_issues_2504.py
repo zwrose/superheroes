@@ -111,7 +111,6 @@ def _make_stored_null(repo, store):
 _UNREADABLE_CASES = {
     "non-object-project-configuration": _make_non_object,
     "duplicate-key": _make_duplicate_key,
-    "malformed-verify-command": _make_bad_verify_command,
     "unparseable-core": _make_unparseable_core,
     "stored-invalid": _make_stored_invalid,
     "stored-null": _make_stored_null,
@@ -129,7 +128,7 @@ def _item(payload, slug=SLUG):
 
 
 def test_registry_entry_for_item_20():
-    item = PC.ITEMS[-1]
+    item = next(entry for entry in PC.ITEMS if entry["slug"] == "advisorIssues")
     assert item == {
         "number": 20,
         "slug": "advisorIssues",

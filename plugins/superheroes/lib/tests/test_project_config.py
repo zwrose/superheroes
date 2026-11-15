@@ -595,7 +595,7 @@ def test_set_item_16_writes_the_name_to_project_configuration(tmp_path):
 
 def test_registry_carries_item_17_cloud_setup_commands():
     # axis: item 17 registration; the list item missing, or carrying a default that would run commands nobody listed
-    item = PC.ITEMS[-3]
+    item = next(entry for entry in PC.ITEMS if entry["slug"] == "cloudSetupCommands")
     assert item["slug"] == "cloudSetupCommands" and item["number"] == 17
     assert item["name"] == "Cloud setup commands" and item["shape"] == "commandList"
     assert item["plugin_default"] is None and item["home"] == PC.HOME_PROJECT_CONFIGURATION
