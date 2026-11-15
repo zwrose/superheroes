@@ -99,3 +99,25 @@ well under 32 KiB). Nothing in them is a secret, token, private URL or personal 
 - Raw red: every 7-bit assertion before it passed; `assert visible(chr(0x9B) + "31mX") == "[U+009B]31mX"` failed with `AssertionError: assert 'X' == '[U+009B]31mX'`, then `1 failed in 2.48s`.
 - Restore: the inverse edit, both definitions. Restore receipt: the lines read `_ANSI_START = re.compile("\x1b")` and `_CSI = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")`.
 - Raw green: `1 passed in 2.83s`.
+
+## G11 and G12, added at the review's fix step (round 1, finding v0)
+
+The build session typed this fix at the review's `apply-fixes` step and produced these two entries itself, in a detached probe worktree at `c62a39e5`. The script applied each neutralization as one exact-once replacement, ran the detector by exact node id, restored by the inverse replacement, checked the file's sha256 equals the original's (byte-clean for both), and ran the detector green. The test value is eight `x` characters; nothing was redacted.
+
+### G11 the original-text leg of `_scrub_text`'s secret check
+
+- Axis: the secret check runs on the original text, so a stand-in (a C1 code becoming `[U+00XX]`) or a removed ANSI sequence never hides a credential the original showed.
+- Detector: `test_t3_a_record_string_whose_original_or_stand_in_holds_a_credential_is_withheld[c1-gap]` and `[ansi-eats-key-letter]`.
+- Neutralization: `if _has_secret(text) or _has_secret(shown):` became `if _has_secret(shown):`.
+- Raw red: `AssertionError: assert 'password[U+009B]: xxxxxxxx' == '[REDACTED FIELD]'` and `AssertionError: assert 'assword: xxxxxxxx' == '[REDACTED FIELD]'`, then `2 failed in 4.98s`.
+- Restore: the inverse replacement. Restore receipt: the line reads `if _has_secret(text) or _has_secret(shown):`, sha256 equal to the original.
+- Raw green: `2 passed in 3.07s`.
+
+### G12 the stand-in-text leg of `_scrub_text`'s secret check
+
+- Axis: the secret check also runs on the text that would be posted, so removing an ANSI sequence never builds a posted credential.
+- Detector: `test_t3_a_record_string_whose_original_or_stand_in_holds_a_credential_is_withheld[secret-only-once-stood-in]`.
+- Neutralization: `if _has_secret(text) or _has_secret(shown):` became `if _has_secret(text):`.
+- Raw red: `AssertionError: assert 'password = xxxxxxxx' == '[REDACTED FIELD]'`, then `1 failed in 4.65s`.
+- Restore: the inverse replacement. Restore receipt: the line reads `if _has_secret(text) or _has_secret(shown):`, sha256 equal to the original.
+- Raw green: `1 passed in 2.72s`.
