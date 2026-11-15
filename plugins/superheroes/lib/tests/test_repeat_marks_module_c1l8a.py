@@ -286,9 +286,15 @@ def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
     wrong_rep = _row(_raw("wrong rep"), "refuted", grade=dict(_WRONG), refutedReason="guard holds")
     fixed_rep = _row(_raw("fixed rep"), "fixed")
     member = lambda title, rep: dict(_raw(title), raisedSeq=1, **{SC.MERGED_INTO_FIELD: _key(rep)})  # noqa: E731
+    # a member reads fixed only on its own ruling: its representative's `memberResults` says the audit ruled it fixed
+    audited_rep0 = _row(_raw("audited fixed rep"), "fixed")
+    audited_member = member("audited fixed member", audited_rep0)
+    audited_rep = dict(audited_rep0, memberResults=[{"findingKey": _key(audited_member), "fixed": True}])
     kept_mark = {"outcome": "shown-wrong", "reason": "repeat of wrong rep; keeps its earlier outcome (shown-wrong)"}
     rows = {
         "fixed": fixed_rep,
+        "audited fixed rep": audited_rep,
+        "member ruled fixed by the audit": audited_member,
         "refuted + wrong grade": wrong_rep,
         "refuted + author-justified": _row(_raw("aj"), "refuted", refutedReason="author-justified: the owner chose this"),
         "refuted ungraded": _row(_raw("ungraded"), "refuted", refutedReason="guard holds"),
@@ -329,18 +335,20 @@ def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
         else:
             assert _key(row) in pooled and pooled[_key(row)]["outcome"] == outcome, name
     # the census is not vacuous: the shapes the record writer reads through a link or a mark are decided
-    assert expected["member of a fixed group"] == "fixed" and expected["member of a refuted+wrong group"] == "shown-wrong"
+    # a member of a fixed group reads fixed only on its own audit ruling; with none it has no outcome and is not pooled
+    assert expected["member ruled fixed by the audit"] == "fixed" and expected["member of a refuted+wrong group"] == "shown-wrong"
     assert expected["valid repeatKept shown-wrong, confirmed grade"] == "shown-wrong"
     assert expected["malformed repeatKept on a craft row"] == "craft"
     assert [n for n, o in expected.items() if o is None] == [
-        "refuted ungraded", "malformed repeatKept on an ungraded refuted row", "refuted + plausible grade"]
+        "refuted ungraded", "member of a fixed group", "malformed repeatKept on an ungraded refuted row",
+        "refuted + plausible grade"]
     # the shapes the old pool reading got wrong: an unruled out-of-scope row is the owner's, a ruled one and a fixed
     # row the break-it step ruled out of scope are rulings
     assert expected["out-of-scope, no ruling"] == "left-for-owner"
     assert expected["out-of-scope, attributed ruling"] == "ruling"
     assert expected["fixed, ruled out of scope by the break-it step"] == "ruling"
-    entry = pooled[_key(rows["member of a fixed group"])]
-    assert (entry["id"], entry["title"], entry["round"]) == (None, "fixed member", 1)  # the row's own identity, the representative's round
+    entry = pooled[_key(rows["member ruled fixed by the audit"])]
+    assert (entry["id"], entry["title"], entry["round"]) == (None, "audited fixed member", 1)  # the row's own identity, the representative's round
 
 
 def test_s4_an_unresolvable_merge_chain_is_not_pooled_and_a_valid_repeat_kept_gives_its_outcome():

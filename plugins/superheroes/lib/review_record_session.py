@@ -65,6 +65,8 @@ ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
 UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
 UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it was closed"
 SWEEP_UNGRADED_OPEN = "a repository-sweep hit the verifier did not grade"  # the driver's reason for withholding it
+MERGED_MEMBER_UNAUDITED = "its representative was fixed, but no fix audit ruled this finding's own part fixed"
+MEMBER_RULED_FIXED_NOTE = "; the fix audit ruled this finding's own part fixed"
 SWEEP_UNFOLDED_OPEN = "found by a repository sweep that never reached the verifier before the loop was closed"
 NO_SEAT_RESULT ="the session recorded no seat result or seat status"
 RETURNING_ROUND_KIND = "returning"  # round_driver.RETURNING_KIND: the driver's `roundKind` for a returning round (not imported here)
@@ -762,6 +764,22 @@ def _ungraded_keys(state):
 
 def _decide(own, by_key, rulings, exempt=None, ungraded=frozenset()):
     """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding.
+
+    A finding merged into another inherits the representative's outcome, except that it reads fixed only on its own
+    ruling (`memberResults` on the representative, read by `sc.member_ruled_fixed`): where the representative reads
+    fixed and the audit ruled nothing for this member, there is no outcome yet (`MERGED_MEMBER_UNAUDITED`).
+    `_decide_rep` holds the rest of the reading; this is the one place the member gate is applied."""
+    outcome, reason, rep = _decide_rep(own, by_key, rulings, exempt, ungraded)
+    # axis: a merged member reads fixed only when the representative's audit ruled the member's own part fixed, else it has no outcome — see bite-proof record i2489_member_record
+    if outcome == _FIXED and rep is not own:
+        if not sc.member_ruled_fixed(rep, sc.finding_identity_key(own)):
+            return None, MERGED_MEMBER_UNAUDITED, rep
+        return outcome, f"{reason}{MEMBER_RULED_FIXED_NOTE}", rep
+    return outcome, reason, rep
+
+
+def _decide_rep(own, by_key, rulings, exempt=None, ungraded=frozenset()):
+    """`_decide` before the member gate: the representative's reading, which a merged member inherits.
 
     `exempt` maps a finding key to the driver's `ruled-out-of-scope` break-it row: a fixed finding named there
     was ruled out of scope and only cleared by the audit, so it reads as the ruling, never as fixed. `ungraded` is

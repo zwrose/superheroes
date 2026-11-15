@@ -92,6 +92,21 @@ _STRICT_MODE_REFINEMENTS = {
             },
         },
     },
+    # The fix auditor's answer for each finding merged into the target; the shape's one judge is
+    # audits.member_answers_fault.
+    ("ruling", "members"): {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["id", "fixed", "why"],
+            "properties": {
+                "id": {"type": "string"},
+                "fixed": {"type": "boolean"},
+                "why": {"type": "string"},
+            },
+        },
+    },
     ("ruling", "testMatch"): {
         "type": "object",
         "additionalProperties": False,
