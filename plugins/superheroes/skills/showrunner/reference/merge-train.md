@@ -371,11 +371,16 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    `heads` the new heads when the identity check found no material consequence; otherwise republish
    it unsigned (item 6's material-consequence line).
 
-   (6) **Re-read membership** (item 3) and **re-run `slots`** (item 5) on the remaining layers.
+   (6) **Re-read membership** with item 3's invocation, compared this way, since the stack is now
+   part merged: the members and their order still equal the sheet's list; the layers step 1 found
+   merged read merged, in order from the bottom, and are the only members that are not open; every
+   remaining layer is open, not draft, and at its re-pinned head. Any other difference refuses, as
+   in item 3. Then **re-run `slots`** (item 5) with the remaining layers' count.
 
    (7) **Re-queue with `gh stack merge`.** `gh pr merge --match-head-commit` refuses a removed
    stacked layer, and `gh stack merge` pins no head, so the membership re-read immediately before
-   it is the only head check: compare every head to the re-pinned heads and refuse on a mismatch.
+   it is the only head check: run step 6's comparison again and refuse on any difference; the
+   merged prefix has no head to match.
 
 ## Merging a spec PR
 
