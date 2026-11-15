@@ -2092,3 +2092,64 @@ def test_a_real_declaration_after_a_closed_comment_and_template_still_reads_misr
     assert out["digest"]["files"] == {"hotspots:mixed.ts": _MISREAD_DIGEST}
     assert _span_errors(out) == [
         _misread_entry("mixed.ts", "f", 1, end, "declaration-inside")]
+
+
+# A backtick, quote or comment opener inside a regex literal is regex content: it never opens a
+# template or a comment (review finding: keep regex contents from shifting template state).
+_REGEX_THEN_SIBLING_TS = """export function first(x: string) {
+  const tick = /`/g;
+  const open = /\\/\\*/;
+  return x.replace(tick, "");
+}
+export function second() {
+  return 1;
+}
+"""
+
+_REGEX_THEN_TEMPLATE_TS = """export function render(x: number, total: number) {
+  const tick = /`/;
+  const half = total / 2 / 1;
+  const page = `
+function example() {
+  return ${half};
+}
+`;
+  if (x) {
+    return page;
+  }
+  return "";
+}
+"""
+
+
+def test_a_backtick_regex_does_not_mask_a_swallowed_sibling(tmp_path):
+    end = len(_REGEX_THEN_SIBLING_TS.splitlines())
+    run = _span_run(tmp_path, {"rx.ts": _REGEX_THEN_SIBLING_TS}, _span_row("rx.ts", "first", 15, 1, end))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert out["digest"]["files"] == {"hotspots:rx.ts": _MISREAD_DIGEST}
+    assert _span_errors(out) == [_misread_entry("rx.ts", "first", 1, end, "declaration-inside")]
+
+
+def test_a_backtick_regex_and_a_division_leave_a_later_template_masked(tmp_path):
+    end = len(_REGEX_THEN_TEMPLATE_TS.splitlines())
+    run = _span_run(
+        tmp_path, {"rxt.ts": _REGEX_THEN_TEMPLATE_TS}, _span_row("rxt.ts", "render", 15, 1, end))
+    out = hot.HotspotsLens().collect(_ctx(tmp_path, run))
+
+    assert _span_errors(out) == []
+    assert out["digest"]["files"]["hotspots:rxt.ts"]["ccn"] == 15
+    assert gl.classify_collect(out) == ("collected", None)
+
+
+@pytest.mark.parametrize("source, masked", [
+    ("const a = /`/;\nfunction f() {}\n", set()),
+    ("const a = b / c / d;\nconst t = `\nfunction f() {}\n`;\n", {3, 4}),
+    ("return /'/.test(x);\nfunction f() {}\n", set()),
+    ("const a = /[/`]/;\nfunction f() {}\n", set()),
+    ("/* a ` */\nfunction f() {}\n", set()),
+    ("const s = '`';\nfunction f() {}\n", set()),
+], ids=["regex-backtick", "division-then-template", "regex-after-return", "regex-class-slash",
+        "comment-backtick", "string-backtick"])
+def test_lexical_mask_reads_regex_division_strings_and_comments(source, masked):
+    assert hot._lexically_masked(source.splitlines()) == masked

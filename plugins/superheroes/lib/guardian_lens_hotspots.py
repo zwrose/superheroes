@@ -671,19 +671,51 @@ def _leading_ws(line):
     return len(line) - len(line.lstrip())
 
 
+# A ``/`` starts a regex literal, not a division, where an expression may start: at the start of
+# the source, after one of these characters, or after one of these keywords.
+_REGEX_AFTER_CHARS = frozenset("(,=:[!&|?{};+-*%<>~^")
+_REGEX_AFTER_WORDS = frozenset((
+    "return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw",
+    "yield", "await", "instanceof"))
+
+
+def _regex_end(line, i):
+    """Index just past the regex literal that opens at ``line[i]`` (a ``/``), flags included, or
+    None when no closing ``/`` follows on the line (a regex literal never spans lines)."""
+    j, n, in_class = i + 1, len(line), False
+    while j < n:
+        c = line[j]
+        if c == "\\":
+            j += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "/":
+            j += 1
+            while j < n and (line[j].isalnum() or line[j] in "_$"):
+                j += 1
+            return j
+        j += 1
+    return None
+
+
 def _lexically_masked(lines):
     """1-based numbers of the lines that START inside a block comment or a template literal.
 
     Text on such a line is comment or literal content, never a declaration, so the
-    declaration-inside leg skips it. A small scanner, not a parser: it tracks ``/* */``
-    comments, ``//`` comments, quoted strings (one line each) and template literals with their
-    ``${...}`` expressions (nested templates included). It does not recognise regex literals,
-    so a backtick or a comment opener inside a regex can shift its state; a shifted state
-    only changes which lines are skipped by this one leg.
+    declaration-inside leg skips it. A small scanner, not a parser: it tracks ``/* */`` and
+    ``//`` comments, quoted strings (one line each), regex literals (a ``/`` where an expression
+    may start, one line each) and template literals with their ``${...}`` expressions (nested
+    templates included), so a backtick, quote or comment opener inside a string, regex or
+    comment never shifts its state.
     """
     masked = set()
     stack = []  # "tpl" for an open template literal; an int brace depth for a ${...} expression
     block = False
+    prev = ""  # the last significant code character ("a" after a literal or an identifier)
+    word = ""  # the identifier or keyword that ``prev`` ends, if any
     for number, line in enumerate(lines, 1):
         if block or (stack and stack[-1] == "tpl"):
             masked.add(number)
@@ -704,9 +736,11 @@ def _lexically_masked(lines):
                     i += 2
                 elif c == "`":
                     stack.pop()
+                    prev, word = "a", ""
                     i += 1
                 elif c == "$" and nxt == "{":
                     stack.append(0)
+                    prev, word = "{", ""
                     i += 2
                 else:
                     i += 1
@@ -717,6 +751,10 @@ def _lexically_masked(lines):
                     continue
                 if c == quote:
                     quote = None
+                    prev, word = "a", ""
+                i += 1
+                continue
+            if c.isspace():
                 i += 1
                 continue
             if c == "/" and nxt == "/":
@@ -724,6 +762,18 @@ def _lexically_masked(lines):
             if c == "/" and nxt == "*":
                 block = True
                 i += 2
+                continue
+            if c == "/" and (prev == "" or prev in _REGEX_AFTER_CHARS or word in _REGEX_AFTER_WORDS):
+                end = _regex_end(line, i)
+                if end is not None:
+                    prev, word = "a", ""
+                    i = end
+                    continue
+            if c.isalnum() or c in "_$":
+                start = i
+                while i < n and (line[i].isalnum() or line[i] in "_$"):
+                    i += 1
+                prev, word = "a", line[start:i]
                 continue
             if c in "'\"":
                 quote = c
@@ -734,8 +784,11 @@ def _lexically_masked(lines):
             elif stack and c == "}":
                 if stack[-1] == 0:
                     stack.pop()
-                else:
-                    stack[-1] -= 1
+                    prev, word = "a", ""
+                    i += 1
+                    continue
+                stack[-1] -= 1
+            prev, word = c, ""
             i += 1
     return masked
 
