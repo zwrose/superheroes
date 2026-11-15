@@ -441,4 +441,300 @@ FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers
 9 passed in 1.43s
 ```
 
+## G7 — predicate unknown-author check (`seat_map.py` `panel_outside_makers`)
+
+- **axis:** an unknown author family (None, empty, non-string) leaves the maker set unprovable, so the panel is never exempt (E-d)
+
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, line 450):
+```diff
+--- before (restored text)
+    if not isinstance(author_family, str) or not author_family:
+        return False
++++ neutralized
+    if not isinstance(author_family, str) or not author_family:
+        pass
+```
+
+**command** (the whole parametrized function, twelve cases; from here on the runs of WO-A2 used `-X pycache_prefix=/tmp/claude-0/wo-a2-pyc` and no `-n auto`, so no `[gwN]` line is printed):
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-a2-pyc -m pytest plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside -q
+```
+
+**What the red actually was.** With the check made a no-op, the neutralized function goes on to `makers = {author_family}`. For an author of `None`, `""` or `42` that set is built and the function returns True (the panel is wrongly exempt): the visible cases below fail on `assert not SM.panel_outside_makers(m, author)` with `assert not True`. For the unhashable author `["anthropic"]` the next line raises `TypeError: unhashable type: 'list'` instead of returning True (visible for `[makers2-author3]` below). So the red is a mix of returned-True failures and an exception, as the order asked to be said.
+
+**raw red, INCOMPLETE** (exit 1, 12 failed). The shell tool truncated the middle of this run's output ("[10958 characters truncated]" below is the tool's own marker, not an edit). What follows is exactly the output that was received, the head, the tail and the summary, nothing reconstructed. Redactions: `<repo>` for the worktree root; the `UV_NATIVE_TLS` warning line dropped. Because of the truncation, the individual failure messages of the cases between `[absent-author3]` and `[makers2-42]` were not received and are not claimed; the 12-case summary list at the end is complete.
+```
+FFFFFFFFFFFF                                                             [100%]
+=================================== FAILURES ===================================
+_ test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-None] _
+
+author = None, makers = 'absent'
+
+    @pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+    @pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+    def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+        # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        if makers != "absent":
+            m["makerFamilies"] = makers
+>       assert not SM.panel_outside_makers(m, author)
+E       AssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f0515639f80>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, None)
+E        +    where <function panel_outside_makers at 0x7f0515639f80> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: AssertionError
+_ test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-] _
+
+author = '', makers = 'absent'
+
+    @pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+    @pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+    def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+        # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        if makers != "absent":
+            m["makerFamilies"] = makers
+>       assert not SM.panel_outside_makers(m, author)
+E       AssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f0515639f80>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, '')
+E        +    where <function panel_outside_makers at 0x7f0515639f80> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: AssertionError
+_ test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-42] _
+
+author = 42, makers = 'absent'
+
+    @pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+    @pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+    def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+        # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        if makers != "absent":
+            m["makerFamilies"] = makers
+>       assert not SM.panel_outside_makers(m, author)
+E       AssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f0515639f80>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, 42)
+E        +    where <function panel_outside_makers at 0x7f0515639f80> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: AssertionError
+_ test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-author3] _
+
+author = ['anthropic'], makers = 'absent'
+
+    @pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+    @pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+    def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+        # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        if makers != "absent":
+            m["makerFamilies"] = makers
+>       assert not SM.panel_outside_makers(m, author)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+seat_map = {'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer',
+
+... [10958 characters truncated] ...
+
+ssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f0515639f80>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .....iewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic', 'makerFamilies': ['xai']}, 42)
+E        +    where <function panel_outside_makers at 0x7f0515639f80> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: AssertionError
+_ test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers2-author3] _
+
+author = ['anthropic'], makers = ['xai']
+
+    @pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+    @pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+    def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+        # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+        m = _outside_panel()
+        if makers != "absent":
+            m["makerFamilies"] = makers
+>       assert not SM.panel_outside_makers(m, author)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4703: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+seat_map = {'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .....iewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic', 'makerFamilies': ['xai']}
+author_family = ['anthropic']
+
+    def panel_outside_makers(seat_map: dict, author_family: str | None) -> bool:
+        """True when every filled seat of the panel is outside every maker's family, and at least one
+        critical seat is filled (#2530). Independence is that the seats are outside the makers' families;
+        a panel that shares one vendor or one family among them is not a critical-diversity breach.
+    
+        FAIL-CLOSED: every case this cannot prove returns False, which is today's behaviour — a map that
+        is not a dict, seats that are not a dict, an unknown author family, a `makerFamilies` that is
+        present but not a list of non-empty strings, a walked seat that is not a dict or whose family does
+        not resolve, a seat in a maker's family, and a map with no filled critical seat. An unfilled seat
+        is skipped here; `seat-unfilled` governs it. Callers pass the effective author family."""
+        if not isinstance(seat_map, dict):
+            return False
+        seats = seat_map.get("seats")
+        if not isinstance(seats, dict):
+            return False
+        # axis: an unknown author family leaves the maker set unprovable, so the panel is never exempt — see bite-proof record wo_a_2530_single_vendor_panel
+        if not isinstance(author_family, str) or not author_family:
+            pass
+>       makers = {author_family}
+                 ^^^^^^^^^^^^^^^
+
+E       TypeError: unhashable type: 'list'
+
+<repo>/plugins/superheroes/lib/seat_map.py:451: TypeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-None]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-42]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[absent-author3]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers1-None]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers1-]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers1-42]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers1-author3]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers2-None]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers2-]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers2-42]
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside[makers2-author3]
+12 failed in 1.42s
+```
+
+**restore:** the inverse text edit of the neutralization above (`pass` put back to `return False`; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored lines as they stand in the file, `seat_map.py:449-450`):
+```
+    if not isinstance(author_family, str) or not author_family:
+        return False
+```
+
+**raw green** (after restore, all twelve cases, exit 0):
+```
+............                                                             [100%]
+12 passed in 0.63s
+```
+
+---
+
+## G8 — predicate unresolvable-family check (`seat_map.py` `panel_outside_makers`)
+
+- **axis:** a walked seat whose family does not resolve (unknown vendor, no vendor, null vendor) cannot be proven outside the makers (E-e)
+
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, line 468-469):
+```diff
+--- before (restored text)
+        if fam is None:
+            return False
++++ neutralized
+        if fam is None:
+            pass
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-a2-pyc -m pytest plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_e_an_unresolvable_or_malformed_seat_is_not_outside -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; the failure is the first case, an unknown vendor, returning True; `<repo>` and the dropped `UV_NATIVE_TLS` warning line are the only redactions):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_panel_outside_makers_edge_e_an_unresolvable_or_malformed_seat_is_not_outside _
+
+    def test_panel_outside_makers_edge_e_an_unresolvable_or_malformed_seat_is_not_outside():
+        # axis: a walked seat whose family does not resolve cannot be proven outside the makers — see bite-proof record wo_a_2530_single_vendor_panel
+        unresolvable = {"vendor": "nosuchvendor", "model": "x", "effort": "high", "tier": "reviewer", "source": "rotated"}
+        no_vendor = {"model": "x", "effort": "high", "tier": "reviewer", "source": "rotated"}
+        null_vendor = {"vendor": None, "source": "rotated"}
+        for bad in (unresolvable, no_vendor, null_vendor, "codex", 7, None, ["codex"]):
+            for seat in ("test-role", "security-reviewer"):
+                m = _outside_panel(**{seat: bad})
+>               assert not SM.panel_outside_makers(m, "anthropic"), (seat, bad)
+E               AssertionError: ('test-role', {'vendor': 'nosuchvendor', 'model': 'x', 'effort': 'high', 'tier': 'reviewer', ...})
+E               assert not True
+E                +  where True = <function panel_outside_makers at 0x7f58ec8d5f80>({'seats': {'code-reviewer': {'vendor': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'xhigh', 'tier': 'reviewer-deep', .......}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, 'anthropic')
+E                +    where <function panel_outside_makers at 0x7f58ec8d5f80> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4717: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_e_an_unresolvable_or_malformed_seat_is_not_outside
+1 failed in 0.64s
+```
+
+**restore:** the inverse text edit of the neutralization above (`pass` put back to `return False`; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored lines, `seat_map.py:468-469`; the second `if fam is None:` in the file, at line 753, returns `None` and was never touched):
+```
+        if fam is None:
+            return False
+```
+
+**raw green** (after restore, exit 0):
+```
+.                                                                        [100%]
+1 passed in 0.55s
+```
+
+---
+
+## G9 — predicate filled-critical-seat check (`seat_map.py` `panel_outside_makers`)
+
+- **axis:** a map with no filled critical seat (all critical seats unfilled, absent, or not dicts) is governed by `seat-unfilled`, never exempt (E-f)
+
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, lines 474-477 collapsed to one line):
+```diff
+--- before (restored text)
+    return any(
+        s in seats and isinstance(seats[s], dict) and not is_unfilled(seats[s])
+        for s in CRITICAL_SEATS
+    )
++++ neutralized
+    return True
+```
+
+**command:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo-a2-pyc -m pytest plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_f_no_filled_critical_seat_is_not_outside -q
+```
+
+**raw red** (exit 1; complete, nothing truncated; the failure is the all-unfilled-critical-seats case returning True; `<repo>` and the dropped `UV_NATIVE_TLS` warning line are the only redactions):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_panel_outside_makers_edge_f_no_filled_critical_seat_is_not_outside ____
+
+    def test_panel_outside_makers_edge_f_no_filled_critical_seat_is_not_outside():
+        # axis: a map with no filled critical seat is governed by seat-unfilled, never exempt — see bite-proof record wo_a_2530_single_vendor_panel
+        unfilled = SM._unfilled_cfg("reviewer-deep")
+        all_unfilled = _outside_panel(**{seat: dict(unfilled) for seat in SM.CRITICAL_SEATS})
+>       assert not SM.panel_outside_makers(all_unfilled, "anthropic")
+E       AssertionError: assert not True
+E        +  where True = <function panel_outside_makers at 0x7f246d6620c0>({'seats': {'code-reviewer': {'vendor': None, 'model': None, 'effort': None, 'tier': 'reviewer-deep', ...}, 'security-r.....}}, 'roster': ['code-reviewer', 'security-reviewer', 'test-role', 'premortem-reviewer'], 'authorFamily': 'anthropic'}, 'anthropic')
+E        +    where <function panel_outside_makers at 0x7f246d6620c0> = SM.panel_outside_makers
+
+<repo>/plugins/superheroes/lib/tests/test_seat_map.py:4724: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_map.py::test_panel_outside_makers_edge_f_no_filled_critical_seat_is_not_outside
+1 failed in 0.65s
+```
+
+**restore:** the inverse text edit of the neutralization above (`return True` put back to the three-line `return any(...)` form; no `git checkout`, `git restore`, `git reset` or `git stash`).
+
+**restore receipt** (restored lines, `seat_map.py:474-477`):
+```
+    return any(
+        s in seats and isinstance(seats[s], dict) and not is_unfilled(seats[s])
+        for s in CRITICAL_SEATS
+    )
+```
+
+**raw green** (after restore, exit 0):
+```
+.                                                                        [100%]
+1 passed in 0.57s
+```
+
 (end of record)
