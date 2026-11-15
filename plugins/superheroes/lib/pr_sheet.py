@@ -659,15 +659,18 @@ def _record(raw, n, problems):
         problems.append(f"{where}: its seats not run are malformed")
     for f in rec["findings"]:
         out, name = (f.get("outcome"), _title(f)) if isinstance(f, dict) else (None, None)
+        waits = review_record.waits_for_owner(f, rec["findings"])
         if not _text(name):
             problems.append(f"{where}: a finding has no title, summary or id")
-        elif out not in rfs.OUTCOMES:
+        # axis: a null outcome is admitted only on a finding the record lists or cards (a Minor or Nit); every other null is refused — see bite-proof record i2493_wo2_sheet (E-null, E-null-important)
+        elif out not in rfs.OUTCOMES and not (out is None and (review_record.listed_for_merge(f) or waits)):
             problems.append(f"{where}: finding {name!r} has outcome {out!r}, not one of {', '.join(rfs.OUTCOMES)}")
-        elif out == _LEFT and not _text(f.get("consequence")):
+        # axis: every finding that waits for the owner needs a consequence, whatever its outcome — see bite-proof record i2493_wo2_sheet (E-consequence)
+        elif waits and not _text(f.get("consequence")):
             problems.append(f"{where}: left-for-owner finding {name!r} has no consequence")
         elif out in (_CRAFT, _RULING, _SHOWN_WRONG) and not _text(f.get("reason")):
             problems.append(f"{where}: {out} finding {name!r} has no reason")
-        if _text(name) and out == _LEFT and not (f.get("findingKey") or f.get("id")):
+        if _text(name) and waits and not (f.get("findingKey") or f.get("id")):
             problems.append(f"{where}: left-for-owner finding {name!r} has no findingKey or id, so the advisor's input cannot name it")
     return rec
 
@@ -990,7 +993,7 @@ def _check_bodies(bodies, allowed, problems):
     problems.extend(f"--pr-body names PR #{n}, which the sheet does not cover" for n in sorted(bodies, key=str) if n not in allowed)
 
 
-_TARGETS = ("item", "fold", "leftover", "canon")
+_TARGETS = ("item", "fold", "leftover", "listed", "canon")
 
 
 def _excerpt(text):
@@ -998,11 +1001,13 @@ def _excerpt(text):
     return text if len(text) <= 80 else text[:80] + "…"
 
 
-def _check_accounting(accounting, listed, advisor, leftovers, named, problems, auto=frozenset()):
+def _check_accounting(accounting, listed, advisor, leftovers, named, problems, auto=frozenset(), listed_keys=None):
     """Collects the problems of the input's accounting against the acceptances the bodies list (listed: PR number to
     listed_bullets): each bullet needs exactly one target that exists on the sheet, and each key must name a bullet.
     auto holds the bullet ids that are accounted by themselves (a fixed-above disposition the build shows in caught): such a
-    bullet needs no entry and an entry for it is a problem."""
+    bullet needs no entry and an entry for it is a problem. listed_keys counts each lookup key of the findings the record lists
+    for the merge verdict: a bullet accounted {"listed": key} needs a key that names exactly one of them."""
+    listed_keys = listed_keys or {}
     if not isinstance(accounting, dict):
         problems.append("accounting must be an object of bullet id to where that acceptance is accounted for")
         accounting = {}
@@ -1021,14 +1026,14 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems, a
                 continue
             if bullet not in accounting:
                 problems.append(f"PR #{pr}'s acceptance {bullet} (\"{_excerpt(text)}\") is not accounted for: "
-                                f'give accounting "{bullet}" one of item, fold with line, leftover, or canon')
+                                f'give accounting "{bullet}" one of item, fold with line, leftover, listed, or canon')
                 continue
             value = accounting[bullet]
             targets = [t for t in _TARGETS if isinstance(value, dict) and t in value]
             if len(targets) > 1:
-                problems.append(f"{shown} is accounted for more than once: give exactly one of item, fold, leftover or canon")
+                problems.append(f"{shown} is accounted for more than once: give exactly one of item, fold, leftover, listed or canon")
             elif not (len(targets) == 1 and set(value) == {*targets, *(["line"] if targets[0] == "fold" else [])}):
-                problems.append(f"{shown} must be an object with exactly one of item, fold with line, leftover or canon")
+                problems.append(f"{shown} must be an object with exactly one of item, fold with line, leftover, listed or canon")
             elif targets[0] == "item" and not (isinstance(value["item"], str) and value["item"] in items):
                 problems.append(f'{shown} names item "{value["item"]}", which is not in items')
             elif targets[0] == "fold":
@@ -1039,6 +1044,9 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems, a
             elif targets[0] == "leftover" and not (isinstance(value["leftover"], str) and value["leftover"] in leftovers
                                                    and named.get(value["leftover"], 0) == 1):
                 problems.append(f'{shown} names leftover "{value["leftover"]}", which names no one left-for-owner finding in leftovers')
+            # axis: a listed target must name exactly one finding the record lists for the merge verdict — see bite-proof record i2493_wo2_sheet (E-account)
+            elif targets[0] == "listed" and not (isinstance(value["listed"], str) and listed_keys.get(value["listed"], 0) == 1):
+                problems.append(f'{shown} names listed "{value["listed"]}", which names no one finding listed for the merge verdict')
             elif targets[0] == "canon" and not (canon.is_entry_id(value["canon"]) and value["canon"] in canon.cited_entry_ids(summary)):
                 problems.append(f'{shown} names canon "{value["canon"]}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
     problems.extend(f'accounting key "{k}" names no acceptance in the covered PR bodies' for k in accounting if k not in known)
@@ -1061,8 +1069,7 @@ def _fixed_above(recs, bodies, kind, allowed, problems):
             continue
         record = {"ok": True, **r}
         if "leftForOwner" not in record:  # a record given as bare findings: the list review_record builds, from the same rule
-            record["leftForOwner"] = [review_record._name(f) for f in r["findings"] if isinstance(f, dict) and f.get("outcome") == _LEFT
-                                      and not review_record.repeat_held_elsewhere(f, r["findings"])]
+            record["leftForOwner"] = [review_record._name(f) for f in r["findings"] if review_record.waits_for_owner(f, r["findings"])]
         # axis: a record the rule cannot read is a problem naming the PR, never a pass
         try:
             claims = leftover_accepting.assigned_fixed_above(record, body)
@@ -1071,8 +1078,8 @@ def _fixed_above(recs, bodies, kind, allowed, problems):
             continue
         valid = []
         for claim in claims:
-            held = [n for n, f in enumerate(r["findings"]) if isinstance(f, dict) and f.get("outcome") == _LEFT
-                    and not review_record.repeat_held_elsewhere(f, r["findings"]) and review_record._name(f) == claim["id"]
+            held = [n for n, f in enumerate(r["findings"]) if review_record.waits_for_owner(f, r["findings"])
+                    and review_record._name(f) == claim["id"]
                     and (f["title"] if isinstance(f.get("title"), str) and f["title"].strip() else None) == claim["title"]]
             layer = claim["layer"]
             # axis: a fixed-above layer must be a PR of this stack sheet above the finding's own PR; a pr sheet, an unknown PR, the
@@ -1277,12 +1284,15 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     leftovers, determined = (x if isinstance(x, dict) else {} for x in (leftovers, determined))
     # The earlier sheet's decided-for-you entries by finding: a carried sheet keeps them as they stand.
     before = {e["finding"]: e for e in earlier["prSheet"].get("decidedForYou", [])} if earlier is not None else {}
-    named, decisions = {}, {}
+    named, decisions, listed_keys = {}, {}, {}  # listed_keys: each lookup key of a finding listed for the merge verdict, counted
     # Only with the bodies read: a bodies-less build makes no fixed-above reading, so its leftovers entry stays required.
     fixed, auto = _fixed_above(recs, bodies, kind, allowed, problems) if bodies_sound else ({}, set())
     for r in recs:
         for n, f in enumerate(r["findings"]):
-            if isinstance(f, dict) and f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"]):
+            if review_record.listed_for_merge(f):
+                for k in _lookups(kind, r["pr"], f):
+                    listed_keys[k] = listed_keys.get(k, 0) + 1
+            if review_record.waits_for_owner(f, r["findings"]):
                 keys = _lookups(kind, r["pr"], f)
                 for k in keys:
                     named[k] = named.get(k, 0) + 1
@@ -1322,7 +1332,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                         for k in given if named.get(k, 0) > 1)
     listed = {pr: listed_bullets(pr, bodies[pr]) for pr in allowed} if bodies_sound else {}
     if bodies_sound:
-        _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems, auto)
+        _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems, auto, listed_keys)
         for pr in allowed:
             for label, text in costly_unlisted(bodies[pr]):
                 problems.append(f'PR #{pr}\'s {"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
@@ -1337,7 +1347,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
-            if f["outcome"] != _LEFT or review_record.repeat_held_elsewhere(f, r["findings"]) or (r["pr"], n) in fixed:
+            # axis: a card is exactly a finding the record's waits_for_owner names; a listed finding is no card — see bite-proof record i2493_wo2_sheet (E-card)
+            if not review_record.waits_for_owner(f, r["findings"]) or (r["pr"], n) in fixed:
                 continue  # a finding fixed above is shown in caught below, never as a card
             if (r["pr"], n) in decisions:
                 det = decisions[(r["pr"], n)]
@@ -1398,21 +1409,26 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         raise Refusal(pointing + dependent)
     if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
         raise Refusal(["two cards would share an id: the same finding or item appears twice"])
-    reviewers, caught, craft, decided, history = [], [], [], [], []
+    reviewers, caught, craft, decided, history, merge_listed = [], [], [], [], [], []
     for r in recs:
         lines = [_fill(words["historyRounds"], rounds=r["rounds"]["count"])]
         if r["rounds"]["stoppedAtCap"]:
             lines.append(words["historyCap"])
         for n, f in enumerate(r["findings"]):
-            entries = {_CRAFT: craft, _RULING: decided}.get(f["outcome"])
+            entries = {_CRAFT: craft, _RULING: decided}.get(f.get("outcome"))
+            # axis: the listed part holds exactly the findings the record lists for the merge verdict, each with its severity and reason — see bite-proof record i2493_wo2_sheet (E-listed)
+            if review_record.listed_for_merge(f):
+                reason = f.get("reason")
+                merge_listed.append({"title": _title(f), "detail": f"{f['severity']}: " + (reason if _text(reason) else words["listedNoOutcome"]),
+                                     **({"pr": r["pr"]} if stack else {})})
             if (r["pr"], n) in fixed:
                 claim = fixed[(r["pr"], n)]
                 caught.append(tag(r) + _fill(words["caughtFixedAbove"], title=_title(f), layer=claim["layer"], commit=claim["commit"][:7]))
-            elif f["outcome"] == _FIXED:
+            elif f.get("outcome") == _FIXED:
                 caught.append(tag(r) + _title(f))
             elif entries is not None:
                 entries.append({"title": _title(f), "detail": f["reason"], **({"pr": r["pr"]} if stack else {})})
-            elif f["outcome"] == _SHOWN_WRONG:
+            elif f.get("outcome") == _SHOWN_WRONG:
                 lines.append(_fill(words["historyShownWrong"], title=_title(f), reason=f["reason"]))
         for m in r["missingReviews"]:
             said = _go_ahead(m.get("goAhead"))
@@ -1423,8 +1439,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         for n, f in enumerate(r["findings"]):
             if (r["pr"], n) in fixed and review_record.leftover_line(f) in gaps:
                 gaps.remove(review_record.leftover_line(f))
-        owned = [review_record.leftover_line(f) for f in r["findings"]
-                 if f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"])]
+        owned = [review_record.leftover_line(f) for f in r["findings"] if review_record.waits_for_owner(f, r["findings"])]
         count, counted = sum(1 for m in gaps if m in owned), False
         for m in gaps:
             if m not in owned:
@@ -1461,7 +1476,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             "rounds": sum(r["rounds"]["count"] for r in recs), "stoppedAtCap": any(r["rounds"]["stoppedAtCap"] for r in recs),
             "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
-        "craft": craft, "alreadyDecided": decided, **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
+        "craft": craft, "alreadyDecided": decided, **({"listed": merge_listed} if merge_listed else {}),
+        **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
     # axis: a fixed-above bullet is accounted by itself and never counts toward the listed state
     left = {pr: [(bullet, text) for bullet, text in bullets if bullet not in auto] for pr, bullets in listed.items()}
     if bodies is not None and not any(left.values()):  # every covered body was read and none lists an acceptance (but a fixed-above one)
