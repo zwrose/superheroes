@@ -613,12 +613,31 @@ def test_fixed_refuted_and_merged_findings_keep_what_they_have(sources_calls):
     state = _staged_state([_finding("Fixed one", 1, "Important", "real"),
                            _finding("Refuted one", 2, "Important", "real"),
                            _finding("Merged one", 1, "Important", "real")])
-    RD._record_disposition(state, "f.py::fixed one@L1", "fixed", 1, dispositionReceipt="r")
+    RD._record_disposition(state, "f.py::fixed one@L1", "fixed", 1, dispositionReceipt="r",
+                           memberResults=[{"findingKey": "f.py::merged one@L1", "fixed": True}])
     RD._record_disposition(state, "f.py::refuted one@L2", "refuted", 1, refutedReason="not reachable")
     RD._record_merged_into(state, "f.py::merged one@L1", "f.py::fixed one@L1")
     before = copy.deepcopy(_ledger(state))
     RD._set_terminal(state, "converged")
     assert _ledger(state) == before
+
+
+def test_a_merged_finding_the_audit_never_ruled_fixed_is_settled_open_not_kept(sources_calls):
+    state = _staged_state([_finding("Fixed one", 1, "Important", "real"),
+                           _finding("Refuted one", 2, "Important", "real"),
+                           _finding("Merged one", 1, "Important", "real")])
+    RD._record_disposition(state, "f.py::fixed one@L1", "fixed", 1, dispositionReceipt="r")
+    RD._record_disposition(state, "f.py::refuted one@L2", "refuted", 1, refutedReason="not reachable")
+    RD._record_merged_into(state, "f.py::merged one@L1", "f.py::fixed one@L1")
+    before = copy.deepcopy(_ledger(state))
+    RD._set_terminal(state, "converged")
+    after = _ledger(state)
+    assert after["f.py::fixed one@L1"] == before["f.py::fixed one@L1"]
+    assert after["f.py::refuted one@L2"] == before["f.py::refuted one@L2"]
+    merged = after["f.py::merged one@L1"]
+    assert merged["disposition"] == "left-for-owner"
+    assert merged[SC.OPEN_AT_LOOP_END_FIELD] is True
+    assert SC.MERGED_INTO_FIELD not in merged
 
 
 def test_an_unreadable_ledger_settles_nothing_and_records_why(monkeypatch):
