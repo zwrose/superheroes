@@ -1,6 +1,6 @@
 # Bite-proof record — the four by-release review-loop measures (#2498)
 
-Detector file: `plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to `plugins/superheroes/lib/review_measures.py` at a committed head (`4aab8b51` unless the entry names another; the lines the `4aab8b51` entries neutralize are unchanged since), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py -q -k "<one test's name fragment>" -p no:randomly`, which selects exactly one test; each capture is whole except the `UV_NATIVE_TLS` deprecation line `uv` prints first. The worktree path is shown as `<worktree>`; no secret, token, URL or personal data appears in any capture, so nothing else is redacted. After every restore, `git status --porcelain` over the file printed nothing. Light lane, orchestrator-typed: the guarded-element set below (e1 to e12, fifteen entries) is the one the round-1 reviewer's dispatch declares; e7c, e12b, e13 and e14 guard the round-1 fixes and are declared to the round-2 reviewer; none is grouped.
+Detector file: `plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to `plugins/superheroes/lib/review_measures.py` at a committed head (`4aab8b51` unless the entry names another; the lines the `4aab8b51` entries neutralize are unchanged since), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py -q -k "<one test's name fragment>" -p no:randomly`, which selects exactly one test; each capture is whole except the `UV_NATIVE_TLS` deprecation line `uv` prints first. The worktree path is shown as `<worktree>`; no secret, token, URL or personal data appears in any capture, so nothing else is redacted. After every restore, `git status --porcelain` over the file printed nothing. Light lane, orchestrator-typed: the guarded-element set below (e1 to e12, fifteen entries) is the one the round-1 reviewer's dispatch declares; e7c, e12b, e13 and e14 guard the round-1 fixes and are declared to the round-2 reviewer; e6d and e7d (with e7a to e7c re-run on the reworked void rule) guard the round-2 fixes and are declared to the round-3 reviewer; twenty-one entries in all; none is grouped.
 
 ## e1. No whole release list (`_release_measures`, the `if why:` return)
 
@@ -343,60 +343,105 @@ FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::te
 1 passed, 11 deselected in 0.28s
 ```
 
-## e7a. Void needs a seat that never answered (`any(e["seat"] not in answered ...)`)
+## e6d. Owner cards leave out a held repeat (`review_record.repeat_held_elsewhere`, round-2 finding code-002)
 
-- **Axis:** a silence end on a seat that later answered does not void the session.
-- **Detector:** `test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered`.
-- **Neutralization:** `and missing and any(e["seat"] not in answered for e in ends))` became `and missing and bool(ends))`.
+- **Axis:** a repeat whose card another finding of the record holds is no card of its own.
+- **Detector:** `test_a_repeat_whose_card_another_finding_holds_is_no_owner_card_of_its_own`.
+- **Neutralization:** `and not review_record.repeat_held_elsewhere(f, r["findings"])}` became `and not False}`.
 
-Run at `389da347`. Re-run after the round-1 fix: against the fixed code the earlier test stayed green under this neutralization (its answered-seat session had no row that did not run), so the test gained session s5 (a silent seat that answered beside a seat that did not run) in `389da347`; the red below is on that test.
+Run at `007f8fd2`.
 
 **Raw red** (exit 1):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_ test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered _
+__ test_a_repeat_whose_card_another_finding_holds_is_no_owner_card_of_its_own __
 
-    def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered():
-        at = "2026-11-06T10:00:00Z"
-        m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
-                   _rec(2, "s2", at=at, status="reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
-                   _rec(3, "s3", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE)], ends=[_end(SEC)]),
-                   _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")]),
-                   # the silent seat answered after its end; another seat did not run, silently or not, so this is no void
-                   _rec(5, "s5", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE, "not-run")], ends=[_end(SEC)])])
->       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 5}}, "unplaced": 0}
-E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+    def test_a_repeat_whose_card_another_finding_holds_is_no_owner_card_of_its_own():
+        original = _card("k1")
+        repeat = dict(_card("k2"), repeatOf={"findingKey": "k1", "id": "k1", "fixHolds": None})
+        m, _ = _m([_rec(1, findings=[original, repeat])], mergedPrs=[1])
+>       assert m["ownerCardsPerMergedPr"]["byRelease"] == {"0.49.0": {"median": 1, "p90": 1, "total": 1}}
+E       AssertionError: assert {'0.49.0': {'..., 'total': 2}} == {'0.49.0': {'..., 'total': 1}}
 E         
-E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'byRelease': {'0.50.0': {'voided': 2, 'sessions': 5}}} != {'byRelease': {'0.50.0': {'voided': 1, 'sessions': 5}}}
+E         {'0.49.0': {'median': 2, 'p90': 2, 'total': 2}} != {'0.49.0': {'median': 1, 'p90': 1, 'total': 1}}
 E         Use -v to get more diff
 
-<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:91: AssertionError
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:113: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered
-1 failed, 14 deselected in 0.26s
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_repeat_whose_card_another_finding_holds_is_no_owner_card_of_its_own
+1 failed, 15 deselected in 0.29s
 ```
 
 **Restore:** the inverse edit put the line back.
-**Restore receipt** (the restored line, quoted): `                      and missing and any(e["seat"] not in answered for e in ends))`; `git status --porcelain` over the file printed nothing.
+**Restore receipt** (the restored line, quoted): `... and not review_learning._merged_member(f) and not review_record.repeat_held_elsewhere(f, r["findings"])}`; `git status --porcelain` over the file printed nothing.
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed, 14 deselected in 0.23s
+1 passed, 15 deselected in 4.57s
 ```
 
-## e7b. Void needs a session that did not certify (`not review_record.cleared(...)`)
+## e7a. A void names a reviewer row that did not run (`any(s in not_run for s in silent)`, round-2 finding code-001)
+
+- **Axis:** voided only when a silence end names a row that did not run; an end naming no row is unresolved.
+- **Detector:** `test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one`.
+- **Neutralization:** `elif any(s in not_run for s in silent):` became `elif True:`.
+
+Run at `007f8fd2`. The void rule was reworked after each review round (round 1: a row that did not run is needed; round 2: the end must name that row, else unresolved); every void entry below was run on this final code.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one _
+
+    def test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one():
+        """A forfeited or recovered seat's run dir binds no row, so its end carries the role-and-dir label and cannot be
+        tied to the row that did not run: beside such a row it is unresolved, never a void. A seat a later round recovered
+        leaves no row that did not run (review_record_session drops the missing row), so alone its end is clear."""
+        at, label = "2026-11-06T10:00:00Z", "reviewer (run-r1-sec)"
+        recovered = _row("security-reviewer (round 2)")
+        m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(label)]),
+                   _rec(2, "s2", at=at, status="not-reviewed", rows=[recovered, _row(CODE)], ends=[_end(label)]),
+                   # the recovered seat's end beside an unrelated seat that did not run (round-2 finding code-001)
+                   _rec(3, "s3", at=at, status="not-reviewed", rows=[recovered, _row(CODE, "not-run")], ends=[_end(label)])])
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 0, "unresolved": 2, "sessions": 3}},
+                                            "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.50.0': {'voided': 2, 'unresolved': 0, 'sessions': 3}}} != {'byRelease': {'0.50.0': {'voided': 0, 'unresolved': 2, 'sessions': 3}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:105: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one
+1 failed, 15 deselected in 0.28s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            elif any(s in not_run for s in silent):`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 15 deselected in 0.23s
+```
+
+## e7b. A certified session is clear (`review_record.cleared(...)` in the clear branch)
 
 - **Axis:** a `reviewed` session is never voided, whatever its silence ends.
 - **Detector:** `test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered`.
-- **Neutralization:** `else not review_record.cleared(last.get("status"))` became `else True`.
+- **Neutralization:** `elif review_record.cleared(last.get("status")) or not not_run or not silent:` became `elif not not_run or not silent:`.
 
-Run at `389da347`, re-run after the round-1 fix.
+Run at `007f8fd2`.
 
 **Raw red** (exit 1):
 
@@ -413,74 +458,127 @@ _ test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and
                    _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")]),
                    # the silent seat answered after its end; another seat did not run, silently or not, so this is no void
                    _rec(5, "s5", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE, "not-run")], ends=[_end(SEC)])])
->       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 5}}, "unplaced": 0}
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "unresolved": 0, "sessions": 5}},
+                                            "unplaced": 0}
 E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'byRelease': {'0.50.0': {'voided': 2, 'sessions': 5}}} != {'byRelease': {'0.50.0': {'voided': 1, 'sessions': 5}}}
+E         {'byRelease': {'0.50.0': {'voided': 2, 'unresolved': 0, 'sessions': 5}}} != {'byRelease': {'0.50.0': {'voided': 1, 'unresolved': 0, 'sessions': 5}}}
 E         Use -v to get more diff
 
 <worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:91: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered
-1 failed, 14 deselected in 0.21s
+1 failed, 15 deselected in 0.30s
 ```
 
 **Restore:** the inverse edit put the line back.
-**Restore receipt** (the restored line, quoted): `            voided = (None if not whole else not review_record.cleared(last.get("status"))`; `git status --porcelain` over the file printed nothing.
+**Restore receipt** (the restored line, quoted): `            elif review_record.cleared(last.get("status")) or not not_run or not silent:`; `git status --porcelain` over the file printed nothing.
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed, 14 deselected in 0.24s
+1 passed, 15 deselected in 0.29s
 ```
 
-## e7c. Void needs a reviewer row that did not run (`missing`, review finding code-002)
+## e7c. No reviewer row that did not run is clear (`not not_run`, round-1 finding code-002)
 
 - **Axis:** a seat a later round recovered (its row gone, its run dir unbound, its end named by role and dir) voids nothing.
-- **Detector:** `test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not`.
-- **Neutralization:** `and missing and any(...)` became `and any(...)`.
+- **Detector:** `test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one`.
+- **Neutralization:** `... or not not_run or not silent:` became `... or not silent:`.
 
-Run at `b53ef313`.
+Run at `007f8fd2`.
 
 **Raw red** (exit 1):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_ test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not _
+_ test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one _
 
-    def test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not():
-        """A forfeited seat's run dir binds no row, so its end carries the role-and-dir label; a seat a later round
-        recovered leaves no row that did not run (review_record_session drops the missing row), so its end voids nothing."""
+    def test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one():
+        """A forfeited or recovered seat's run dir binds no row, so its end carries the role-and-dir label and cannot be
+        tied to the row that did not run: beside such a row it is unresolved, never a void. A seat a later round recovered
+        leaves no row that did not run (review_record_session drops the missing row), so alone its end is clear."""
         at, label = "2026-11-06T10:00:00Z", "reviewer (run-r1-sec)"
+        recovered = _row("security-reviewer (round 2)")
         m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(label)]),
-                   _rec(2, "s2", at=at, status="not-reviewed", rows=[_row("security-reviewer (round 2)"), _row(CODE)],
-                        ends=[_end(label)])])
->       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "sessions": 2}}, "unplaced": 0}
+                   _rec(2, "s2", at=at, status="not-reviewed", rows=[recovered, _row(CODE)], ends=[_end(label)]),
+                   # the recovered seat's end beside an unrelated seat that did not run (round-2 finding code-001)
+                   _rec(3, "s3", at=at, status="not-reviewed", rows=[recovered, _row(CODE, "not-run")], ends=[_end(label)])])
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 0, "unresolved": 2, "sessions": 3}},
+                                            "unplaced": 0}
 E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'byRelease': {'0.50.0': {'voided': 2, 'sessions': 2}}} != {'byRelease': {'0.50.0': {'voided': 1, 'sessions': 2}}}
+E         {'byRelease': {'0.50.0': {'voided': 0, 'unresolved': 3, 'sessions': 3}}} != {'byRelease': {'0.50.0': {'voided': 0, 'unresolved': 2, 'sessions': 3}}}
 E         Use -v to get more diff
 
-<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:99: AssertionError
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:105: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_forfeited_seats_end_named_by_its_run_dir_voids_but_a_recovered_seats_does_not
-1 failed, 14 deselected in 0.26s
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_an_end_that_names_no_row_is_unresolved_beside_a_row_that_did_not_run_and_clear_without_one
+1 failed, 15 deselected in 0.32s
 ```
 
 **Restore:** the inverse edit put the line back.
-**Restore receipt** (the restored line, quoted): `                      and missing and any(e["seat"] not in answered for e in ends))`; `git status --porcelain` over the file printed nothing.
+**Restore receipt** (the restored line, quoted): `            elif review_record.cleared(last.get("status")) or not not_run or not silent:`; `git status --porcelain` over the file printed nothing.
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed, 14 deselected in 4.41s
+1 passed, 15 deselected in 0.21s
+```
+
+## e7d. Every silent seat answered is clear (`not silent`)
+
+- **Axis:** a silence end on a seat that later answered does not void the session, even beside a seat that did not run.
+- **Detector:** `test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered`.
+- **Neutralization:** `... or not not_run or not silent:` became `... or not not_run:`.
+
+Run at `007f8fd2`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered _
+
+    def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered():
+        at = "2026-11-06T10:00:00Z"
+        m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(2, "s2", at=at, status="reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(3, "s3", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE)], ends=[_end(SEC)]),
+                   _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")]),
+                   # the silent seat answered after its end; another seat did not run, silently or not, so this is no void
+                   _rec(5, "s5", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE, "not-run")], ends=[_end(SEC)])])
+>       assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "unresolved": 0, "sessions": 5}},
+                                            "unplaced": 0}
+E       AssertionError: assert {'byRelease':...'unplaced': 0} == {'byRelease':...'unplaced': 0}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'byRelease': {'0.50.0': {'voided': 1, 'unresolved': 2, 'sessions': 5}}} != {'byRelease': {'0.50.0': {'voided': 1, 'unresolved': 0, 'sessions': 5}}}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py:91: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_measures_by_release_2498.py::test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_and_the_silent_seat_never_answered
+1 failed, 15 deselected in 0.24s
+```
+
+**Restore:** the inverse edit put the line back.
+**Restore receipt** (the restored line, quoted): `            elif review_record.cleared(last.get("status")) or not not_run or not silent:`; `git status --porcelain` over the file printed nothing.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 15 deselected in 0.24s
 ```
 
 ## e8. Releases before watchdog ends were recorded (`versions[ver] < WATCHDOG_ENDS_SINCE`)
