@@ -189,6 +189,20 @@ def test_edge2_the_reopened_member_stands_as_an_audit_target_built_from_its_ledg
     assert member_target["classKey"]
 
 
+def test_reopening_the_middle_of_a_merge_chain_keeps_a_fixed_leaf_on_the_representative(tmp_path):
+    # axis: unmerging a link of a merge chain re-points the findings merged into it, so they keep their representative — see bite-proof record i2489_member_loop
+    # a chain leaf -> middle -> representative: the leaf's own part is ruled fixed, the middle's is not
+    leaf = _ledger_row(M_C, "member " + M_C, 30, **{SC.MERGED_INTO_FIELD: M_A})
+    world = _world(tmp_path, members=(M_A,), extra_rows=(leaf,))
+    listed = [m["id"] for m in _targets(world)[0]["mergedMembers"]]
+    assert listed == sorted([M_A, M_C])
+    state = _fold(world, members=[_answer(M_A, False, "the middle part is still unfixed"), _answer(M_C, True)])
+    assert SC.MERGED_INTO_FIELD not in _ledger(state, M_A)
+    assert _ledger(state, M_C)[SC.MERGED_INTO_FIELD] == REP
+    outcome, reason, rep = RS._decide(_ledger(state, M_C), *RS.decision_inputs(state))
+    assert (outcome, SC.finding_identity_key(rep)) == ("fixed", REP)
+
+
 def test_edge3_a_member_the_result_does_not_answer_is_reopened(tmp_path):
     # axis: a member the audit did not answer is reopened, never credited fixed — see bite-proof record i2489_member_loop
     world = _world(tmp_path, members=(M_A, M_B))

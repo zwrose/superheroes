@@ -133,6 +133,19 @@ FAILED plugins/superheroes/lib/tests/test_merged_member_loop_2489.py::test_the_t
 1 passed, 18 deselected in 1.69s
 ```
 
+## E5 — unmerging a link of a merge chain re-points the findings merged into it (review round 1 fix)
+
+- **Guarded element:** `round_driver._unmerge_finding`, the re-pointing branch (`if _nonempty_str(into) and into != key:`). **Axis:** a finding merged into a reopened (or settled) member keeps its chain to the representative its own audit answer is stored on.
+- **Neutralization:** `if _nonempty_str(into) and into != key:` → `if False and _nonempty_str(into) and into != key:` (one targeted edit, the builder's own, through the host edit action).
+- **Raw red:** `pytest plugins/superheroes/lib/tests/test_merged_member_loop_2489.py -q -p no:cacheprovider -k test_reopening_the_middle_of_a_merge_chain` →
+  ```
+  /home/user/wt-2489/plugins/superheroes/lib/tests/test_merged_member_loop_2489.py:201: AssertionError
+  FAILED plugins/superheroes/lib/tests/test_merged_member_loop_2489.py::test_reopening_the_middle_of_a_merge_chain_keeps_a_fixed_leaf_on_the_representative
+  1 failed, 19 deselected in 1.43s
+  ```
+- **Restore:** the inverse edit (`if False and ` removed). **Restore receipt:** the line reads `    if _nonempty_str(into) and into != key:` again; `git diff --stat` then showed only the fix and its test (round_driver.py 16 +/-, the test file 14 +).
+- **Raw green:** the same command → `1 passed, 19 deselected in 4.66s`.
+
 ## Not neutralized
 
 The `membersReopened` round record and the `merged-member-reopened` decision are written in the reopen branch E1 skips. The unit tests assert both, but neither write was neutralized on its own, so neither is proven by a run of its own.

@@ -9609,15 +9609,27 @@ def _audit_provenance_basis(state, artifact):
 
 def _unmerge_finding(state, key):
     """Take the finding's whole disposition family off its ledger row and its live copy (a merged row's family is its
-    `mergedInto`), so it is its own finding again. Returns the ledger row as it now stands, or None when the ledger holds none."""
+    `mergedInto`), so it is its own finding again. A finding merged into this one (a chain `leaf -> key -> representative`)
+    is re-pointed at what this one was merged into, so its chain still ends at the representative its audit answer
+    belongs to. Returns the ledger row as it now stands, or None when the ledger holds none."""
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    held = ledger[seen[key]] if key in seen and isinstance(ledger[seen[key]], dict) else live
+    into = held.get(session_contract.MERGED_INTO_FIELD) if isinstance(held, dict) else None
+    if _nonempty_str(into) and into != key:
+        # axis: unmerging a link of a merge chain re-points the findings merged into it, so they keep their representative — see bite-proof record i2489_member_loop
+        for index, other in enumerate(ledger):
+            if isinstance(other, dict) and other.get(session_contract.MERGED_INTO_FIELD) == key:
+                ledger[index] = dict(other, **{session_contract.MERGED_INTO_FIELD: into})
+        for other in state.get("findings") or []:
+            if isinstance(other, dict) and other.get(session_contract.MERGED_INTO_FIELD) == key:
+                other[session_contract.MERGED_INTO_FIELD] = into
     row = None
     if key in seen and isinstance(ledger[seen[key]], dict):
         row = dict(ledger[seen[key]])
         _apply_disposition_family(row, {})
         ledger[seen[key]] = row
-    live = _live_finding_by_key(state, key)
     if live is not None:
         _apply_disposition_family(live, {})
     return row
