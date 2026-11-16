@@ -487,3 +487,17 @@ E       assert ('judgement' == 'needs-review'
 ```
 
 **Not neutralized here:** the `moved` set on its own (with the pathspec intact, the renamed section already fails qualification), pinned by the same two tests and by `test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement`.
+
+### E-rename-scope — only a move after the review brings its source paths in (second session, round 2, commit 20d2cdeb)
+
+**guard:** `_check`, `move_sources` built only from files in `moved`, less every path a copy proof settled.
+
+**neutralization:** `move_sources` built from every remaining file's sources, with no copy subtraction (the commit d4758f2d form).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k copy_proven_restore -q -p no:cacheprovider`
+```
+E       assert ('needs-review' == 'judgement'
+1 failed, 13 deselected in 0.55s
+```
+
+**restore:** the inverse Edits; `git status --short` in the probe worktree printed nothing after them. **green:** the same file, `14 passed in 4.03s`.
