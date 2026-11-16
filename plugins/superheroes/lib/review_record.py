@@ -1079,10 +1079,11 @@ def _validate(a):
         chk(isinstance(extra, dict) and set(extra) == {"why"} and _nb(extra["why"]), "rounds.extraAudit")
     if "boundedPass" in rounds:
         bounded = rounds["boundedPass"]
-        # axis: the bounded pass is said with its trigger, its rounds and the ones whose audits folded, and nothing else; the audited rounds are listed rounds in ascending order — see bite-proof record i2552_bounded_pass_b1
+        # axis: the bounded pass is said with its trigger, its rounds and the ones whose audits folded, and nothing else; the audited rounds are listed rounds in ascending order, and only a stall pass may list no round — see bite-proof records i2552_bounded_pass_b1 and i2554_bounded_pass_record (E-stall-record)
         chk(isinstance(bounded, dict) and set(bounded) == {"trigger", "rounds", "auditedRounds"}
             and bounded["trigger"] in BOUNDED_PASS_TRIGGERS
-            and isinstance(bounded["rounds"], list) and bool(bounded["rounds"])
+            and isinstance(bounded["rounds"], list)
+            and (bool(bounded["rounds"]) or bounded["trigger"] == "fix-keeps-failing")  # a stall pass may hand back before its audit round
             and all(isinstance(n, int) and not isinstance(n, bool) for n in bounded["rounds"])
             and isinstance(bounded["auditedRounds"], list)
             and all(isinstance(n, int) and not isinstance(n, bool) and n in bounded["rounds"] for n in bounded["auditedRounds"])
@@ -2862,7 +2863,9 @@ def _bounded_pass_line(rounds):
         return f"audited in round {n}" if n in audited else "not audited"
 
     if bounded.get("trigger") == "fix-keeps-failing":
-        later = listed[-1] if listed else None
+        if not listed:
+            return "Bounded pass: it began after a fix kept failing, and handed back before its audit round began."
+        later = listed[-1]
         return ("Bounded pass: a fix that kept failing got one more bounded fix, "
                 + (f"audited in round {later}." if later in audited else "which was not audited."))
     first = listed[0] if listed else None

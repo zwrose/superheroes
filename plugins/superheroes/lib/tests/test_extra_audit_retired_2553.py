@@ -94,8 +94,23 @@ def test_a_the_verb_refuses_extra_audit_retired_naming_the_bounded_pass_and_chan
     assert X._state(d) == state_before
 
 
+_WATCHING = False  # an audit hook cannot be removed: it records only while this is true
+_OPENED = []
+
+
+def _watch_opens(event, args):
+    if _WATCHING and event == "open" and isinstance(args[0], (str, bytes, os.PathLike)):
+        _OPENED.append(os.path.abspath(os.fsdecode(args[0])))
+
+
+sys.addaudithook(_watch_opens)
+
+
 @pytest.mark.parametrize("make", ["missing-order", "garbage-order", "valid-order"])
 def test_a_the_order_file_is_never_read(tmp_path, make):
+    # axis: the retired verb never opens the order file, so it fails when the verb opens it and then refuses — see
+    # bite-proof record i2554_bounded_pass_record (E-no-read)
+    global _WATCHING
     d = X._capped(tmp_path)
     order = str(tmp_path / "order.json")
     if make == "garbage-order":
@@ -105,7 +120,13 @@ def test_a_the_order_file_is_never_read(tmp_path, make):
         with open(order, "w", encoding="utf-8") as fh:
             json.dump({"why": WHY}, fh)
     files, rows, raw = _snapshot(d), RD.read_journal(d), _journal(d)
-    out = RD.cmd_extra_audit(d, order, "advisor", PR, readers=READERS)
+    del _OPENED[:]
+    _WATCHING = True
+    try:
+        out = RD.cmd_extra_audit(d, order, "advisor", PR, readers=READERS)
+    finally:
+        _WATCHING = False
+    assert os.path.abspath(order) not in _OPENED, "the verb opened the order file"
     assert out["ok"] is False and out["reason"] == RETIRED, out
     assert _snapshot(d) == files
     _assert_one_refusal_row(d, rows, raw)

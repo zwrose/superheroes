@@ -738,26 +738,36 @@ refused `max-rounds-invalid`. There is no ceiling above the cap.
 The cap is a boundary on the round about to begin. The cap round completes its audits, its fix leg
 and its verify gate, and then the session hands the PR back. A cap round whose fixes no audit has
 checked does not hand back: the review loop's bounded pass audits them in round `cap + 1`, with no
-advisor order (§ The bounded pass). It converges `bounded-pass` when every fix discharges with
-nothing Important open, and otherwise hands back `round-cap` as any cap round that ends open does.
+advisor order, and makes at most one more fix and audits it in round `cap + 2` (§ The bounded pass). It
+converges `bounded-pass` when nothing is left that the pass holds open, and settles what it could not
+clear as a card for the owner. A cap round whose fixes were all audited and that ends with
+something open hands back `round-cap`, with no pass.
 
 **How a session stops.**
 
 - **Nothing blocking left.** The session converges at that round, round 1 included.
-- **The cap round ends with something open.** The session hands back through the one handback
-  terminal (`_hand_back` in `lib/round_driver.py`), verdict `handed-back`, last decision
+- **The cap round ends with something open.** When the cap round applied work no audit has checked,
+  the bounded pass begins (§ The bounded pass). Otherwise the session hands back through the one
+  handback terminal (`_hand_back` in `lib/round_driver.py`), verdict `handed-back`, last decision
   `round-cap`, with every open finding, Important and Critical alike, each with its outcome. There
-  is no park or held state, no fix leg after the cap, and no new session started to keep going. The
-  one round past the cap is the audit of the cap round's own unaudited fixes: the bounded pass, or,
-  for a session whose state holds an ordered extra audit round, that round (§ The bounded pass,
-  § The extra audit round, which is retired).
+  is no park or held state, no fix leg after the cap outside the pass, and no new session started to
+  keep going. The rounds past the cap are the bounded pass's: round `cap + 1` audits the cap round's
+  own unaudited fixes and round `cap + 2` audits the pass's one fix. A session whose state holds an
+  ordered extra audit round runs that round instead (§ The bounded pass, § The extra audit round,
+  which is retired).
 - **The same fix fails its audit in two rounds in a row.** Only an audit that answers the fix wrong
   counts (or one that carries no recognised reason kind, so an older round counts as before). A
   scope-only hold clears, so it does not count; an audit that never answered, and a merged finding
   reopened before its own fix was audited, do not count either: that finding stays open and goes back
   to the fix list. The session makes one automatic recovery attempt: the fix step is set again. No recovery attempt runs when the second failure is
-  in the cap round. If the fix still fails after the recovery attempt, the session hands back with
-  `handed-back` / `fix-keeps-failing`; in the cap round it hands back with `round-cap`.
+  in the cap round; there it hands back with `round-cap`. If the fix still fails after the recovery
+  attempt, below the cap, the bounded pass begins (§ The bounded pass): one fix step for the stuck
+  finding, then one audit round. The session hands back `handed-back` / `fix-keeps-failing` only when
+  that pass cannot begin or queues no fix: the session already holds a bounded pass or an ordered
+  extra audit round, or the pass's fix batch cannot be composed or queues empty (a held owner choice
+  then hands back `owner-choice-open` instead). The recovery attempt itself hands back
+  `fix-keeps-failing` when its own blocking findings cannot be composed into a batch. A saved state
+  waiting at a stall menu of an earlier version is handed back `fix-keeps-failing` too.
 - **A blocking finding only the owner's choice can settle** (a finding marked `tradeoff: true`). It
   is held out of the fix batch: the build session does not make the owner's choice. A `rule`
   decision (guidance or out-of-scope) recorded on it is the in-session way to settle it (§ Owner and
@@ -781,29 +791,46 @@ test role's break-it test could not be made, so the PR goes back with its findin
 `later-round-panel-retired`.
 The result file maps `converged` to `exit_clean` and
 every other verdict to `halt`. The review record reads rounds as `<count> of <cap>` and says the
-loop stopped at its cap for `round-cap`, `extra-audit-open`, `bounded-pass-open` and a converged
-`bounded-pass` ([review-record.md](review-record.md)).
+loop stopped at its cap for `round-cap`, `extra-audit-open`, a `bounded-pass-open` of a pass whose
+trigger is `round-cap`, and a converged `bounded-pass` whose trigger is `round-cap`. A pass whose
+trigger is `fix-keeps-failing` began below the cap, so its `bounded-pass-open` and its converged
+`bounded-pass` are not a stop at the cap ([review-record.md](review-record.md)).
 
 ## The bounded pass
 
-**The trigger.** The cap round queued a fix batch and applied work, and the session holds
-neither a bounded pass nor an ordered extra audit round. Applied work is read as the driver reads a
-round's work elsewhere: the cap round's reported fixes, its fix commits, or a PR-body fix whose
-`after` is a non-empty string that differs from its `before`, or a head diff that changed in the cap
-round (the post-fix `headDiff` differs from the round's `reviewedDiff`, both read as text; a fix
-committed with no `fixes` binding leaves the record lists empty, and only the head diff shows it). A
-cap round that applied none of the four hands back `round-cap` with no pass. The driver begins the pass itself when the
-cap round's verify gate folds: no order, no advisor and no `extra-audit` call. A loaded state already
-above its cap never begins one, and a session holds at most one pass.
+The bounded pass is the review loop's own finish past a point where it would otherwise stop. It has
+two triggers, at most one fix step and one or two audit rounds. The driver begins it itself: no
+order, no advisor and no `extra-audit` call. A session holds at most one pass, and an ordered extra
+audit round a saved state holds counts as one.
 
-**The one round.** Past the cap a session runs at most one round, round `cap + 1`, and it is entered
-by the bounded pass or by an ordered extra audit round a saved state holds (the extra audit round is
-retired: nothing begins one), and by nothing else. The state records
-`boundedPass` as `{"trigger": "round-cap", "step": "audit" or "done", "rounds": [<cap + 1>]}`, and
-the decision `bounded-pass-begun` names the cap and the number of fixes to audit.
+**The two triggers.**
 
-**What it runs.** Only `dispatch-audits`, over the cap round's fixes. It never runs a panel, scoped
-finder, seams check, verifier, synthesis, fix step, verify run, stall recovery or advisor order.
+- **`round-cap`: the cap round's applied work.** The cap round queued a fix batch and applied
+  work, and the session holds neither a bounded pass nor an ordered extra audit round. Applied work
+  is read as the driver reads a round's work elsewhere: the cap round's reported fixes, its fix
+  commits, or a PR-body fix whose `after` is a non-empty string that differs from its `before`, or a
+  head diff that changed in the cap round (the post-fix `headDiff` differs from the round's
+  `reviewedDiff`, both read as text; a fix committed with no `fixes` binding leaves the record
+  lists empty, and only the head diff shows it). A cap round that applied none of the four hands
+  back `round-cap` with no pass. The pass begins when the cap round's verify gate folds. A loaded
+  state already above its cap never begins one.
+- **`fix-keeps-failing`: a fix that keeps failing its audit after its one self-recovery, below the
+  cap.** Where the session would hand back `fix-keeps-failing`, the pass begins at once. The stuck
+  finding is its fix batch. A stall found in the cap round hands back `round-cap` with no pass
+  (§ Rounds, the cap and handback).
+
+**The rounds.** A `round-cap` pass has at most two audit rounds past the cap: B1's, round
+`cap + 1`, and B2's, round `cap + 2`. A `fix-keeps-failing` pass has one, B2's: when the stall was
+found in round `r`, the pass's fix step is round `r`'s fix leg and its audits are round `r + 1`,
+below the cap. Only the bounded pass and an ordered extra audit round a saved state holds begin a
+round past the cap. The state records `boundedPass` as `{"trigger", "step", "rounds"}`. The step is
+`"audit"` (B1), `"fix"` (B2's fix leg), `"final-audit"` (B2's audits) or `"done"`. The record
+adds `stuck` (a stall pass: the stuck finding keys), `contextOnly`, `restores`, `fixed` and
+`leftForOwner` as the pass uses them. The decision `bounded-pass-begun` is written when B1 begins
+and again when B2 begins.
+
+**B1, the audit step.** Only `round-cap` has a B1. It is round `cap + 1`, and it audits the cap
+round's unaudited fixes. It dispatches only `dispatch-audits`, over those fixes.
 
 **New issues.** An auditor's new issue cited outside the lines the PR touched goes to the "Outside
 this PR" list, whatever its severity, and never holds the pass open. An in-PR new issue holds the
@@ -811,27 +838,76 @@ pass open unless its `severity` is exactly `Minor` or `Nit`: `Important`, `Criti
 non-string severity and any other value all hold it open. A `Minor` or `Nit` new issue is settled at
 the terminal like any other leftover.
 
-**The two ends.**
+**B2, the one fix step.** B2 runs one fix batch and then one audit round over that batch. It runs
+after B1 when B1 left open an undischarged audit, an in-PR new issue the severity rule holds open,
+or an owner ruling no fixer received. At a stall it runs at once, as round `r`'s fix leg. The
+batch is never sliced, and the pass never runs a second fix step.
 
-- **Every fix discharged, nothing Important open, no owner guidance left unsent.** The decision
-  `bounded-pass-settled` is recorded and the session ends `converged` through the normal convergence
-  check, which still hands back a held owner choice as `owner-choice-open`. The certification shape is
-  `bounded-pass` (`bounded-pass-degraded` and `bounded-pass-constraint-violated` carry the usual
-  suffixes), and the certification names the pass as `boundedPass: {"trigger", "rounds"}`.
-- **Anything else open.** The session ends `handed-back` with the decision kind `round-cap`: an audit
-  not discharged, an in-PR new issue the severity rule holds open, or an owner ruling no fixer
-  received. The detail begins "Round cap N reached: the bounded pass audited the cap round's fixes and
-  left them open".
+- **The queue policy.** A `Minor` or `Nit` that joins the batch only as a fix-group sibling is
+  context only: the fixer sees it in the guidance file, and no audit targets it. It is recorded on
+  the pass as `contextOnly` (`{findingKey, title}`) and by a `fix-batch-excluded` decision. A `Minor`
+  or `Nit` stays a target when an owner ruling names it, when it is the stall's stuck finding, or
+  when a B1 mismatch restore rides on it. A finding of any other severity, a missing or unknown
+  severity included, stays a target.
+- **The empty-batch rule.** When the policy leaves no target, no fix step runs. In a `round-cap`
+  pass the session records `bounded-pass-settled` and converges through the one convergence check:
+  B1's discharges stand, what is left settles by the terminal rule, and
+  `certification.boundedPass.leftForOwner` is empty. In a `fix-keeps-failing` pass the stuck finding
+  is always a target, so an empty batch means the pass never ran: the stall's own ending stands
+  (`fix-keeps-failing`, or `owner-choice-open` when a held owner choice is unsettled).
+- **The stuck finding's `auditFailures`.** In a `fix-keeps-failing` pass, the stuck finding's batch
+  row carries `auditFailures`: every failed audit of that finding in the round records, oldest
+  first, each `{round, ruling, reasonKind, reason}`, so the fixer sees why each earlier fix failed.
+- **The gate and the audits.** When the fix folds, the verify gate runs on the post-fix head. Then
+  the pass begins its audit round, `cap + 2` (or `r + 1`), which dispatches only `dispatch-audits`
+  over B2's fixes. B2's fix never advances the round counter or schedules a finder.
 
-**Its own faults.** The pass hands back `bounded-pass-open` when it cannot do its work: the cap
-round's fixes yield no audit target, the surface of the fixes cannot be derived, the lane now needs
-a panel, the audit outcome cannot be read, an auditor's new-issue entry is not a record, or the
-state holds both an ordered extra audit round and a bounded pass. The cap is kept and certification
-is withheld, as for `round-cap`.
+**The test-mismatch rule inside the pass.** An audit can find that the committed break-it test is
+not the test role's version or weakens it. In B1 the restore takes no step of its own: it rides B2's
+`apply-fixes` step as `restores` (`{findingKey, path, content, sha256}`), and the audit goes on. In
+B2's audit round the same finding hands back `bounded-pass-open`, because no restore or second test
+runs past the pass's one fix step and a weakened test is never left on a converged head.
 
-**The record.** `rounds.boundedPass` is `{"trigger": …, "rounds": [<int>, …]}`. `rounds.count` does
-not count the pass's round, and `stoppedAtCap` is true for a converged pass and for either
-hand-back. The fields are described in [review-record.md](review-record.md).
+**What it never runs.** A panel, a scoped finder, a seams check, a verifier, a synthesis, a second
+fix step, a separate restore step, a second-test reviewer or an advisor order. No verify run and no
+stall recovery follow either audit round.
+
+**The three ends.**
+
+- **`converged`, shape `bounded-pass`.** The session ends through the one convergence check. The
+  shape carries the usual suffixes (`bounded-pass-degraded`, `bounded-pass-constraint-violated`).
+  Targets the audits discharged read fixed. After B2's audit round, each target still uncleared
+  whose severity is not exactly `Minor` or `Nit` (or that an owner ruling names, or that is the
+  stuck finding), and each in-PR new issue the final audit raised whose severity is not `Minor` or
+  `Nit`, settles `left-for-owner` with `boundedPassEvidence` (§ The record). This happens before
+  the break-it kept check, so the kept check finds a disposition and never parks. `Minor` and `Nit`
+  leftovers settle by the terminal rule. The certification names the pass as `boundedPass:
+  {"trigger", "rounds", "fixed", "leftForOwner"}`.
+  A B1-only convergence is unchanged: when every cap-round fix discharges in B1 and nothing is held
+  open, the decision `bounded-pass-settled` is recorded and the certification names the pass as
+  `boundedPass: {"trigger", "rounds"}`.
+- **`handed-back` / `owner-choice-open`.** The convergence check still hands back a held owner
+  choice, whatever the pass did.
+- **`handed-back` / `bounded-pass-open`.** The pass hands this back for its own faults: in B1, the
+  cap round's fixes yield no audit target, the surface of the fixes cannot be derived, the lane
+  needs a panel, the audit outcome cannot be read, an auditor's new-issue entry is not a record, or
+  the state holds both an ordered extra audit round and a bounded pass; in B2, an open audit id has
+  no audit target, a new issue carries no finding, B1's break-it test cannot be restored in the
+  fix step, B2's own audit finds a test mismatch, or (a `fix-keeps-failing` pass) round `r` already
+  holds a fix record. Certification is withheld. A `round-cap` pass keeps the cap, as `round-cap`
+  does. A `fix-keeps-failing` pass began below the cap and says so.
+
+A cap round whose fixes were all audited and that ends with something open hands back `round-cap`
+with no pass. A session whose cap round queued no applied work does too.
+
+**The record.** `rounds.boundedPass` is `{"trigger", "rounds", "auditedRounds"}`: the pass's rounds,
+and the ones whose audits folded. A `fix-keeps-failing` pass that hands back before its audit round
+began lists no round, and the record still reads. Only the rounds past the cap are left out of
+`rounds.count`, so a `fix-keeps-failing` pass's round counts. `stoppedAtCap` is true for a converged
+`round-cap` pass and for a `round-cap` pass's `bounded-pass-open`; it is false for a
+`fix-keeps-failing` pass, and false when the state holds no readable pass. A finding the pass left
+for the owner carries `boundedPassEvidence`, shown on its card as "What the loop tried". The fields
+are described in [review-record.md](review-record.md).
 
 ## The extra audit round
 
@@ -1279,7 +1355,7 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 | --- | --- |
 | `full-panel-confirmed` | The round-1 `reviewer-deep` panel converged with no fix to make. |
 | `audited-chain` | The finish of every review that needed fixes — the last round's fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `bounded-pass` | The cap round's fixes were audited in the bounded pass's round and every one discharged, with nothing Important open; no scoped finder ran on those fixes and **no** final full panel (§ The bounded pass). Surface this honestly. |
+| `bounded-pass` | The bounded pass ended the session: its audit rounds folded, and what they did not clear is settled `left-for-owner` with its evidence, or by the terminal rule for a `Minor` or `Nit`. No scoped finder ran on the pass's fixes and there was **no** final full panel (§ The bounded pass). Surface this honestly, with each card the pass left. |
 | `*-degraded` | Appended when `independence` is degraded — including a fix whose audit did not run because no live vendor sits outside the makers' families, a configuration whose only live vendor is a maker's family, base fetch degraded, the seat map disclosed same-family self-review, no usable seat map was submitted (`seat-map-unavailable`), the submitted seat map's violation basis is incomplete (`seat-map-unavailable` shape driver — same token as absent-map), or a standing pin excused a constraint. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, a handback (`handed-back`: `round-cap`, `fix-keeps-failing`, `owner-choice-open`, `extra-audit-open`, `bounded-pass-open`, `fix-surface-unknown`, `break-it-restore-failed`, `later-round-panel-retired`), or `cannot-certify`. |
@@ -1289,9 +1365,9 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 - **Scoped certifying finish** (`audited-chain` / `audited-chain-degraded`) — the review needed fixes and ended on a round's audit and scoped finder; delta rounds verified the fix chain; say so.
 - **One recovery attempt** — the same fix failing its audit in two rounds in a row triggers a single recovery attempt, the fix step set again (journaled); nothing is offered to the owner.
 - **Handback at the cap** — `handed-back` / `round-cap`: round 4 ended with something open. Every open finding, Important and Critical alike, is listed with its outcome; the PR goes back to its owner.
-- **Handback after a failed recovery** — `handed-back` / `fix-keeps-failing`: the fix still fails its audit after the recovery attempt.
+- **Handback after a failed recovery** — `handed-back` / `fix-keeps-failing`: the fix still fails its audit after the recovery attempt, and the bounded pass cannot begin or queues no fix (§ How a session stops). A stall that persists after the recovery otherwise begins the bounded pass.
 - **Handback on an owner's choice** — `handed-back` / `owner-choice-open`: a finding only the owner's choice can settle is still open when nothing else is left to fix. It reaches the owner as a leftover at the vet.
-- **Bounded pass finish** (`bounded-pass` / `bounded-pass-degraded`) — the cap round's fixes were audited in round `cap + 1` and discharged, with no scoped finder run on them; say so. A pass that left a fix open hands back `round-cap`; one that could not do its work hands back `bounded-pass-open` (§ The bounded pass).
+- **Bounded pass finish** (`bounded-pass` / `bounded-pass-degraded`) — the pass audited the cap round's fixes (B1, round `cap + 1`) or a stuck fix, made at most one bounded fix, and audited it (B2); no scoped finder ran on those fixes; say so. Each finding the pass could not clear is a card for the owner, with what the loop tried (`boundedPassEvidence`). A pass that could not do its work hands back `bounded-pass-open` (§ The bounded pass).
 - **Extra audit unfinished** — `handed-back` / `extra-audit-open`: the extra audit round ended with a fix undischarged, an auditor's new issue, or a surface it could not derive (§ The extra audit round).
 - **Handback on an unknown fix surface** — `handed-back` / `fix-surface-unknown`: the driver could not work out what the round's fixes changed, so it could neither audit them nor search the code they touched. Every finding keeps its outcome or is shown open.
 - **Handback on a restore that failed** — `handed-back` / `break-it-restore-failed`: the audit listed a break-it test as missing, changed without a reason or weakened, and the restore of the test role's version could not be made (the commit did not hold its bytes, added no commit, or could not be read from git; or the finding carried no readable test to restore). Every finding is shown open.
@@ -1341,8 +1417,10 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   clean round resets the window; it counts only outcomes whose `reasonKind` is `wrong`, or is missing
   or unrecognised (fail closed, so an older audit round counts as before), and never `unanswered` or
   `reopened-merged`; it triggers the one recovery attempt, and a stall that persists
-  hands back (`fix-keeps-failing`). The round cap is a boundary on the round about to begin, and
-  **no session's round counter exceeds the cap**. Callers
+  begins the bounded pass (§ The bounded pass), which hands back `fix-keeps-failing` only when it
+  cannot begin or queues no fix. The round cap is a boundary on the round about to begin, and
+  **no session's round counter exceeds the cap** except in the bounded pass's audit rounds, `cap + 1`
+  and `cap + 2`, and an ordered extra audit round a saved state holds. Callers
   of `advance` must not treat `ok: true` from a nested `cmd_submit` as a landed fold unless
   `foldLanded` is set; the `notFolded` receipt names why.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.

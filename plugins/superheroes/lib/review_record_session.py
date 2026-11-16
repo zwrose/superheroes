@@ -1719,19 +1719,21 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             makers.append({"family": family, "source": "seat map maker list"})
     wider = _wider_rounds(rounds)
     last = decisions[-1] if decisions else {}
+    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
     if abandoned is not None:
         cause, capped = {}, False  # no terminal to map
     else:
         cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
         if state["terminal"] == _HANDED_BACK:
-            # a hand-back stops at the cap only for the round cap and the extra audit; the others end early
-            capped = last.get("kind") in _HANDED_BACK_AT_CAP
+            # a hand-back stops at the cap only for the round cap, the extra audit and a `round-cap` pass's own fault; the others end early
+            # axis: a stall pass's `bounded-pass-open` is not a stop at the cap, and neither is one whose state holds no readable pass — see bite-proof record i2554_bounded_pass_record (E-stall-cap)
+            capped = last.get("kind") in _HANDED_BACK_AT_CAP and (
+                last.get("kind") != "bounded-pass-open" or bool(bounded and bounded.get("trigger") == "round-cap"))
         else:
             capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     extra = state.get("extraAudit")
-    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
     bounded_rounds = bounded.get("rounds") if bounded and isinstance(bounded.get("rounds"), list) else []
     # a converged bounded pass kept the cap: its trigger was the round cap
     capped = capped or bool(abandoned is None and state["terminal"] == "converged" and bounded

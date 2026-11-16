@@ -111,6 +111,21 @@ def stall(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def stall_handed_back_early(tmp_path_factory):
+    """A stall pass that finds a fix record in round r: it hands back `bounded-pass-open` before its audit round began."""
+    real = RD._begin_stall_bounded_pass
+
+    def with_a_fix_record(state, config, breaker, session_dir=None):
+        state["rounds"][str(state["round"])]["fix"] = {"fixes": [], "commits": []}
+        return real(state, config, breaker, session_dir=session_dir)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(RD, "_begin_stall_bounded_pass", with_a_fix_record)
+        d, _terminal, _trace, state = B2._stall_session(tmp_path_factory.mktemp("run"))
+    return d, state
+
+
+@pytest.fixture(scope="module")
 def stall_open(tmp_path_factory):
     d, _terminal, _trace, state = B2._stall_session(tmp_path_factory.mktemp("run"), b2="not-discharged")
     return d, state
@@ -177,6 +192,38 @@ def test_a_fix_keeps_failing_pass_counts_every_one_of_its_rounds(account_of, sta
     RR._validate(account)
 
 
+def test_a_stall_pass_handed_back_before_its_audit_round_is_a_recordable_session_and_not_a_stop_at_the_cap(
+        account_of, stall_handed_back_early):
+    # axis: a stall pass that lists no round validates, and its `bounded-pass-open` is not a stop at the cap — see
+    # bite-proof record i2554_bounded_pass_record (E-stall-record, E-stall-cap)
+    state = stall_handed_back_early[1]
+    assert state["terminal"] == "handed-back" and state["decisions"][-1]["kind"] == "bounded-pass-open"
+    assert state["boundedPass"]["trigger"] == "fix-keeps-failing" and state["boundedPass"]["rounds"] == []
+    account = account_of(state)
+    RR._validate(account)
+    assert account["rounds"]["boundedPass"] == {"trigger": "fix-keeps-failing", "rounds": [], "auditedRounds": []}
+    assert account["rounds"]["stoppedAtCap"] is False
+    assert RR._bounded_pass_line(account["rounds"]) == (
+        "Bounded pass: it began after a fix kept failing, and handed back before its audit round began.")
+
+
+@pytest.mark.parametrize("pass_state,expected", [
+    ({"trigger": "round-cap", "rounds": [CAP + 1], "step": "done"}, True),
+    ({"trigger": "fix-keeps-failing", "rounds": [], "step": "done"}, False),
+    (None, False),
+    ("unreadable", False),
+], ids=["round-cap", "fix-keeps-failing", "no-bounded-pass", "unreadable-bounded-pass"])
+def test_a_bounded_pass_open_hand_back_stops_at_the_cap_only_for_a_round_cap_pass(account_of, b1_b2, pass_state, expected):
+    # axis: see E-stall-cap above
+    state = copy.deepcopy(b1_b2[1])
+    state["terminal"] = "handed-back"
+    state["decisions"] = [*state["decisions"], {"kind": "bounded-pass-open", "detail": "x"}]
+    state.pop("boundedPass", None)
+    if pass_state is not None:
+        state["boundedPass"] = pass_state
+    assert account_of(state)["rounds"]["stoppedAtCap"] is expected
+
+
 def test_the_cap_alone_decides_which_listed_rounds_are_left_out_of_the_count(account_of, b1_b2):
     state = copy.deepcopy(b1_b2[1])
     state["boundedPass"]["rounds"] = [CAP]  # a listed round at the cap is a real round
@@ -197,7 +244,8 @@ def _rounds(**bounded):
     {"trigger": "round-cap", "rounds": [5, 6], "auditedRounds": [5, 6]},
     {"trigger": "round-cap", "rounds": [5, 6], "auditedRounds": [6]},
     {"trigger": "fix-keeps-failing", "rounds": [4], "auditedRounds": [4]},
-], ids=["none-audited", "one", "both", "second-only", "stall"])
+    {"trigger": "fix-keeps-failing", "rounds": [], "auditedRounds": []},
+], ids=["none-audited", "one", "both", "second-only", "stall", "stall-no-rounds"])
 def test_the_validator_accepts_audited_rounds_that_are_listed_rounds_in_ascending_order(bounded):
     RR._validate(TRR.account(rounds=_rounds(**bounded)))
 
@@ -212,8 +260,9 @@ def test_the_validator_accepts_audited_rounds_that_are_listed_rounds_in_ascendin
     {"trigger": "round-cap", "rounds": [5, 6], "auditedRounds": [5, 5]},
     {"trigger": "round-cap", "rounds": [1], "auditedRounds": [True]},
     {"trigger": "round-cap", "rounds": [5], "auditedRounds": ["5"]},
+    {"trigger": "round-cap", "rounds": [], "auditedRounds": []},
 ], ids=["missing", "extra-key", "not-a-list", "null", "not-a-listed-round", "out-of-order", "duplicate", "bool",
-        "string"])
+        "string", "round-cap-no-rounds"])
 def test_the_validator_refuses_audited_rounds_that_are_not_listed_rounds_in_ascending_order(bounded):
     with pytest.raises(RR.Refusal) as refused:
         RR._validate(TRR.account(rounds=_rounds(**bounded)))
@@ -244,7 +293,7 @@ def _line(trigger, rounds, audited, cap=4):
     ("fix-keeps-failing", [4], [], 7,
      "Bounded pass: a fix that kept failing got one more bounded fix, which was not audited."),
     ("fix-keeps-failing", [], [], 7,
-     "Bounded pass: a fix that kept failing got one more bounded fix, which was not audited."),
+     "Bounded pass: it began after a fix kept failing, and handed back before its audit round began."),
 ], ids=["cap-b1", "cap-handed-back-before-b1-audit", "cap-b1-b2", "cap-b2-not-audited", "cap-unknown-cap", "stall-audited",
         "stall-not-audited", "stall-no-round"])
 def test_the_line_names_an_audit_only_for_an_audited_round(trigger, rounds, audited, cap, expected):
