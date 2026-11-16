@@ -1965,7 +1965,7 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
         return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed,
-                                   session_uncertified=account.get("uncertified"))
+                                   session_uncertified=account.get("uncertified"), from_session=True)
     try:
         return review_record._guarded(go)
     finally:

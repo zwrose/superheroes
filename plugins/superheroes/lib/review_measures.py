@@ -29,7 +29,7 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
   - Reviewer cost comes only from each session's latest record's `sessionCost`, and only when it is complete;
     `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
     A seat's tokens and minutes are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
-    The window figures are over the measured PRs, and `prsLeftOut` counts the rest.
+    The window figures are over the measured PRs, and `prsLeftOut` counts the rest; a PR left out only because every unmeasured session's latest record has no `sessionCost` key (a hand-written account) counts under `prsLeftOut.<tokens|minutes>.handWritten`, not in `count`.
   - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat, or only a seat that did not run on the PR (in any of its valid records, in the window or not), counts under `unattributed` and credits that seat nothing, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -93,6 +93,7 @@ MEASURE_KEYS = {"roundsPerPr": ("median", "p90"), "sessionsPerPr": ("median", "p
                 "escapes": ("missed", "seenAndLeft", "falsePrClaims"), "capChoices": CAP_CHOICES,
                 **dict.fromkeys(COSTLY, ("basis", "value", "source")), **dict.fromkeys(BY_RELEASE, ("byRelease", "unplaced"))}
 LEFT_OUT_WHY = "a review session has no complete sessionCost"
+HAND_WRITTEN_WHY = "cost not measured (hand-written)"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
@@ -189,6 +190,15 @@ def _pr_cost(rs, k):
         else:
             figures.append(sc[k] if sc is not None and sc["complete"] else None)
     return _sum(figures, k, exact=True)
+
+
+def _hand_written_only(rs, k):
+    """True when a PR left out of the `k` cost figure is left out only because it was hand-written: every in-window
+    session whose figure is unmeasured has a latest record with no `sessionCost` key at all (the session writer writes
+    one on every record). A `sessionCost` that is present but malformed or incomplete is incomplete, never hand-written."""
+    unmeasured = [_latest(recs) for recs in _by_session(rs) if _pr_cost(recs, k) is None]
+    # axis: a session counts hand-written only when its latest record carries no sessionCost key, and a PR only when every unmeasured session does — see bite-proof record i2515_hand_cost
+    return bool(unmeasured) and all("sessionCost" not in r for r in unmeasured)
 
 
 def _cap_outcome(choice, key, pr, later, escapes, before=frozenset()):
@@ -380,7 +390,9 @@ def compute(inp, start, end, written_at=None):
         for k in ("tokens", "minutes"):
             totals = [_pr_cost(rs, k) for rs in prs.values()]
             measured = [t for t in totals if t is not None]
-            out[k] = {"count": len(totals) - len(measured), "why": LEFT_OUT_WHY}
+            hand = sum(1 for rs, t in zip(prs.values(), totals) if t is None and _hand_written_only(rs, k))
+            out[k] = {"count": len(totals) - len(measured) - hand, "why": LEFT_OUT_WHY,
+                      "handWritten": {"count": hand, "why": HAND_WRITTEN_WHY}}
             if not measured:
                 m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "no-measured-pr")
                 continue
