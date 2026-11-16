@@ -460,3 +460,111 @@ FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_builder_
 212 passed in 19.07s
 ```
 This disclosure is unadjudicated: it travels to the next independent reader of the record.
+
+---
+
+## Added at the second review session, round 1: E-rename (2026-11-16, typed and run by the build session)
+
+**guard:** `head_coverage.py:290` in `_qualification`, the rename and copy source paths read with the changed files
+(`"--", *files, *[s for s in sources if s not in files]`), together with the `moved` set in `_check` that keeps a file
+moved after review out of reconstruction and copy proofs. Added at the loop's apply-fixes step in commit d4758f2d and
+proved in a detached probe worktree at that commit.
+
+**neutralization:** the pathspec cut back to `"--", *files` (destination paths only).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k rename_after_review -q -p no:cacheprovider`
+```
+E       assert ('judgement' == 'needs-review'
+E       assert ('judgement' == 'needs-review'
+2 failed, 11 deselected in 6.62s
+```
+
+**restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing after it.
+
+**green:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -q -p no:cacheprovider`
+```
+13 passed in 1.18s
+```
+
+**Not neutralized here:** the `moved` set on its own (with the pathspec intact, the renamed section already fails qualification), pinned by the same two tests and by `test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement`.
+
+### E-rename-scope — only a move after the review brings its source paths in (second session, round 2, commit 20d2cdeb)
+
+**guard:** `_check`, `move_sources` built only from files in `moved`, less every path a copy proof settled.
+
+**neutralization:** `move_sources` built from every remaining file's sources, with no copy subtraction (the commit d4758f2d form).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k copy_proven_restore -q -p no:cacheprovider`
+```
+E       assert ('needs-review' == 'judgement'
+1 failed, 13 deselected in 0.55s
+```
+
+**restore:** the inverse Edits; `git status --short` in the probe worktree printed nothing after them. **green:** the same file, `14 passed in 4.03s`.
+
+**Superseded in round 3 (commit 28e8dda8):** the `moved` filter on `move_sources` hid a move into a path X already held, so every remaining file's sources are read again (the copy subtraction stays), and a file that carries sources is never dropped as a copy.
+
+### E-rename-overwrite — a move into a reviewed path still shows the source it deletes (second session, round 3)
+
+**guard:** `_check`, `move_sources = set().union(*(sources.get(p, set()) for p in remaining))`.
+
+**neutralization:** the round-2 form, `... for p in remaining if p in moved`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k reviewed_prose_path -q -p no:cacheprovider`
+```
+E       assert 'judgement' == 'needs-review'
+1 failed, 14 deselected in 0.63s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `15 passed in 4.73s`.
+
+## Added at the second review session, round 4: E-rename-one-rule (2026-11-16, implementer order `wo-j-2543`)
+
+### E-rename-one-rule — one rule for rename sources: read exactly when named and not settled by a copy proof
+
+**guard:** `head_coverage.py` `_check`, the `outstanding` line, `sorted(all_sources - {c["file"] for c in result["copies"]} - set(remaining))`, with `all_sources` the union of the sources of every changed file. Axis: a source path is read exactly when some changed file names it as a rename or copy source and that path is not itself a file a copy proof settled (a `copies` entry's `file`; an entry's `source` field plays no part); a copy proof is judged on the file's own bytes and mode alone. Step 7 answers proven only when no file remains and `git diff X head -- <outstanding>` exits 0 with empty output; a non-zero exit reads needs-review (`diff-unreadable`); a non-empty diff goes to step 8, where `_qualification` reads it (also with no remaining file).
+
+**neutralization:** `outstanding = sorted(all_sources - {c["file"] for c in result["copies"]} - set(remaining))` replaced by `outstanding = []` (no source is read).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-j-pyc -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k "source_deletion or outstanding" -q -p no:cacheprovider`
+```
+FFFF                                                                     [100%]
+E       assert 'judgement' == 'needs-review'       (test_a_move_after_review_into_a_reviewed_prose_path_still_reads_the_source_deletion)
+E       AssertionError: the check never read the outstanding source through the seam   (test_a_failed_read_of_the_outstanding_sources_reads_needs_review)
+E       assert 'judgement' == 'needs-review'       (test_a_move_after_review_over_a_reviewed_prose_path_with_a_copy_proof_reads_the_source_deletion)
+E       assert ('proven' == 'needs-review'         (test_a_move_over_a_reviewed_prose_path_that_a_copy_proof_settles_reads_the_source_deletion)
+4 failed, 15 deselected in 2.52s
+```
+(The `E` lines are the decisive assertion line of each failure, quoted from the full output; the tracebacks between them are elided.)
+
+**restore:** the inverse Edit, `outstanding = []` back to the `sorted(...)` expression; the line was read back from the file after it.
+
+**green:** the same command, `4 passed, 15 deselected in 0.59s`.
+
+**What each test pins:** the last test is the proof that bites on the step-7 path (a copy proof git re-validates settles the destination, nothing remains, the source's deletion is the only difference, and the answer reads needs-review instead of proven). The test beside it is the order's literal pure move: git's section for a pure move carries no blob line, so the copy proof is dropped and the file stays remaining; it bites on the step-8 path (judgement instead of needs-review). `test_a_copy_proven_update_of_a_reviewed_renames_destination_reads_proven` pins the opposite edge (a reviewed rename never blocks a copy proof); the neutralization leaves it green by design, because the rule that keeps it green is the removal of the round-3 copy exclusion, which the next paragraph records.
+
+**Retired: the round-3 copy exclusion.** `wanted` in step 6 no longer carries `and not sources.get(path)`. That exclusion refused every copy proof on a file that carries sources, so a valid proof on the destination of a rename the review already read (a rename to a core module, then a copy-proven update of it) read needs-review instead of proven. It was also redundant for safety: a proof is judged on the file's own bytes and mode, and the source a move leaves behind is read by the `outstanding` rule whether or not the destination is copy-proven, so the exclusion closed no hole the rule leaves open. `path not in moved` and the mode conditions stay. Putting the exclusion back (`... if path not in moved and not sources.get(path) and (...)`) turns `test_a_copy_proven_update_of_a_reviewed_renames_destination_reads_proven` red; run with `-k copy_proven_update`:
+```
+E       AssertionError: {'answer': 'needs-review', 'why': ['behaviour-change: not only prose or comment lines: src/core.py'], ...
+E       assert 'needs-review' == 'proven'
+1 failed, 18 deselected in 2.36s
+```
+Restored by the inverse Edit; green is the full run of the six order files, `221 passed` (see the order's receipts).
+
+---
+
+## Added at the third review session, round 1: E-hunks (2026-11-16, typed and run by the build session)
+
+**guard:** `_qualification`, the loop over sections the diff shows beyond the asked paths now lists each qualifying section's hunks (`hunks.extend(...)`, commit 7d9ca83f; test made to reach the rename branch in 8d74a0aa), and `_check` adds those paths to `files` on a judgement.
+
+**neutralization:** the `hunks.extend(...)` line replaced by `pass`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k rests_on_a_source_path -q -p no:cacheprovider`
+```
+E       assert ('docs/guide.md' in [])
+1 failed, 19 deselected in 0.42s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `20 passed in 2.20s`.
+
+**Disclosure:** the first version of the test (commit 7d9ca83f) did not reach this branch: a one-line README moved over another file is not paired as a rename by git, so the source was an ordinary changed file and the neutralized run passed. The test was rebuilt with a 20-line prose source (8d74a0aa) before this red was recorded.

@@ -282,10 +282,13 @@ def _section_qualifies(section, run=None, x=None, head=None):
     return _lexically_insignificant(run, x, head, section)
 
 
-def _qualification(run, x, head, files):
+def _qualification(run, x, head, files, sources=()):
     """``(qualifies, hunks, why text)`` for ``files`` read as ``git diff X head``: every file must be shown by git and
-    every section of it must qualify."""
-    code, text = run(["diff", *returning_review._DIFF_ARGS, x, head, "--", *files])
+    every section of it must qualify. ``sources`` are the outstanding rename and copy source paths, read with them
+    so that git shows a move as a move; ``files`` may be empty when ``sources`` is not, and the sections the source
+    paths show are then the whole read."""
+    # axis: a rename's source path is part of the diff the check reads, so a move is never shown as an added file — see bite-proof record i2496_wo_a_head_coverage (E-rename)
+    code, text = run(["diff", *returning_review._DIFF_ARGS, x, head, "--", *files, *[s for s in sources if s not in files]])
     if code != 0:
         return False, [], "git could not produce the diff from the certified commit to the head"
     sections = countable_lines.parse_sections(text)
@@ -302,10 +305,18 @@ def _qualification(run, x, head, files):
             continue
         for section in mine:
             hunks.extend({"file": path, "header": header} for header in _section_headers(section))
-    # a file the diff shows beyond the asked paths (a rename's other side) is read too
+    # a file the diff shows beyond the asked paths (a rename's other side) is read too, and its hunks are listed for the
+    # vet like any other
     for path, mine in shown.items():
-        if path not in files and not all(_section_qualifies(s, run, x, head) for s in mine):
+        if path in files:
+            continue
+        if not all(_section_qualifies(s, run, x, head) for s in mine):
             bad.append(path)
+            continue
+        for section in mine:
+            # axis: every section the judgement rests on is listed for the vet to read, a source path's included — see bite-proof record i2496_wo_a_head_coverage (E-hunks)
+            headers = _section_headers(section) or [section["text"].split("\n", 1)[0]]
+            hunks.extend({"file": path, "header": header} for header in headers)
     if bad:
         return False, [], "not only prose or comment lines: %s" % ", ".join(sorted(set(bad))[:5])
     return True, hunks, ""
@@ -369,12 +380,21 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     if changed is None:
         return _needs_review(result, WHY_DIFF_UNREADABLE,
                              "git could not produce the diff of the certified commit or of the head against the base")
-    files = changed[0]
+    files, sources = changed
+    # every rename or copy source path some changed file names; one rule reads them (see ``outstanding`` below)
+    all_sources = set().union(*(sources.get(p, set()) for p in files))
 
     # 5. the reconstruction proof
     remaining = []
     modes = {path: (_mode(run, x, path), _mode(run, head, path)) for path in files}
+    # A file the change renames or copies from another path, and that X does not hold yet (or whose mode at X git
+    # could not read), was moved after the review: it is never reconstructed or proven by a copy.
+    moved = {path for path in files if sources.get(path) and not _real_mode(modes[path][0])}
     for path in files:
+        # axis: a renamed or copied file is never reconstructed and never dropped as a copy, since its path is behaviour — see bite-proof record i2496_wo_a_head_coverage (E-rename)
+        if path in moved:
+            remaining.append(path)
+            continue
         # axis: a file whose mode differs between X and the head is never reconstructed, since equal bytes are not an equal file — see bite-proof record i2496_wo_a_head_coverage (E-mode)
         # a mode git could not read (None) and a file that is not in a tree (ABSENT) are no mode: two equal real modes only
         same_mode = _real_mode(modes[path][0]) and _real_mode(modes[path][1]) and modes[path][0] == modes[path][1]
@@ -392,18 +412,36 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         # A copy proves bytes only: a copied file keeps its mode at X (two equal real modes), or is new (ABSENT at X,
         # git exited 0 and listed nothing) and plain (100644) at the head. A mode git could not read (None) keeps the
         # file changed.
-        wanted = {path for path in remaining
-                  if (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
-                  or (modes[path][0] is ABSENT and modes[path][1] == "100644")}
+        # A copy proof is judged on the file's own bytes and mode alone; a source path it leaves behind is read below.
+        wanted = {path for path in remaining if path not in moved and (
+                  (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
+                  or (modes[path][0] is ABSENT and modes[path][1] == "100644"))}
         for entry in valid:
             if entry["file"] in wanted and entry["file"] not in {c["file"] for c in result["copies"]}:
                 result["copies"].append({"file": entry["file"], "source": entry["source"], "sha256": entry["sha256"]})
         relied = {c["file"] for c in result["copies"]}
         remaining = [path for path in remaining if path not in relied]
     result["files"] = remaining
+    # A source path is read exactly when some changed file names it as a rename or copy source and it is not itself a
+    # file a copy proof settled (a copy's own ``source`` field plays no part): no move hides a deletion, and no
+    # reviewed rename blocks a proof. A source that is itself a remaining file is read as that file.
+    # axis: every rename or copy source that no copy proof settled is read at the head, so a move over a reviewed path never hides the deletion of its source and a copy proof on the destination never settles it — see bite-proof record i2496_wo_a_head_coverage (E-rename-one-rule)
+    outstanding = sorted(all_sources - {c["file"] for c in result["copies"]} - set(remaining))
 
     # 7. nothing left
+    # With no file left, the only thing that can still differ is an outstanding source path: proven needs git to read
+    # those paths and show nothing; a git failure there is a review owed, and a difference goes on to step 8.
+    source_diff_empty = False
     if not remaining:
+        source_diff_empty = True
+        if outstanding:
+            code, source_diff = run(["diff", *returning_review._DIFF_ARGS, x, head, "--", *outstanding])
+            if code != 0 or not isinstance(source_diff, str):
+                return _needs_review(result, WHY_DIFF_UNREADABLE,
+                                     "git could not produce the diff of the rename and copy source paths from the certified "
+                                     "commit to the head")
+            source_diff_empty = source_diff == ""
+    if not remaining and source_diff_empty:
         result["answer"] = PROVEN
         if result["copies"]:
             result["why"].append(_line(WHY_PROVEN_COPIES, "%d file(s) are copies git re-validated at the head, and the pull "
@@ -414,7 +452,9 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         return result
 
     # 8. judgement or a review owed
-    qualifies, hunks, reason = _qualification(run, x, head, remaining)
+    # The outstanding source paths come in with the remaining files, so a move into a path the review already held still
+    # shows its source's deletion; with no remaining file, the sections the source paths show are the whole read.
+    qualifies, hunks, reason = _qualification(run, x, head, remaining, outstanding)
     commits = _authors(run, base, x, head)
     builder = builder_author.strip().lower() if isinstance(builder_author, str) and builder_author.strip() \
         else _author_email(run, x)
@@ -435,6 +475,7 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     if authors_ok and qualifies:
         result["answer"] = JUDGEMENT
         result["hunks"] = hunks
+        result["files"] = list(dict.fromkeys([*result["files"], *(h["file"] for h in hunks)]))
         result["why"].append(_line(WHY_PROSE_OR_COMMENTS, "every remaining difference is prose or comment lines by the builder; "
                                                           "the vet reads the %d hunk(s)" % len(hunks)))
     return result
