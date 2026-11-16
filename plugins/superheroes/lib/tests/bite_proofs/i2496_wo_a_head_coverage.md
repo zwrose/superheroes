@@ -1,0 +1,289 @@
+# Issue 2496 (WO-A) bite-proof — the head-coverage check answers proven only when git shows it, judgement only for prose or comments by the builder, and needs-review for everything else
+
+**Provenance:** implementer WO-A (order `wo-a-2496`), recording the guards of `lib/head_coverage.py`, proved by `lib/tests/test_head_coverage_2496.py`. Worktree `/home/user/wt-2496-a`, base `ff438e43c6209be7ca9e5689c9493af081b812b0` plus this dispatch's uncommitted work.
+
+Declared guarded elements (the order's own list, E-recon, E-copy, E-judge, E-author, E-fail; the order named the neutralizations by element, not by text, so the neutralization chosen for each is stated below). The census (the Grep tool, pattern `bite-proof record i2496`, over `plugins/superheroes/lib`) prints the axis line of each element in the code:
+
+```
+plugins/superheroes/lib/head_coverage.py:188:        # axis: a non-prose file qualifies only when every added and removed line is blank or a comment of its own language, so a changed assertion or code line never reads judgement — see bite-proof record i2496_wo_a_head_coverage (E-judge)
+plugins/superheroes/lib/head_coverage.py:254:        # axis: a fault of any kind reads needs-review, never an answer that covers the head — see bite-proof record i2496_wo_a_head_coverage (E-fail)
+plugins/superheroes/lib/head_coverage.py:286:        # axis: a file is reconstructed only when a clean three-way merge of X, the fork and the base reproduces the head blob byte for byte, so a hand-resolved file stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
+plugins/superheroes/lib/head_coverage.py:295:        # axis: a proof entry counts only when git re-validates it at the head; the entry's own word proves nothing — see bite-proof record i2496_wo_a_head_coverage (E-copy)
+plugins/superheroes/lib/head_coverage.py:323:    # axis: a judgement answer needs the builder to have authored every new commit; another author, an unreadable author or no commit to name reads needs-review — see bite-proof record i2496_wo_a_head_coverage (E-author)
+```
+
+Each element was neutralized with one targeted Edit and restored with the inverse Edit; no `git checkout`, `restore`, `reset` or `stash` was used. Every red run is the one command `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "<node id>" -q -p no:cacheprovider` over the exact node id, with the neutralization in place. Each capture is the runner's whole output for that run apart from the `UV_NATIVE_TLS` deprecation warning line (the first line of each real output), which is left out; nothing else is trimmed. Nothing is redacted: no secrets, tokens or URLs appear (the `/tmp/claude-0/...` paths are pytest temp directories).
+
+**Disclosure — shared green (the order's 10-command budget).** The order's budget (10 invocations, red and green runs for five elements inside it, and a baseline run) cannot hold ten separate red-and-green runs plus a baseline. Each element has its own red run (five runs). The greens are one shared run after the last restore, over all four named files, which includes each element's proving node (`196 passed`, below). No interim green was run between one element's restore and the next element's neutralization; the restore receipt of each element is the restored line quoted back (the Grep over the five guarded lines after the last restore, below). This disclosure is unadjudicated: it travels to the next independent reader of the record.
+
+| ID | Guarded element | Axis | Proving test (node id, in `plugins/superheroes/lib/tests/test_head_coverage_2496.py`) |
+|---|---|---|---|
+| E-recon | `head_coverage._check`, the reconstruction proof (`head_coverage.py:287`) | a file is reconstructed only when git's three-way merge reproduces the head blob, so a hand-resolved file stays changed | `test_row_3_a_hand_resolved_conflict_reads_needs_review` |
+| E-copy | `head_coverage._check`, the copy re-validation (`head_coverage.py:296`) | a proof entry counts only when git re-validates it at the head | `test_a_proof_entry_whose_sha256_does_not_match_the_head_blob_proves_nothing` |
+| E-judge | `head_coverage._section_qualifies`, the body-line test (`head_coverage.py:189`) | a non-prose file qualifies for judgement only by blank and comment lines | `test_a_changed_test_assertion_reads_needs_review` |
+| E-author | `head_coverage._check`, `authors_ok` (`head_coverage.py:324`) | a judgement answer needs every new commit to be the builder's | `test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review` |
+| E-fail | `head_coverage.check`, the total wrapper (`head_coverage.py:253`) | a fault of any kind reads needs-review; the check never raises | `test_an_exception_anywhere_in_the_check_reads_needs_review` |
+
+Not separately neutralized (the unproven part of this record):
+
+- E-recon: only the permissive direction (every file counted as reconstructed) was neutralized. The disabled direction (no file ever reconstructed) would turn `test_row_2_*`-style reconstruction cases (`test_a_clean_base_update_inside_the_hunk_context_reads_proven_by_reconstruction_but_decide_still_names_the_file` and `test_row_4_the_lower_layer_merged_up_reads_proven_on_this_layers_own_diff`) red by reasoning, but was not run.
+- E-judge: the body-line test is the neutralized element. The rest of `_section_qualifies` (the binary, mode-change, rename and copy refusals, the missing-file refusal, the `#!`/`//go:` directive refusal, the empty-hunk refusal for non-prose files, the prose-suffix rule) are **unproven** here as separate guards; the `.md` qualification is pinned passing by `test_row_7_*` and `test_a_commit_by_another_author_*`, not shown to bite.
+- E-author: `authors_ok` as a whole is neutralized. Its legs (commits unreadable, builder unreadable, no commit named, an author that differs) are not separately neutralized; `test_authors_git_cannot_read_read_needs_review` pins the unreadable leg passing and was not run under a neutralization.
+- E-copy: the whole call is neutralized (the entries are trusted as given). The restriction of relied-on entries to still-changed files and the `proof` shapes `_copies_of` accepts are **unproven** here.
+- E-fail: the `except` clause as a whole. The `_certified` guard (`ok` not true, `abandoned` present) and the input-sha guard (`input-invalid`) are not among the declared elements and are not neutralized; they are pinned passing by `test_a_malformed_record_reads_needs_review`, `test_an_abandoned_record_*` and `test_a_garbage_head_reads_needs_review`.
+- `outcome` (the pure function) is not a guarded element of this record; its table is pinned by the `test_row_12_*`, `test_row_13_*`, `test_row_15_*`, `test_row_16_*` tests and was not neutralized.
+
+---
+
+## E-recon — the reconstruction proof
+
+**axis:** a file is reconstructed only when git's three-way merge of X's blob, the fork blob and the base blob reproduces the head blob byte for byte, so a hand-resolved file stays changed.
+
+**neutralization** (`head_coverage.py:287`, `_check`: every changed file counted as reconstructed):
+```python
+-        if returning_review.merge_reproduces_head(run, base, x, head, path):
++        if True or returning_review.merge_reproduces_head(run, base, x, head, path):
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_row_3_a_hand_resolved_conflict_reads_needs_review" -q -p no:cacheprovider`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_row_3_a_hand_resolved_conflict_reads_needs_review ____________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-2/test_row_3_a_hand_resolved_con0')
+
+    def test_row_3_a_hand_resolved_conflict_reads_needs_review(tmp_path):
+        # axis: a file is reconstructed only when the three-way merge reproduces the head blob, so a hand resolution stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
+        repo = TR.Repo(tmp_path)
+        base, reviewed, earlier = TR.returning(repo, first={SHARED: pr_edit_text()})
+        moved, head = _conflicted_catch_up(repo, pr_edit_text("resolved = 1\n"))
+        got = run_check(repo, moved, earlier, head)
+>       assert got["answer"] == "needs-review" and got["files"] == [SHARED] and got["reconstructed"] == []
+E       AssertionError: assert ('proven' == 'needs-review'
+E         
+E         - needs-review
+E         + proven)
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:128: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_row_3_a_hand_resolved_conflict_reads_needs_review
+1 failed in 0.38s
+```
+**restore:** the inverse Edit (`if True or ` removed).
+
+**restore receipt:** `head_coverage.py:287` read back: `        if returning_review.merge_reproduces_head(run, base, x, head, path):`
+
+**raw green:** the shared green run below.
+
+---
+
+## E-copy — the copy re-validation
+
+**axis:** a proof entry counts only when git re-validates it at the head; the entry's own word proves nothing.
+
+**neutralization** (`head_coverage.py:296`, `_check`: the entries trusted as given):
+```python
+-        valid = review_record.revalidated_copies(entries, os.fspath(repo_root), base, head) if entries else []
++        valid = entries
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_proof_entry_whose_sha256_does_not_match_the_head_blob_proves_nothing" -q -p no:cacheprovider`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_proof_entry_whose_sha256_does_not_match_the_head_blob_proves_nothing __
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-3/test_a_proof_entry_whose_sha250')
+
+    def test_a_proof_entry_whose_sha256_does_not_match_the_head_blob_proves_nothing(tmp_path):
+        # axis: a proof entry counts only when git re-validates it at the head — see bite-proof record i2496_wo_a_head_coverage (E-copy)
+        repo = TR.Repo(tmp_path)
+        base, reviewed, earlier = TR.returning(repo)
+        repo.write("vendor/lib.py", TR.numbered("vendored", 40))
+        repo.commit("vendor a copy")
+        liar = {"file": "vendor/lib.py", "source": "upstream/lib.py", "sha256": "0" * 64}
+        got = run_check(repo, base, earlier, proof=[liar])
+>       assert got["answer"] == "needs-review" and got["copies"] == [] and got["files"] == ["vendor/lib.py"]
+E       AssertionError: assert ('proven' == 'needs-review'
+E         
+E         - needs-review
+E         + proven)
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:297: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_proof_entry_whose_sha256_does_not_match_the_head_blob_proves_nothing
+1 failed in 1.80s
+```
+
+**restore:** the inverse Edit (`valid = entries` back to the `revalidated_copies` call).
+
+**restore receipt:** `head_coverage.py:296` read back: `        valid = review_record.revalidated_copies(entries, os.fspath(repo_root), base, head) if entries else []`
+
+**raw green:** the shared green run below.
+
+---
+
+## E-judge — the prose and comment qualification
+
+**axis:** a non-prose file qualifies for judgement only when every added and removed body line is blank or a comment of its own language; a changed assertion or code line never reads judgement.
+
+**neutralization** (`head_coverage.py:189`, `_section_qualifies`: the body-line test never refuses):
+```python
+-        if text and not (text.startswith(marker) and not text.startswith(_DIRECTIVE_PREFIXES)):
++        if False and text and not (text.startswith(marker) and not text.startswith(_DIRECTIVE_PREFIXES)):
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_changed_test_assertion_reads_needs_review" -q -p no:cacheprovider`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_a_changed_test_assertion_reads_needs_review _______________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-5/test_a_changed_test_assertion_0')
+
+    def test_a_changed_test_assertion_reads_needs_review(tmp_path):
+        # axis: a non-prose file qualifies for judgement only by blank and comment lines — see bite-proof record i2496_wo_a_head_coverage (E-judge)
+        repo = TR.Repo(tmp_path)
+        test_file = "tests/test_app.py"
+        base, reviewed, earlier = TR.returning(repo, first={test_file: "def test_f():\n    assert f() == 1\n"})
+        repo.write(test_file, "def test_f():\n    assert f() == 2\n")
+        repo.commit("fix the expected value")
+        got = run_check(repo, base, earlier)
+>       assert got["answer"] == "needs-review" and got["hunks"] == [] and tokens(got) == [HC.WHY_BEHAVIOUR_CHANGE]
+E       AssertionError: assert ('judgement' == 'needs-review'
+E         
+E         - needs-review
+E         + judgement)
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:237: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_changed_test_assertion_reads_needs_review
+1 failed in 0.44s
+```
+
+**restore:** the inverse Edit (`False and ` removed).
+
+**restore receipt:** `head_coverage.py:189` read back: `        if text and not (text.startswith(marker) and not text.startswith(_DIRECTIVE_PREFIXES)):`
+
+**raw green:** the shared green run below.
+
+---
+
+## E-author — the author check
+
+**axis:** a judgement answer needs the builder to have authored every new commit; another author reads needs-review.
+
+**neutralization** (`head_coverage.py:324`, `_check`: the author test always passes):
+```python
+-    authors_ok = commits is not None and builder is not None and all(c["author"].lower() == builder.lower() for c in commits)
++    authors_ok = True or commits is not None and builder is not None and all(c["author"].lower() == builder.lower() for c in commits)
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review" -q -p no:cacheprovider`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review __
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-6/test_a_commit_by_another_autho0')
+
+    def test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review(tmp_path):
+        # axis: a judgement answer needs every new commit to be the builder's — see bite-proof record i2496_wo_a_head_coverage (E-author)
+        repo = TR.Repo(tmp_path)
+        base, reviewed, earlier = TR.returning(repo, first={APP: TR.numbered("app", 100), "docs/notes.md": "notes\n"})
+        repo.write("docs/notes.md", "notes\nmore notes\n")
+        commit_by_other(repo, "docs by someone else")
+        got = run_check(repo, base, earlier)
+>       assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_OTHER_AUTHOR] and got["hunks"] == []
+E       AssertionError: assert ('judgement' == 'needs-review'
+E         
+E         - needs-review
+E         + judgement)
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:343: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review
+1 failed in 0.43s
+```
+
+**restore:** the inverse Edit (`True or ` removed).
+
+**restore receipt:** `head_coverage.py:324` read back: `    authors_ok = commits is not None and builder is not None and all(c["author"].lower() == builder.lower() for c in commits)`
+
+**raw green:** the shared green run below.
+
+---
+
+## E-fail — the total wrapper
+
+**axis:** a fault of any kind reads needs-review; the check never raises.
+
+**neutralization** (`head_coverage.py:253`, `check`: the handler catches an exception no check raises):
+```python
+-    except Exception as exc:  # total: a fault nobody foresaw is still a review owed
++    except KeyboardInterrupt as exc:  # total: a fault nobody foresaw is still a review owed
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest "plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_an_exception_anywhere_in_the_check_reads_needs_review" -q -p no:cacheprovider`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_an_exception_anywhere_in_the_check_reads_needs_review __________
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-7/test_an_exception_anywhere_in_0')
+
+    def test_an_exception_anywhere_in_the_check_reads_needs_review(tmp_path):
+        # axis: the check never raises; a fault of any kind reads needs-review — see bite-proof record i2496_wo_a_head_coverage (E-fail)
+        repo = TR.Repo(tmp_path)
+        base, reviewed, earlier = TR.returning(repo)
+        head = repo.git("rev-parse", "main")
+    
+        def exploding(argv):
+            raise RuntimeError("git blew up")
+    
+>       got = HC.check(repo.root, base, earlier, head, git=exploding)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:454: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/home/user/wt-2496-a/plugins/superheroes/lib/head_coverage.py:252: in check
+    return _check(repo_root, base, record, head, proof, builder_author, git)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wt-2496-a/plugins/superheroes/lib/head_coverage.py:277: in _check
+    changed = returning_review.changed_files(run, base, x, head)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wt-2496-a/plugins/superheroes/lib/returning_review.py:224: in changed_files
+    code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '-M', '-U3', ...]
+
+    def exploding(argv):
+>       raise RuntimeError("git blew up")
+E       RuntimeError: git blew up
+
+/home/user/wt-2496-a/plugins/superheroes/lib/tests/test_head_coverage_2496.py:452: RuntimeError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_an_exception_anywhere_in_the_check_reads_needs_review
+1 failed in 0.37s
+```
+
+**restore:** the inverse Edit (`KeyboardInterrupt` back to `Exception`).
+
+**restore receipt:** `head_coverage.py:253` read back: `    except Exception as exc:  # total: a fault nobody foresaw is still a review owed`; the Grep over `True or|False and|KeyboardInterrupt` in `head_coverage.py` after the last restore matched nothing.
+
+**raw green:** the shared green run below.
+
+---
+
+## The shared green (after the last restore, every neutralization undone)
+
+`scripts/pinned-python -B -X pycache_prefix=/tmp/wo-a-pyc -m pytest plugins/superheroes/lib/tests/test_head_coverage_2496.py plugins/superheroes/lib/tests/test_returning_review_c1l11.py plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py plugins/superheroes/lib/tests/test_c1l11e_catch_up.py -q -p no:cacheprovider`
+```
+........................................................................ [ 36%]
+........................................................................ [ 73%]
+....................................................                     [100%]
+196 passed in 19.60s
+```
