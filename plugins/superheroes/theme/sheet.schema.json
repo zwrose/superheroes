@@ -263,6 +263,11 @@
           "description": "The commit the replaced sheet described, present only on a sheet that replaced one published for an earlier commit of the same PR.",
           "$ref": "#/$defs/commit"
         },
+        "held": {
+          "description": "Present, and true, only on a sheet taken down after the PR moved in a way that needs a fresh review (lib/pr_sheet.py hold writes it, with no cards). The page shows one fixed notice and no answer control or verdict, the chat prose is that notice alone, and no verdict is read for the sheet (pr_state reads it as being-fixed), until the advisor republishes an ordinary unsigned sheet with previousCommit once the PR is ready again.",
+          "type": "boolean",
+          "enum": [true]
+        },
         "nothingListed": {
           "description": "Present, and true, only when the build read every covered PR's body and none lists an acceptance under What we're accepting; the page's 'nothing to accept' words show only then. It never appears with canonAccounted, which needs at least one listed acceptance.",
           "type": "boolean",

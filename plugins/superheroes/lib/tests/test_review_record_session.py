@@ -177,13 +177,15 @@ def test_a_fix_round_session_reads_reviewed(tmp_path):
     assert [v["commit"] for v in rec["reviewers"]] == [EARLIER, EARLIER, HEAD]
 
 
-def test_the_same_session_with_the_head_moved_reads_not_reviewed(tmp_path):
+def test_the_same_session_with_the_head_moved_still_reads_reviewed_on_its_own_commit(tmp_path):
     session, runs, body = fix_session(tmp_path)
     fake = Fake(head=THIRD, runs=runs)
     out = send(tmp_path, session, fake, ci="green", **body)
-    # bites on: a review that covered an earlier commit counting for a head that moved after it
-    assert out["ok"] and out["status"] == "not-reviewed", out
-    assert any("covers the final commit" in line for line in out["whatIsMissing"])
+    # bites on: the record certifying the PR head it reads from GitHub rather than the commit its session reviewed (issue 2496)
+    assert out["ok"] and out["status"] == "reviewed", out
+    assert out["whatIsMissing"] == []
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["finalCommit"] == {"sha": HEAD, "source": rr.HEAD_MOVED_SOURCE} and rec["headAtWrite"] == THIRD
 
 
 @pytest.mark.parametrize("go_ahead", [
@@ -255,6 +257,18 @@ def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_in
     assert send(tmp_path, session, fake)["ok"]
     rec = rr.read(7, readers=fake.readers())
     assert "code-reviewer (round 1)" in {v["name"] for v in rec["reviewers"]}
+
+
+@pytest.mark.parametrize("base_ref, want", [(THIRD, THIRD), ("main", None), (THIRD[:7], None), (None, None)],
+                         ids=["full sha", "symbolic", "short", "absent"])
+def test_an_ordinary_session_names_its_full_sha_base_as_the_accounts_review_base(tmp_path, base_ref, want):
+    # axis: every account, carry or not, carries the session's pinned base as reviewBase when it is a full sha, else None, never a guessed or symbolic base — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    config = {"maxRounds": 7} if base_ref is None else {"maxRounds": 7, "baseRef": base_ref}
+    s = Session(tmp_path, config=config)
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(baseRef="origin/main"), Fake().readers())
+    assert "carriedReview" not in account and "carryBase" not in account
+    assert account["reviewBase"] == want
 
 
 UNFILLED_SEAT = {"vendor": None, "model": None, "effort": None, "tier": "deep", "family": None, "source": "unfilled"}

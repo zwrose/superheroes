@@ -39,7 +39,7 @@ the PR back with its findings still open, decision kind `fix-surface-unknown`. O
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
 calls `next`, dispatches the emitted order, and `submit`s the artifact.
 
-A **returning pull request** gets a different round 1. When a fresh PR-mode session holds an earlier
+A **returning pull request** gets a different round 1. A `needs-review` answer from the vet's head-coverage check (`lib/head_coverage.py`) is what sends a PR back for a returning round. The returning-review decider keeps its own, stricter rule: it counts less as covered than the check does. When a fresh PR-mode session holds an earlier
 record (`earlier-findings.json`) and the returning-review decider (`lib/returning_review.py`) answers
 `changed` on it, round 1 is a **returning round**: no panel, and the scoped finder reads only what
 changed since the last reviewed commit (round kind `returning`). Every other fresh session — no earlier

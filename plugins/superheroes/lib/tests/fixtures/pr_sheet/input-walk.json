@@ -2,6 +2,7 @@
   "schema": "pr-sheet-input/1",
   "kind": "pr",
   "number": 214,
+  "headNow": {"214": {"commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "ci": "green"}},
   "title": "Retry a failed payment",
   "summary": "A payment that fails is tried again up to three times before the order is given up.",
   "previousCommit": null,

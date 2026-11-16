@@ -306,10 +306,8 @@ Merging up to a middle pull request merges everything below it and leaves the pu
 target the stack base directly** ([merging stacked pull
 requests](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests)),
 which rewrites its commits and changes its head sha; we have not smoke-tested it. Every remaining
-layer therefore needs a fresh remote-head check, and what its moved head owes is decided by the
-content pin: an **equal digest** re-pins with a dated line and lets CI run on the new head with
-nothing re-reviewed, while an **unequal digest or `digest-unavailable`** takes the branch the pin
-defines (`skills/showrunner/reference/vet-receipt.md` spine field 1).
+layer therefore needs a fresh remote-head check, and what its moved head owes in review is decided
+by the head-coverage check (`lib/head_coverage.py`; see below).
 
 ## How a stack stays current
 
@@ -331,29 +329,17 @@ to the layer's head:
   named CLI equivalent, and it belongs to a **local tracked stack an operator owns end to end**,
   because it creates local tracking for the whole stack and force-pushes non-atomically. Either
   form rewrites every commit of every affected layer and moves every affected layer's head; each
-  moved layer then owes what the content pin decides — recompute the digest, and an equal digest
-  re-pins with CI and re-reviews nothing while an unequal digest takes the branch the pin already
-  defines. A lane uses it only when a merge cannot resolve the conflict, and discloses it.
+  moved layer then owes what the head-coverage check decides. A lane uses it only when a merge cannot resolve the conflict, and discloses it.
 
 A bring-current is a **mechanical operation**, by merge or by rebase, and the receipt that covers
 it is pinned to **content**: the head sha and the digest of the pull request's diff.
 `skills/showrunner/reference/vet-receipt.md` spine field 1 is the home of that rule and of the
-command that takes the digest. **The content pin governs every bring-current**, by merge or by
-rebase; any older sentence that reads as an unconditional full re-review is superseded by it. What
-a lane needs here is the consequence. Recompute the digest after the bring-current. **Equal digest**:
-re-pin the sha in place with a dated line, let CI run on the new head, and re-review nothing.
-**Unequal, or `digest-unavailable`**: `git range-diff --remerge-diff <base-before>..<head-before>
-<base-after>..<head-after>` names the changed commits (including conflict resolutions in a
-bring-current merge; plain `range-diff` ignores merge commits), where **base-before** and
-**base-after** are the tip of the layer below before and after the bring-current — the base a
-bring-current moves — and **head-before** and **head-after** are the layer's head before and
-after. A changed hunk takes
-the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when the
-change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap that
-leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever
-it changes **behavior-bearing content**: product code; a test's assertions or fixtures' expected
-values; or any prose that states a rule a session or a gate follows. When it is **not clear** which
-side a hunk falls on, it takes the reviewer floor. A layer is not brought current, by merge or rebase, while its review loop is open: a merge
+command that takes the digest. After a bring-current, re-pin the sha in place with a dated line
+on the receipt and let CI run on the new head. Whether the layer then needs a review is decided
+only by the head-coverage check, as `skills/showrunner/reference/vet-receipt.md` § The review
+record checks states: `proven`, or a cleared `judgement`, needs none; `needs-review` sends the
+layer back for a returning-round review of the listed files. Each layer is judged on its own
+diff and never waits on the layer below. A layer is not brought current, by merge or rebase, while its review loop is open: a merge
 mid-review moves the head the review session anchored, and the session breaks with
 `view-head-anchor-mismatch`. A review session reads the layer against the lower-layer commit it
 pinned when it started, for its whole run, and a lower-layer move never stops or restarts it. Once
@@ -372,9 +358,7 @@ review.
 
 When a **lower layer changes under it**, bring the lower layer current first, then the layer above
 from it, bottom-up. The builder discloses the conflict round. Every layer whose head sha changes
-needs fresh remote-head checks and CI on the new head; review follows the content pin above — an
-equal digest re-reviews nothing, and an unequal or `digest-unavailable` digest takes the branch
-that pin already defines.
+needs fresh remote-head checks and CI on the new head; review follows the head-coverage check above.
 
 ## Anti-patterns
 

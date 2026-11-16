@@ -1,5 +1,12 @@
 # wo_g_1795_head-moved — a head read and found moved makes the record not-reviewed
 
+> **Retired 2026-11-16 by issue 2496.** The guard this record proves is gone: the `headMoved` branch of `_lane_lines`
+> and the `headMoved` key of the lane basis no longer exist. The owner ruled (2026-11-15) that a review record
+> certifies the commit its session reviewed, and that whether that commit covers the PR's current head is decided at
+> the vet by a separate shared check, so a record written after the head moved adds no open line. The proofs for the
+> rule that replaced it are in `i2496_wo_b_record_commit.md`. The body below is kept unchanged as the record of what
+> the retired guard was proven against.
+
 Declared guarded-element set (from the work order): **N1** the moved-head not-reviewed line in `_lane_lines`. The
 element was neutralized once, the single detector node run alone, restored by the inverse edit, and the node re-run
 green. Redaction: the worktree's absolute path and the pytest tmp directory are as printed by pytest (a local

@@ -2,6 +2,7 @@
   "schema": "pr-sheet-input/1",
   "kind": "pr",
   "number": 211,
+  "headNow": {"211": {"commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334", "ci": "green"}},
   "title": "Reword the receipt page",
   "summary": "The receipt page says 'Thank you for your order' in place of 'Order complete'.",
   "collectorItems": [
