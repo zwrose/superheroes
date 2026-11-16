@@ -1011,19 +1011,17 @@ the PR's current sheet, because the host cannot show the sheet or the template d
 verdict, there is no word: the merge waits, and the advisor tells the owner why rather than taking a
 chat answer in its place.
 
-**When a PR's head moves after its sheet was published.** The advisor judges the move by the
-[material-consequence](../../../rubric/glossary.md#material-consequence) line
-([owner-vs-craft-line.md](../../../rubric/owner-vs-craft-line.md)), and doubt counts as material.
-A move with no material consequence (a base update with no conflict, a mechanical bring-current of a
-stack, a craft fix) keeps the word: the advisor republishes the sheet for the new head carrying the
-answers and the verdict forward. The advisor builds it with the `carriedForward` input key, whose
-`fromSheet` is the sheet published last, whose `heads` are the new head commit of each PR on the
-sheet, and which carries a `date`, what `moved`, and `whyNotMaterial`; the sheet then shows a dated
-"carried forward" note in place of "This PR changed". The builder refuses a carry across a different
-PR or a different stack membership. The PR body's owner half says the same in one line: what moved,
-and why it is not material. A move that is material, or in doubt, is republished unsigned for the new
-commit: the sheet shows "This PR changed", keeps the answers to unchanged items, and starts the
-verdict over, and a verdict saved on the old sheet never counts. The carry ends the moment the owner
+**When a PR's head moves after its sheet was published.** The advisor runs the head-coverage check
+(`lib/head_coverage.py`, as [the vet receipt](vet-receipt.md#the-review-record-checks) says), and its
+`outcome` names the sheet's action. A move the check covers keeps the word: the advisor republishes
+the sheet for the new head carrying the answers and the verdict forward, with the `carriedForward`
+input key, whose `fromSheet` is the sheet published last and whose `heads` are the new head commit
+of each PR on the sheet. The sheet shows no note of the carry. The builder refuses a carry across a
+different PR or a different stack membership. A move the check does not cover takes the sheet down
+with `lib/pr_sheet.py hold`, and the PR goes back for a returning review. When the PR is READY again,
+the advisor republishes an ordinary sheet for the new commit with `previousCommit`: the sheet shows
+"This PR changed", keeps the answers to unchanged items, and starts the verdict over, and a verdict
+saved on the old sheet never counts. The carry ends the moment the owner
 withdraws: a "Not yet", or a cleared verdict, on the newer sheet covers nothing. A word given for a
 batch of PRs stays good through routine updates. A PR opened after the word gets its own sheet, and a
 layer linked onto a stack after its sheet was published changes the stack, so its sheet is replaced
