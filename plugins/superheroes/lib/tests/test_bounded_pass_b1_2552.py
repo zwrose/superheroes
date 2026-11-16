@@ -53,13 +53,17 @@ def _audit_answer(payload, outcome, new_issue):
 
 def _respond(outcome="discharged", new_issue=None):
     """The scripted answers of `X._respond`, except that the audits of a round past the cap answer `outcome`
-    (discharged or not-discharged) and, when `new_issue` is given, raise it."""
+    (discharged or not-discharged) and, when `new_issue` is given, raise it. The fixer reports the fix it applied
+    (the pass begins only on an applied fix), which `X._respond`'s fixer does not."""
     base = X._respond(cap=CAP)
 
     def respond(phase, payload, rnd):
         if phase == RD.P_AUDITS and rnd > CAP:
             return _audit_answer(payload, outcome, new_issue)
-        return base(phase, payload, rnd)
+        answer = base(phase, payload, rnd)
+        if phase == RD.P_APPLY_FIXES:
+            answer = dict(answer, fixes=[{"note": "fixed the open finding in round %d" % rnd}])
+        return answer
 
     return respond
 
@@ -499,3 +503,41 @@ def test_t8_a_session_with_no_pass_carries_no_bounded_pass_key(tmp_path):
     assert terminal["payload"]["verdict"] == "converged"
     account = X._account(tmp_path, X._state(d))
     assert "boundedPass" not in account["rounds"] and account["rounds"]["stoppedAtCap"] is False
+
+
+# --- the pass begins only on fixes the fixer applied; a never-converging loop runs no round past cap + 1 -----
+
+def _rearm_state(seams, cap):
+    result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert(maxRounds=cap))
+    return result, state
+
+
+def test_t9_a_cap_round_whose_fixer_applied_nothing_hands_back_round_cap_with_no_pass(tmp_path):
+    # axis: the pass begins only on fixes the fixer reported applying: a batch queued with none applied hands
+    # back, and no round begins past the cap — see bite-proof record i2552_bounded_pass_b1 (E-applied)
+    cap = 4
+    result, state = _rearm_state(TRD._rearm_forever_seams(), cap)
+    assert result["verdict"] == "handed-back" and state["decisions"][-1]["kind"] == "round-cap"
+    assert state["round"] == cap and state["rounds"][str(cap)]["fix"]["fixes"] == []
+    assert "boundedPass" not in state and "bounded-pass-begun" not in _kinds(state)
+    assert max(int(n) for n in state["rounds"]) == cap
+
+
+def test_t9_the_never_converging_loop_with_the_pass_on_runs_no_round_past_cap_plus_one(tmp_path):
+    # the fixer now reports an applied fix each round, so the pass begins: the one round past the cap
+    cap = 4
+    seams = TRD._rearm_forever_seams()
+    queued = seams["fix_step"]
+
+    def applying(batch, rnd, payload):
+        out = queued(batch, rnd, payload)
+        out["fixes"] = [{"note": "fixed the open finding in round %d" % rnd}]
+        return out
+
+    seams["fix_step"] = applying
+    _result, state = _rearm_state(seams, cap)
+    assert state["boundedPass"]["rounds"] == [cap + 1] and state["round"] == cap + 1
+    assert max(int(n) for n in state["rounds"]) == cap + 1
+    assert max(seams["_legRnds"]["fix"] + seams["_legRnds"]["verify"]) == cap
+    assert state["terminal"]
+

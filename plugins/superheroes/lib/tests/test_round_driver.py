@@ -6555,12 +6555,12 @@ def _round_counter_mutation_sites():
 
 def test_round_counter_mutation_sites_census():
     """state['round'] is written only by _advance_round on the advance path and by
-    _begin_extra_audit_round for the one extra audit round."""
-    # axis: only the two writers, the advance path and the extra audit round, may mutate state['round'] — dict literals in new_state are construction
+    _begin_post_cap_round for the one post-cap round (the ordered extra audit round or the bounded pass)."""
+    # axis: only the two writers, the advance path and the post-cap round, may mutate state['round'] — dict literals in new_state are construction
     sites = _round_counter_mutation_sites()
     assert len(sites) >= 1, "expected at least one state['round'] mutation site"
     writers = {func for func, _lineno in sites}
-    expected = {"_advance_round", "_begin_extra_audit_round"}
+    expected = {"_advance_round", "_begin_post_cap_round"}
     extra = writers - expected
     missing = expected - writers
     assert writers == expected, (

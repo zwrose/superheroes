@@ -10013,7 +10013,6 @@ def _fold_audits(state, config, artifact, session_dir=None):
 def _after_audits(state, config, session_dir=None):
     """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
     # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
-    # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
     # axis: the bounded pass settles on its own settle, and a state holding both post-cap rounds never converges — see bite-proof record i2552_bounded_pass_b1
     if _is_post_cap_audit_round(state):
         if _is_extra_audit_round(state) and _is_bounded_audit_round(state):
@@ -10484,9 +10483,16 @@ def _cap_round_holds_fix_batch(state, cap):
 
 def _bounded_pass_applies(state, config):
     """True when the cap round applied a fix batch no audit has checked and the session holds neither
-    pass: at most one pass, and the extra audit round counts as one."""
-    return ("boundedPass" not in state and "extraAudit" not in state
-            and _cap_round_holds_fix_batch(state, _round_cap(config)))
+    pass: at most one pass, and the extra audit round counts as one. The fixer must have reported
+    applying a fix: the cap round's `fix.fixes` is a non-empty list, else there is nothing to audit."""
+    if "boundedPass" in state or "extraAudit" in state:
+        return False
+    cap = _round_cap(config)
+    if not _cap_round_holds_fix_batch(state, cap):
+        return False
+    # axis: the pass begins only on fixes the fixer reported applying; a queued batch with none applied hands back — see bite-proof record i2552_bounded_pass_b1
+    applied = state["rounds"][str(cap)]["fix"].get("fixes")
+    return isinstance(applied, list) and bool(applied)
 
 
 def _begin_bounded_pass(state, config, trigger):

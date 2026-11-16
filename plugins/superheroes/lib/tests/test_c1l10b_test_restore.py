@@ -317,8 +317,12 @@ def test_t2_a_correction_never_answered_still_leaves_the_reviewers_test_committe
     assert RD.TEST_CORRECTION_FIELD not in w.state["fixBatch"][0]  # offered but not yet used
 
 
-def test_t2_a_round_at_the_cap_restores_then_hands_back_the_open_finding(tmp_path):
+def test_t2_a_round_at_the_cap_restores_then_hands_back_the_open_finding(tmp_path, monkeypatch):
     # edge 11 / T6: the settle hands it back like any other open finding
+    # the bounded pass is off: this is the earlier release's cap hand-back, which the restore precedes
+    monkeypatch.setattr(RD, "_begin_bounded_pass",
+                        lambda state, config, trigger: RD._cap_blocks(state, config, state["round"] + 1,
+                                                                      "post-verify-advance"))
     w = World(tmp_path, cap=2)
     order = []
 
