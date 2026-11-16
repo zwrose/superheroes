@@ -1482,12 +1482,12 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     roster = seat_map.effective_roster(sm)
     if roster is not None and all(n in roster for n in seat_map.roster_for(new_basis)):
         return False
-    if _is_extra_audit_round(state):
-        # the extra audit round composes no panel, so a head that now calls for more seats hands back
-        _hand_back(state, "extra-audit-open",
-                   "the head now touches a risk area (or its risk cannot be read) beyond the reduced "
-                   "seat map, and the extra audit round composes no panel; the fixes stay unaudited",
-                   cap=True)
+    if _is_post_cap_audit_round(state):
+        # a post-cap audit round composes no panel, so a head that now calls for more seats hands back
+        _hand_back_post_cap(state,
+                            "the head now touches a risk area (or its risk cannot be read) beyond the "
+                            "reduced seat map, and the %s composes no panel; the fixes stay unaudited"
+                            % _post_cap_round_name(state))
         return True
     _set_terminal(state, "halted")
     state["certification"] = {
@@ -8520,12 +8520,13 @@ def _derive_panel_diff_at_head(config, head_sha):
 
 def _hand_back_unknown_fix_surface(state, detail):
     """The fail-closed answer to a fix surface the driver cannot work out: the PR is handed back with
-    its findings still open, never a panel and never an empty scoped round. The extra audit round
-    keeps its own handback."""
-    if _is_extra_audit_round(state):
-        _hand_back(state, "extra-audit-open",
-                   "the extra audit round could not derive the surface of the cap round's fixes "
-                   "(%s) and runs no panel; the fixes stay unaudited" % detail, cap=True)
+    its findings still open, never a panel and never an empty scoped round. A post-cap audit round
+    (the extra audit round, the bounded pass) keeps its own handback."""
+    if _is_post_cap_audit_round(state):
+        _hand_back_post_cap(state,
+                            "the %s could not derive the surface of the cap round's fixes "
+                            "(%s) and runs no panel; the fixes stay unaudited"
+                            % (_post_cap_round_name(state), detail))
         return
     _hand_back(state, "fix-surface-unknown",
                "The driver could not work out what this round's fixes changed (%s), so the fixes "
@@ -10012,8 +10013,15 @@ def _fold_audits(state, config, artifact, session_dir=None):
 def _after_audits(state, config, session_dir=None):
     """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
     # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
-    if _is_extra_audit_round(state):
-        _settle_extra_audit(state, config, session_dir=session_dir)
+    # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
+    # axis: the bounded pass settles on its own settle, and a state holding both post-cap rounds never converges — see bite-proof record i2552_bounded_pass_b1
+    if _is_post_cap_audit_round(state):
+        if _is_extra_audit_round(state) and _is_bounded_audit_round(state):
+            _hand_back_post_cap(state, BOTH_POST_CAP_DETAIL)
+        elif _is_bounded_audit_round(state):
+            _settle_bounded_audit(state, config, session_dir=session_dir)
+        else:
+            _settle_extra_audit(state, config, session_dir=session_dir)
         return
     if state.pop("_auditFirst", False):
         # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
@@ -10121,9 +10129,9 @@ def _finish_saved_previous_release(state):
     if not (earlier or _generation_is_current(state)):
         return False
     # axis: a stretch step of a continuable earlier generation is handed back before any scoped or audit order renders
-    in_stretch = (earlier and _saved_delta_stretch(state) and not _is_extra_audit_round(state)
+    in_stretch = (earlier and _saved_delta_stretch(state) and not _is_post_cap_audit_round(state)
                   and _saved_delta_stretch_lacks_facts(state))
-    extra_lacks = (_is_extra_audit_round(state) and state.get("step") == P_AUDITS
+    extra_lacks = (_is_post_cap_audit_round(state) and state.get("step") == P_AUDITS
                    and _audit_targets_lack_break_it_facts(state))
     # axis: a recorded test change with no kept original is handed back, never certified on a guessed baseline
     if not (in_stretch or extra_lacks or _holds_change_without_kept_original(state)):
@@ -10338,15 +10346,17 @@ def _cap_blocks(state, config, next_round, refused_at):
 
 
 def _round_above_cap(state, config):
-    """True when a loaded state's round is above its cap, the one ordered extra audit round at
-    `cap + 1` excepted. The one home of the rule `_cap_blocks_loaded` hands back on and
-    `_finish_retired_later_panel` leaves to it."""
+    """True when a loaded state's round is above its cap, the one post-cap audit round at `cap + 1`
+    excepted: the ordered extra audit round or the bounded pass's round, exactly one of the two. The
+    one home of the rule `_cap_blocks_loaded` hands back on and `_finish_retired_later_panel` leaves
+    to it."""
     cap = _round_cap(config)
     rnd = state["round"]
     if not rnd > cap:
         return False
-    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
-    return not (rnd == cap + 1 and _is_extra_audit_round(state))
+    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered, or the bounded pass's round, is the round it holds — see bite-proof record c1l4b_wo_a
+    # axis: the bounded pass's round is excepted too, and a state holding both rounds is not — see bite-proof record i2552_bounded_pass_b1
+    return not (rnd == cap + 1 and _is_extra_audit_round(state) != _is_bounded_audit_round(state))
 
 
 def _cap_blocks_loaded(state, config):
@@ -10360,6 +10370,9 @@ def _cap_blocks_loaded(state, config):
         return False
     cap = _round_cap(config)
     rnd = state["round"]
+    if rnd == cap + 1 and _is_extra_audit_round(state) and _is_bounded_audit_round(state):
+        _hand_back_post_cap(state, BOTH_POST_CAP_DETAIL)
+        return True
     detail = (
         "Round cap %s reached: round %s had already begun and is halted. The PR is handed back "
         "with its findings still open; certification is withheld. (refused at: resumed-state)"
@@ -10370,13 +10383,20 @@ def _cap_blocks_loaded(state, config):
 
 
 def _advance_round(state, config, *, reason):
-    """The ONE writer of `state["round"]` on the advance path (#1030, owner ruling 19-c).
+    """A writer of `state["round"]` on the advance path (#1030, owner ruling 19-c); the post-cap
+    writer is `_begin_post_cap_round`, which the ordered extra round and the bounded pass share.
 
     The cap is a BOUNDARY, not a settle-path terminal: the round at the cap completes, and the loop
-    then refuses to begin the next one. Returns True when the counter advanced, False when it
-    handed back `round-cap` — a False return means the caller must return immediately without any
-    further state mutation. This function is also the one writer of `state["deltaBaseline"]`."""
+    then refuses to begin the next one. Where the cap round applied a fix batch no audit has checked,
+    the bounded pass begins round `cap + 1` instead (`_begin_bounded_pass`). Returns True when the
+    counter advanced, False when the caller must return at once with no further state mutation: the
+    PR was handed back `round-cap`, or the bounded pass began round `cap + 1` and set its own step.
+    This function is also a writer of `state["deltaBaseline"]`."""
     next_round = state["round"] + 1
+    # axis: a cap round with a fix batch no audit has checked enters the bounded pass instead of the hand-back — see bite-proof record i2552_bounded_pass_b1
+    if next_round > _round_cap(config) and _bounded_pass_applies(state, config):
+        _begin_bounded_pass(state, config, trigger="round-cap")
+        return False
     if _cap_blocks(state, config, next_round, reason):
         return False
     state["round"] = next_round
@@ -10391,14 +10411,48 @@ def _is_extra_audit_round(state):
             and _is_plain_int(state.get("round")) and extra["round"] == state["round"])
 
 
-def _begin_extra_audit_round(state, config):
-    """The second and last writer of `state["round"]`: the one extra audit round, ordered at the cap.
+def _is_bounded_audit_round(state):
+    """True while the session sits in a round its bounded pass owns: `boundedPass` is a record whose
+    `rounds` is a list of plain ints holding the session's round. Anything else is not a bounded round."""
+    bounded = state.get("boundedPass")
+    if not isinstance(bounded, dict):
+        return False
+    rounds = bounded.get("rounds")
+    return (isinstance(rounds, list) and all(_is_plain_int(n) for n in rounds)
+            and _is_plain_int(state.get("round")) and state["round"] in rounds)
 
-    `_advance_round` refuses every round past the cap; this begins round `cap + 1` only for the
-    `extra-audit` verb, which has put `extraAudit` in the state first. The round audits the cap
-    round's fix batch and nothing else: it enters the audit derivation a delta round uses, with no
-    post-audit verify, and an unknown surface or a lane that would need a panel hands the PR back
-    open (`_hand_back_unknown_fix_surface`, `_reevaluate_lane_dimensions`)."""
+
+def _is_post_cap_audit_round(state):
+    """True in a round past the cap that audits the cap round's fixes: the ordered extra round or the
+    bounded pass's round. The one question every site that treats such a round alike asks."""
+    return _is_extra_audit_round(state) or _is_bounded_audit_round(state)
+
+
+def _post_cap_round_name(state):
+    return "bounded pass" if _is_bounded_audit_round(state) else "extra audit round"
+
+
+def _hand_back_post_cap(state, detail):
+    """A post-cap audit round's own fault: the PR is handed back open (`bounded-pass-open` for a
+    bounded round, `extra-audit-open` for an ordered extra round), the cap kept."""
+    if _is_bounded_audit_round(state):
+        state["boundedPass"]["step"] = "done"
+        _hand_back(state, "bounded-pass-open", detail, cap=True)
+        return
+    _hand_back(state, "extra-audit-open", detail, cap=True)
+
+
+BOTH_POST_CAP_DETAIL = "the session holds both an ordered extra audit round and a bounded pass"
+
+
+def _begin_post_cap_round(state, config):
+    """The one post-cap writer of `state["round"]`: it begins round `cap + 1` for the ordered extra
+    round and for the bounded pass, which have put `extraAudit` or `boundedPass` in the state first.
+
+    `_advance_round` refuses every round past the cap. The round audits the cap round's fix batch and
+    nothing else: it enters the audit derivation a delta round uses, with no post-audit verify, and an
+    unknown surface or a lane that would need a panel hands the PR back open
+    (`_hand_back_unknown_fix_surface`, `_reevaluate_lane_dimensions`)."""
     next_round = _round_cap(config) + 1
     state["round"] = next_round
     state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
@@ -10409,9 +10463,55 @@ def _begin_extra_audit_round(state, config):
     if state.get("terminal"):
         return
     if state.get("step") == P_AUDITS and not state.get("_auditTargets"):
-        _hand_back(state, "extra-audit-open",
-                   "the cap round's fix batch yields no audit target, so the extra audit round has "
-                   "nothing to audit", cap=True)
+        _hand_back_post_cap(state, "the cap round's fix batch yields no audit target, so the %s has "
+                                   "nothing to audit" % _post_cap_round_name(state))
+
+
+def _begin_extra_audit_round(state, config):
+    """Begin the one extra audit round, ordered at the cap, by the `extra-audit` verb."""
+    _begin_post_cap_round(state, config)
+
+
+def _cap_round_holds_fix_batch(state, cap):
+    """True when the state's round is the cap, the cap round's record carries a `fix`, and the fix
+    batch names a finding: the cap round applied fixes."""
+    rnd = state.get("round")
+    if not (_is_plain_int(rnd) and rnd == cap):
+        return False
+    rec = (state.get("rounds") or {}).get(str(rnd))
+    return isinstance(rec, dict) and isinstance(rec.get("fix"), dict) and bool(_fix_batch_keys(state))
+
+
+def _bounded_pass_applies(state, config):
+    """True when the cap round applied a fix batch no audit has checked and the session holds neither
+    pass: at most one pass, and the extra audit round counts as one."""
+    return ("boundedPass" not in state and "extraAudit" not in state
+            and _cap_round_holds_fix_batch(state, _round_cap(config)))
+
+
+def _begin_bounded_pass(state, config, trigger):
+    """Begin the bounded pass: round `cap + 1`, which audits the cap round's unaudited fixes and runs
+    nothing else, with no advisor order. The pass's one round writer is `_begin_post_cap_round`."""
+    cap = _round_cap(config)
+    state["boundedPass"] = {"trigger": trigger, "step": "audit", "rounds": [cap + 1]}
+    _decision(state, "bounded-pass-begun",
+              "round cap %s reached with %d fix(es) no audit has checked: the bounded pass audits "
+              "them in round %s" % (cap, len(_fix_batch_keys(state)), cap + 1))
+    _begin_post_cap_round(state, config)
+
+
+# a below-blocking severity of the findings schema's vocabulary: an in-PR new issue at one of these
+# does not hold the bounded pass open; anything else does
+BOUNDED_PASS_BELOW_BLOCKING = ("Minor", "Nit")
+
+
+def _holds_bounded_pass_open(new_issue):
+    """True unless the new issue's `severity` is exactly a below-blocking tier of the schema's
+    vocabulary: a missing, non-string, unknown, `Important` or `Critical` severity holds it open."""
+    severity = new_issue.get("severity")
+    # axis: an in-PR new issue holds the pass open unless its severity is exactly Minor or Nit — see bite-proof record i2552_bounded_pass_b1
+    return not (isinstance(severity, str) and severity in BOUNDED_PASS_BELOW_BLOCKING
+                and severity in review_findings_schema.SEVERITY_TIERS)
 
 
 def _route_outside_new_issues(state, new_issues):
@@ -10473,6 +10573,54 @@ def _settle_extra_audit(state, config, session_dir=None):
                    "is withheld." % "; ".join(pending),
                    cap=True)
         return
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+
+
+def _settle_bounded_audit(state, config, session_dir=None):
+    """The bounded pass's end: its audits folded, and nothing else runs after them.
+
+    Reads what `_settle_extra_audit` reads: the open audit ids, the auditors' new issues (those cited
+    outside the PR go to the "Outside this PR" list first and never hold the pass open), the owner
+    rulings no fixer received. An in-PR new issue holds the pass open unless its severity is Minor or
+    Nit; those stay for the terminal settle. Findings left open hand back `round-cap`; a fault of the
+    pass itself (an unreadable outcome, a new-issue entry that is not a record) hands back
+    `bounded-pass-open`. Nothing open ends on the one convergence chokepoint."""
+    state["boundedPass"]["step"] = "done"
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    open_ids = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
+    raw_issues = state.get("_newIssues") or []
+    dict_issues = [ni for ni in raw_issues if isinstance(ni, dict)]
+    stray = len(raw_issues) - len(dict_issues)
+    # axis: a new issue cited outside the PR goes to the "Outside this PR" list and never holds the pass open — see bite-proof record c3_wo_a_outside
+    inside = _route_outside_new_issues(state, dict_issues)
+    held = [ni for ni in inside if _holds_bounded_pass_open(ni)]
+    pending = _pending_owner_rulings(state)
+    fault_parts, open_parts = [], []
+    if open_ids is None:
+        fault_parts.append("the audit outcome is unreadable")
+    elif open_ids:
+        open_parts.append("not discharged: %s" % ", ".join(sorted(open_ids)))
+    if stray:
+        fault_parts.append("%d new-issue entr%s not a record" % (stray, "y is" if stray == 1 else "ies are"))
+    if held:
+        open_parts.append("new issue(s) raised: %s" % "; ".join(str(ni.get("title")) for ni in held))
+    if pending:
+        open_parts.append("owner guidance recorded but never sent to a fixer: %s" % "; ".join(pending))
+    cap = _round_cap(config)
+    if fault_parts:
+        _hand_back(state, "bounded-pass-open",
+                   "The bounded pass could not settle (%s). The PR is handed back with its findings "
+                   "still open; certification is withheld." % "; ".join(fault_parts + open_parts),
+                   cap=True)
+        return
+    if open_parts:
+        _hand_back(state, "round-cap",
+                   "Round cap %s reached: the bounded pass audited the cap round's fixes and left "
+                   "them open (%s). The PR is handed back with its findings still open; "
+                   "certification is withheld." % (cap, "; ".join(open_parts)), cap=True)
+        return
+    _decision(state, "bounded-pass-settled",
+              "the bounded pass audited the cap round's fixes and every one discharged")
     _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
 
 
@@ -11326,7 +11474,8 @@ def _break_it_kept_step(state, config, session_dir=None):
 def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     round-1 panel converged with no fixes) or audited-chain (a review that needed fixes ends on a
-    round's audit and scoped finder, with no final panel — say so). Degraded independence appends
+    round's audit and scoped finder, with no final panel — say so), or bounded-pass (the cap
+    round's fixes were audited in the bounded pass's round). Degraded independence appends
     -degraded.
 
     A converge over ANY owner-skipped judgment blocker (one an earlier version recorded) is CLEAN
@@ -11356,7 +11505,8 @@ def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
     # axis: the converge gate calls the kept check; without it a dropped break-it test certifies
     if _break_it_kept_step(state, config, session_dir=session_dir):
         return
-    base = "full-panel-confirmed" if full_panel else "audited-chain"
+    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
+    base = "bounded-pass" if bounded else "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
     shape_drivers = []
     if _degraded(state):
@@ -11379,6 +11529,8 @@ def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
             "shapeDrivers": sorted(shape_drivers)}
+    if bounded:
+        cert["boundedPass"] = {"trigger": bounded.get("trigger"), "rounds": list(bounded.get("rounds") or [])}
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -13185,7 +13337,9 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
 # A session that was handed back at its round cap can be reopened once, by the advisor's order, for
 # one more round: it audits the cap round's fixes and nothing else (no panel, scoped finder, gap
 # sweep, fixer or verify), and it is labelled in the record. A PR gets at most one such round, across
-# all its sessions. `_begin_extra_audit_round` is the only way a session begins round `cap + 1`.
+# all its sessions. `_begin_post_cap_round` is the only way a session begins round `cap + 1`, for
+# this verb or for the bounded pass (`_begin_bounded_pass`), which a cap round with unaudited fixes
+# enters on its own.
 
 EXTRA_AUDIT_STATE_UNREADABLE = "extra-audit-state-unreadable"
 EXTRA_AUDIT_ORDER_INVALID = "extra-audit-order-invalid"
@@ -13236,16 +13390,12 @@ def _cap_round_fix_unaudited(state):
     was refused at the boundary. A `fix-keeps-failing` hand-back is never this: it is found in an
     audit fold, in a round that holds no fix of its own (a fix would have advanced the round first),
     and its last decision is not `round-cap`."""
-    rnd = state.get("round")
-    if not (_is_plain_int(rnd) and rnd == _round_cap(state.get("config"))):
+    if not _cap_round_holds_fix_batch(state, _round_cap(state.get("config"))):
         return False
-    rec = (state.get("rounds") or {}).get(str(rnd))
-    if not (isinstance(rec, dict) and isinstance(rec.get("fix"), dict)):
-        return False
+    rnd = state["round"]
     decisions = state.get("decisions")
     last = decisions[-1] if isinstance(decisions, list) and decisions else None
-    return (isinstance(last, dict) and last.get("kind") == "round-cap" and last.get("round") == rnd
-            and bool(_fix_batch_keys(state)))
+    return isinstance(last, dict) and last.get("kind") == "round-cap" and last.get("round") == rnd
 
 
 def cmd_extra_audit(session_dir, order_file, by, pr, repo=None, readers=None):
@@ -13341,7 +13491,8 @@ def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=
     # hand-back that is not the cap's), never on the cap's, so this test comes before the at-cap one:
     # after it, the second order would otherwise meet "not at the cap" and never be named a repeat.
     # axis: a session that already ran its extra audit round refuses a second order — see bite-proof record c1l4b_wo_a
-    if "extraAudit" in state:
+    # axis: a session that ran the bounded pass refuses an order too, so the verb never writes the second key — see bite-proof record i2552_bounded_pass_b1
+    if "extraAudit" in state or "boundedPass" in state:
         return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN)
     decisions = state.get("decisions")
     last = decisions[-1] if isinstance(decisions, list) and decisions else None

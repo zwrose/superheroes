@@ -134,9 +134,18 @@ def _failing_fix_seams(findings, extra_scoped=None, fail_titles=None):
 
 # --- T1: a session that never converges ends at the cap, round 4, and begins no fifth round -----
 
+def _bounded_pass_off(monkeypatch):
+    """The cap hand-back as the release before the bounded pass made it, for the tests that pin the
+    boundary itself: a cap round whose fixes are unaudited is handed back `round-cap`."""
+    monkeypatch.setattr(RD, "_begin_bounded_pass",
+                        lambda state, config, trigger: RD._cap_blocks(
+                            state, config, state["round"] + 1, "post-verify-advance"))
+
+
 def test_t1_a_loop_that_never_converges_reaches_round_four_and_is_handed_back_at_the_cap(monkeypatch, tmp_path):
     # axis: the ROUND BOUNDARY in _cap_blocks — round 5 must never begin; the cap round itself still runs
     # to its verify gate — see bite-proof record c1l4_wo_b
+    _bounded_pass_off(monkeypatch)
     seen = _spy_actions(monkeypatch)
     _result, state = TRD._run_loop_capturing_state(_new_blockers_every_round(), TRD._cfg_cert())
     assert state["config"]["maxRounds"] == RP.ROUND_CAP == 4
@@ -355,8 +364,10 @@ def test_t6_a_loaded_state_edited_to_round_five_hands_back_on_the_next_next(tmp_
 
 # --- T7: a loaded config above the cap is honored as stored ------------------------------------
 
-def test_t7_a_loaded_state_whose_config_says_seven_begins_round_five_and_hands_back_after_round_seven(tmp_path):
+def test_t7_a_loaded_state_whose_config_says_seven_begins_round_five_and_hands_back_after_round_seven(
+        tmp_path, monkeypatch):
     # axis: _round_cap honors a stored cap above ROUND_CAP — it is not clamped
+    _bounded_pass_off(monkeypatch)
     d = str(tmp_path)
     checkout = os.path.join(d, "checkout")
     TRD.enter_checkout(checkout)

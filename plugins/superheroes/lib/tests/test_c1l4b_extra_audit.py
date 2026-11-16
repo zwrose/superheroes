@@ -3,7 +3,8 @@ one extra audit round.
 
 The round audits only the cap round's fixes. It dispatches no panel, scoped finder, seams check, fixer or verify
 run, it is labelled in the record, and it is never counted in the cap. A PR gets at most one, across all its
-sessions. No session begins round `cap + 1` except through the `extra-audit` verb.
+sessions. No session begins round `cap + 1` except through the `extra-audit` verb or the bounded pass; these
+tests build the session an earlier release left (handed back at its cap, the bounded pass switched off).
 
 Drives the real round driver through the CLI functions (`cmd_next`, `cmd_submit`, `cmd_extra_audit`) on a session
 directory built the way production builds one, and the review record writer through its injected readers.
@@ -110,10 +111,19 @@ def _drive(d, respond, cfg=None, max_steps=200):
     raise AssertionError("the session did not reach a terminal in %d steps" % max_steps)
 
 
+def _hand_back_at_cap(state, config, trigger):
+    """What a session did at its cap before the bounded pass existed: hand back `round-cap` with the cap
+    round's fix never audited. The state a session of the earlier release left, which the verb reopens."""
+    RD._cap_blocks(state, config, state["round"] + 1, "post-verify-advance")
+
+
 def _capped(tmp_path, cap=CAP, **script):
-    """A finalized session handed back at its cap with the cap round's fix never audited."""
+    """A finalized session handed back at its cap with the cap round's fix never audited: the bounded pass
+    is switched off while the session runs, so it ends the way the earlier release's session ended."""
     d, cfg = _start(tmp_path, cap)
-    terminal, _emitted = _drive(d, _respond(cap=cap, **script), cfg)
+    with pytest.MonkeyPatch.context() as off:
+        off.setattr(RD, "_begin_bounded_pass", _hand_back_at_cap)
+        terminal, _emitted = _drive(d, _respond(cap=cap, **script), cfg)
     assert terminal["payload"]["verdict"] == "handed-back", terminal
     state = _state(d)
     assert state["decisions"][-1]["kind"] == "round-cap" and state["round"] == cap, state["decisions"][-3:]
