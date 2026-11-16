@@ -160,6 +160,15 @@ def test_a_carry_whose_heads_agree_with_head_now_builds_with_them():
     assert sheet["prSheet"]["commit"] == "1" * 40 and sheet["prSheet"]["whatChanged"]["ci"] == {"state": "green", "commit": "1" * 40}
 
 
+def test_a_carry_from_a_held_sheet_is_refused():
+    # axis: a held sheet was taken down for a move that needs review, so no verdict carries from it — see bite-proof record i2496_wo_c_sheet_head (E-held-carry)
+    records, advisor = bundle(SMALL)
+    held = sheet_bytes(pr_sheet.hold(sheet_bytes(build(records, advisor))))
+    advisor["headNow"] = {"211": {"commit": "1" * 40, "ci": "green"}}
+    found = problems_of(records, carried(advisor, {"211": "1" * 40}), held)
+    assert any("the earlier sheet is held" in p for p in found), found
+
+
 # --- (c) a carried sheet's prose shows no note of the carry ---
 
 CARRIED_WORDS = ["Carried forward", "carry forward", "not a material change", CARRY["moved"], CARRY["whyNotMaterial"], CARRY["date"]]

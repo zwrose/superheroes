@@ -963,6 +963,9 @@ def _check_previous(advisor, previous, problems):
         problems.append(f"the earlier sheet covers PRs {[p['number'] for p in part.get('prs', [])]}, but this stack lists PRs {[p['number'] for p in advisor['prs']]}, in that order")
     if advisor.get("previousCommit") and advisor["previousCommit"] != part["commit"]:
         problems.append(f"previousCommit {advisor['previousCommit']} is not the earlier sheet's commit {part['commit']}")
+    # axis: a held sheet was taken down for a move that needs review, so no verdict carries from it; its return is an unsigned sheet — see bite-proof record i2496_wo_c_sheet_head (E-held-carry)
+    if part.get("held") is True:
+        problems.append("the earlier sheet is held (taken down), so nothing carries from it: republish an unsigned sheet with previousCommit instead")
     return sheet if len(problems) == before else None
 
 
