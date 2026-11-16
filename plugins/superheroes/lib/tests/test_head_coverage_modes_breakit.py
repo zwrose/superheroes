@@ -23,11 +23,14 @@ def test_mode_changes_are_not_proven_from_identical_blobs(tmp_path, reviewed_exe
     path = "src/shared.py"
     if reviewed_executable:
         repo.git("update-index", "--chmod=+x", path)
+        # the working-tree file carries the bit too, so a later `git add -A` keeps the mode
+        os.chmod(os.path.join(repo.root, path), 0o755)
         repo.git("commit", "-q", "-m", "make the reviewed file executable")
     base, reviewed, record = TR.returning(repo)
 
     chmod = "--chmod=-x" if reviewed_executable else "--chmod=+x"
     repo.git("update-index", chmod, path)
+    os.chmod(os.path.join(repo.root, path), 0o644 if reviewed_executable else 0o755)
     repo.git("commit", "-q", "-m", "change only the executable bit")
     head = repo.git("rev-parse", "HEAD")
 

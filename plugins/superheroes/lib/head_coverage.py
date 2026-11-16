@@ -101,6 +101,10 @@ _REGULAR_MODES = ("100644", "100755")
 _MODE_LINES = ("old mode ", "new mode ")
 _FILE_MODE_LINES = ("new file mode ", "deleted file mode ")
 _HUNK_LINE_RE = re.compile(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+# one ``git ls-tree`` entry: ``<mode> <type> <sha>\t<path>``
+_TREE_ENTRY_RE = re.compile(r"^(\d{6}) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64})\t.+$")
+# ``_mode`` answer for a file that is not in that tree (git exited 0 and listed nothing); None means git failed
+ABSENT = object()
 
 
 def _plain(value):
@@ -160,10 +164,23 @@ def _section_headers(section):
 
 
 def _mode(run, rev, path):
-    """The tree-entry mode of ``path`` at ``rev`` (for example ``100644``), or None when git names none."""
+    """The tree-entry mode of ``path`` at ``rev`` (for example ``100644``); ``ABSENT`` when git exited 0 and listed
+    nothing (the file is not in that tree); None when git failed or printed anything but one
+    ``<mode> <type> <sha>\\t<path>`` entry. A failed read is never an absent file."""
+    # axis: a mode git could not read is not an absent file, so a failed ls-tree keeps the file changed instead of passing the equality or the new-and-plain test — see bite-proof record i2496_wo_a_head_coverage (E-mode-read)
     code, text = run(["ls-tree", rev, "--", path])
-    fields = text.split() if code == 0 else []
-    return fields[0] if fields else None
+    if code != 0 or not isinstance(text, str):
+        return None
+    if not text.strip():
+        return ABSENT
+    lines = text.splitlines()
+    entry = _TREE_ENTRY_RE.match(lines[0]) if len(lines) == 1 else None
+    return entry.group(1) if entry else None
+
+
+def _real_mode(mode):
+    """True for a mode string git printed: neither ``ABSENT`` nor None."""
+    return isinstance(mode, str)
 
 
 def _changed_lines(section):
@@ -192,14 +209,25 @@ def _insignificant_lines(text):
     """The line numbers of ``text`` that Python's tokenizer reads as holding nothing but a comment or whitespace,
     outside every string; None when ``text`` cannot be tokenized."""
     significant = set()
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    open_starts = []
     try:
         for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            # axis: every line from an f-string's start row to its matching end row is significant, whatever tokens the tokenizer emits inside it (a blank line inside a debug f-string yields only NL), so an f-string edit never reads judgement — see bite-proof record i2496_wo_a_head_coverage (E-fstring)
+            if fstring_start is not None and tok.type == fstring_start:
+                open_starts.append(tok.start[0])
+            elif fstring_end is not None and tok.type == fstring_end and open_starts:
+                significant.update(range(open_starts.pop(), tok.end[0] + 1))
             if tok.type in _LAYOUT_TOKENS:
                 continue
             # a string, a name or any other token makes every line it spans significant, so a comment-like line
             # inside a triple-quoted string is data
             significant.update(range(tok.start[0], tok.end[0] + 1))
     except (tokenize.TokenError, SyntaxError):
+        return None
+    if open_starts:
+        # an f-string that never closed cannot be classified
         return None
     return {n for n in range(1, text.count("\n") + 2) if n not in significant}
 
@@ -348,7 +376,8 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     modes = {path: (_mode(run, x, path), _mode(run, head, path)) for path in files}
     for path in files:
         # axis: a file whose mode differs between X and the head is never reconstructed, since equal bytes are not an equal file — see bite-proof record i2496_wo_a_head_coverage (E-mode)
-        same_mode = modes[path][0] is not None and modes[path][0] == modes[path][1]
+        # a mode git could not read (None) and a file that is not in a tree (ABSENT) are no mode: two equal real modes only
+        same_mode = _real_mode(modes[path][0]) and _real_mode(modes[path][1]) and modes[path][0] == modes[path][1]
         # axis: a file is reconstructed only when a clean three-way merge of X, the fork and the base reproduces the head blob byte for byte, so a hand-resolved file stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
         if same_mode and returning_review.merge_reproduces_head(run, base, x, head, path):
             result["reconstructed"].append(path)
@@ -360,9 +389,12 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         entries = _copies_of(proof)
         # axis: a proof entry counts only when git re-validates it at the head; the entry's own word proves nothing — see bite-proof record i2496_wo_a_head_coverage (E-copy)
         valid = review_record.revalidated_copies(entries, os.fspath(repo_root), base, head) if entries else []
-        # A copy proves bytes only: a copied file keeps its mode at X, or is new and plain (100644) at the head.
+        # A copy proves bytes only: a copied file keeps its mode at X (two equal real modes), or is new (ABSENT at X,
+        # git exited 0 and listed nothing) and plain (100644) at the head. A mode git could not read (None) keeps the
+        # file changed.
         wanted = {path for path in remaining
-                  if modes[path][0] == modes[path][1] or (modes[path][0] is None and modes[path][1] == "100644")}
+                  if (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
+                  or (modes[path][0] is ABSENT and modes[path][1] == "100644")}
         for entry in valid:
             if entry["file"] in wanted and entry["file"] not in {c["file"] for c in result["copies"]}:
                 result["copies"].append({"file": entry["file"], "source": entry["source"], "sha256": entry["sha256"]})

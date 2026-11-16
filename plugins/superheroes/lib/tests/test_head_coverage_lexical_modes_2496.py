@@ -5,9 +5,11 @@ M1  an executable-bit change after review, in either direction, is never reconst
 M2  a copy proof whose file changed its mode after review proves nothing;
 L1  a comment-looking line inside a Python triple-quoted string is data: changing it reads needs-review;
 L2  a real Python comment change still reads judgement;
-L3  a comment in a language with no lexer here (YAML) reads needs-review.
+L3  a comment in a language with no lexer here (YAML) reads needs-review;
+M3  a mode read git failed is not an absent file: a copy proof never drops a file whose mode could not be read;
+L4  every line inside an f-string, debug or not, is significant: a blank line added inside one reads needs-review.
 
-Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex)
+Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex, E-mode-read, E-fstring)
 """
 import hashlib
 import os
@@ -23,6 +25,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import head_coverage as HC  # noqa: E402
+import returning_review as R  # noqa: E402
 import test_returning_review_c1l11 as TR  # noqa: E402
 from test_returning_review_c1l11 import _isolated_git  # noqa: E402,F401  (autouse: no global git config)
 
@@ -69,6 +72,32 @@ def test_a_copy_proof_for_a_file_whose_mode_changed_proves_nothing(tmp_path):
     assert got["answer"] == "needs-review" and got["copies"] == [] and copied in got["files"], got
 
 
+def test_a_failed_mode_read_keeps_a_copied_file_changed(tmp_path):
+    # axis: a mode git could not read is not an absent file, so a copy proof never drops a file whose mode is unknown — see bite-proof record i2496_wo_a_head_coverage (E-mode-read)
+    repo = TR.Repo(tmp_path)
+    copied = "vendor/lib.py"
+    text = TR.numbered("vendored", 40)
+    base, reviewed, earlier = TR.returning(repo)
+    repo.write(copied, text)
+    head = repo.commit("vendor a copy")
+    proof = [{"file": copied, "source": "upstream/lib.py", "sha256": hashlib.sha256(text.encode()).hexdigest()}]
+    # the copy proof proves the file when git reads every mode
+    proven = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert proven["answer"] == "proven" and [c["file"] for c in proven["copies"]] == [copied], proven
+    real = R.production_git(repo.root)
+    calls = []
+
+    def no_ls_tree(argv):
+        if argv[0] == "ls-tree":
+            calls.append(argv)
+            return 128, ""
+        return real(argv)
+
+    got = HC.check(repo.root, base, earlier, head, proof=proof, git=no_ls_tree)
+    assert calls, "the check never read a mode through the seam"
+    assert got["answer"] == "needs-review" and got["copies"] == [] and copied in got["files"], got
+
+
 def test_a_comment_looking_line_inside_a_python_string_is_data(tmp_path):
     # axis: a comment-looking line counts as a comment only where the tokenizer reads it as one — see bite-proof record i2496_wo_a_head_coverage (E-lex)
     repo = TR.Repo(tmp_path)
@@ -88,6 +117,27 @@ def test_a_blank_line_inside_a_python_string_is_data(tmp_path):
     repo.commit("add a blank line inside the string")
     got = HC.check(repo.root, base, earlier, repo.git("rev-parse", "HEAD"))
     assert got["answer"] == "needs-review", got
+
+
+def test_a_blank_line_inside_a_debug_fstring_changes_the_value_and_reads_needs_review(tmp_path):
+    # axis: every line inside an f-string is significant, since a debug f-string's `=` keeps the text before it — see bite-proof record i2496_wo_a_head_coverage (E-fstring)
+    repo = TR.Repo(tmp_path)
+    app = "src/config.py"
+    base, reviewed, earlier = TR.returning(repo, first={app: 'CONFIG = f"""{1\n=}"""\n'})
+    repo.write(app, 'CONFIG = f"""{1\n\n=}"""\n')
+    repo.commit("add a blank line inside the debug f-string")
+    got = HC.check(repo.root, base, earlier, repo.git("rev-parse", "HEAD"))
+    assert got["answer"] == "needs-review" and got["files"] == [app] and got["hunks"] == [], got
+
+
+def test_a_blank_line_inside_a_plain_fstring_braces_reads_needs_review(tmp_path):
+    repo = TR.Repo(tmp_path)
+    app = "src/config.py"
+    base, reviewed, earlier = TR.returning(repo, first={app: 'CONFIG = f"""{1\n+2}"""\n'})
+    repo.write(app, 'CONFIG = f"""{1\n\n+2}"""\n')
+    repo.commit("add a blank line inside the braces of a plain f-string")
+    got = HC.check(repo.root, base, earlier, repo.git("rev-parse", "HEAD"))
+    assert got["answer"] == "needs-review" and got["files"] == [app] and got["hunks"] == [], got
 
 
 def test_a_real_python_comment_change_still_reads_judgement(tmp_path):

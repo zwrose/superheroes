@@ -348,6 +348,21 @@ def test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review(
     assert named_other["answer"] == "judgement" and tokens(named_other) == [HC.WHY_PROSE_OR_COMMENTS]
 
 
+def test_a_builder_commit_after_another_authors_markdown_commit_still_reads_needs_review(tmp_path):
+    # axis: a judgement answer needs EVERY new commit to be the builder's, so a later builder commit never clears an earlier commit by someone else — see bite-proof record i2496_wo_a_head_coverage (E-author-all)
+    repo = TR.Repo(tmp_path)
+    base, reviewed, earlier = TR.returning(repo, first={APP: TR.numbered("app", 100), "docs/notes.md": "notes\n"})
+    repo.write("docs/notes.md", "notes\nmore notes\n")
+    commit_by_other(repo, "docs by someone else")
+    repo.write("docs/notes.md", "notes\nmore notes\neven more notes\n")
+    repo.commit("docs by the builder")
+    got = run_check(repo, base, earlier)
+    assert got["answer"] == "needs-review", got
+    assert tokens(got) == [HC.WHY_OTHER_AUTHOR], got
+    assert got["hunks"] == [], got
+    assert len(got["commits"]) == 2 and {c["author"] for c in got["commits"]} == {"other@example.com", "t@example.com"}, got
+
+
 def test_authors_git_cannot_read_read_needs_review(tmp_path):
     repo = TR.Repo(tmp_path)
     base, reviewed, earlier = TR.returning(repo, first={APP: TR.numbered("app", 100), "docs/notes.md": "notes\n"})
