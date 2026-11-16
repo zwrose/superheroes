@@ -2,6 +2,11 @@
   "schema": "pr-sheet-input/1",
   "kind": "stack",
   "number": 4,
+  "headNow": {
+    "5": {"commit": "1111111aaaaaaa1111111aaaaaaa1111111aaaaa", "ci": "green"},
+    "6": {"commit": "2222222bbbbbbb2222222bbbbbbb2222222bbbbb", "ci": "green"},
+    "7": {"commit": "3333333ccccccc3333333ccccccc3333333ccccc", "ci": "green"}
+  },
   "title": "Gift cards",
   "summary": "Customers can buy a gift card, spend it at checkout and see what is left on it.",
   "prs": [

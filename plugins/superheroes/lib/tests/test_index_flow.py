@@ -323,7 +323,8 @@ def test_a_walk_answer_for_a_stop_key_the_sheet_no_longer_has_is_ignored_on_both
 def _carried(previous, head):
     """The sheet republished for a new head with its answers and Merge carried forward from the previous sheet, so its chain names that sheet and every one it carried from."""
     advisor = dict(_load("input-big.json"), carriedForward={"fromSheet": "previous/sheet.json", "heads": {"214": head}, "date": "2026-10-01",
-                                                          "moved": "the base moved", "whyNotMaterial": "the merge was clean and the behavior is the same"})
+                                                          "moved": "the base moved", "whyNotMaterial": "the merge was clean and the behavior is the same"},
+                   headNow={"214": {"commit": head, "ci": "green"}})  # the carry names the head the vet read, which is headNow's
     return pr_sheet.build([_load("record-big.json")], advisor, WORDS["pr"], previous=_bytes(previous))
 
 

@@ -12,6 +12,7 @@ from test_sheet_schema import check_sheet_problems
 
 TITLE = "The old balance is rounded twice"
 COMMIT = "1a2b3c4"
+STACK_HEAD = "1111111aaaaaaa1111111aaaaaaa1111111aaaaa"  # record-stack-1's final commit, which every record here is built on
 CANON_ID = "2026-10-22-abcdefgh-1"
 ACCEPTING = "## What we're accepting\n\n"
 FIXED_LINE = f"- f-2 {TITLE} — fixed-above #11 {COMMIT}: the layer above removes it.\n"
@@ -29,11 +30,13 @@ def record(pr, findings):
 
 def stack_input(**extra):
     return {"schema": "pr-sheet-input/1", "kind": "stack", "number": 9, "title": "Balances", "summary": "Balances are rounded once.",
-            "prs": [{"number": 10, "title": "Round the balance"}, {"number": 11, "title": "Show the balance"}], **extra}
+            "prs": [{"number": 10, "title": "Round the balance"}, {"number": 11, "title": "Show the balance"}],
+            "headNow": {"10": {"commit": STACK_HEAD, "ci": "green"}, "11": {"commit": STACK_HEAD, "ci": "green"}}, **extra}
 
 
 def pr_input(**extra):
-    return {"schema": "pr-sheet-input/1", "kind": "pr", "number": 10, "title": "Round the balance", "summary": "Balances are rounded once.", **extra}
+    return {"schema": "pr-sheet-input/1", "kind": "pr", "number": 10, "title": "Round the balance", "summary": "Balances are rounded once.",
+            "headNow": {"10": {"commit": STACK_HEAD, "ci": "green"}}, **extra}
 
 
 def stack_records(low=None, high=None):

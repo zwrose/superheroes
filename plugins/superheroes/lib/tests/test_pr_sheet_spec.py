@@ -204,7 +204,7 @@ def test_a_code_pr_without_its_record_still_refuses(world, tmp_path):
     done = cli(world)
     assert done.returncode == 2 and "--record" in done.stderr and not (base / "out" / "sheet.json").exists()
     with pytest.raises(pr_sheet.Refusal) as caught:
-        pr_sheet.build([], code, WORDS)
+        pr_sheet.build([], {**code, "headNow": {"41": {"commit": HEADS[3], "ci": "green"}}}, WORDS)
     assert caught.value.problems == ["a pr sheet takes exactly one record, got 0"]
 
 

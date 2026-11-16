@@ -75,8 +75,10 @@ class Train:
         return self.publish(number, "v2", source)
 
     def carry(self, number):
-        return self.republish(number, carriedForward={"fromSheet": str(self.path(number, "v1")), "heads": {str(number): (f"{number:x}" * 40)[:40]},
-                                                      "date": "2026-10-13", **BROUGHT_CURRENT})
+        head = (f"{number:x}" * 40)[:40]
+        return self.republish(number, carriedForward={"fromSheet": str(self.path(number, "v1")), "heads": {str(number): head},
+                                                      "date": "2026-10-13", **BROUGHT_CURRENT},
+                              headNow={str(number): {"commit": head, "ci": "green"}})  # the carry names the head the vet read, which is headNow's
 
     def material_fix(self, number):
         return self.republish(number, previousCommit=self.sheets[number]["prSheet"]["commit"])
