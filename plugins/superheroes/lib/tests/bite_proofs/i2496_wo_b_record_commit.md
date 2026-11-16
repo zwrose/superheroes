@@ -187,3 +187,18 @@ The red is on the claimed axis: the record reads `reviewed` although no planned 
 
 **Restore:** inverse edit. **Restore receipt** (`review_record.py:1812`): `    elif not any(v["coversFinalCommit"] for v in ran):`
 **Raw green:** the consolidated run above.
+
+---
+
+## Added at layer 2's review, round 1: E-abbrev (2026-11-16, typed and run by the build session)
+
+**guard:** `build_record`, `a = dict(a, finalCommit=_full_final_commit(...))` (commit 9d2f0b42): an abbreviated session final commit becomes its one full sha, the PR head it abbreviates, else git's reading.
+
+**neutralization:** `finalCommit=a["finalCommit"] or _full_final_commit(...)` (the abbreviation kept as given).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_review_record_certifies_commit_2496.py -k abbreviated -q -p no:cacheprovider`, in a detached probe worktree at 9d2f0b42
+```
+2 failed, 23 deselected in 1.48s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `25 passed in 2.96s`.
