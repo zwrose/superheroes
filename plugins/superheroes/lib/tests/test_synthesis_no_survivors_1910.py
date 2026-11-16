@@ -10,7 +10,7 @@ no runner execution evidence is refused.
 Edges: E1 every finding REFUTED (T2) · E2 the panel reported nothing, so the verifier roster was
 empty (T1) · E3 survivors exist, synthesis is still offered (T3) · E4 a hand-submitted empty grouping
 over survivors is accepted as "nothing to merge" and drops nothing (T3) · E5 a durable empty grouping with no runner execution evidence is
-refused (T4) · E6 the skip sits before the unseatable branch (T2b runs on an unseatable cell, so it
+refused, named `no-runner-evidence` since the recorded vendor was not wrong (T4) · E6 the skip sits before the unseatable branch (T2b runs on an unseatable cell, so it
 shows the order is withheld by the skip and not by the unseatable gate).
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1_1910_synthesis_no_survivors.md
@@ -148,4 +148,4 @@ def test_t4_a_durable_empty_grouping_without_execution_evidence_is_refused():
                            orders_manifest=P17._finder_manifest(RA.SEAT_SYNTHESIS, vendor="claude"))
     assert art is None, (art, why)
     assert why.startswith("missing-seat-refuse-fold:%s" % RA.SEAT_SYNTHESIS), why
-    assert ":unauthenticated-vendor:" in why, why
+    assert ":no-runner-evidence:" in why, why

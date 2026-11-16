@@ -265,8 +265,12 @@ list. Its parts come in this order:
 3. The items, under the accepting heading.
 4. The Decided for you list, when the sheet has one, unfolded: each entry's title, ground, reason and
    **Make this mine**. See `### Decided for you` for the rest.
-5. The folded parts: the craft decisions put to the owner's veto, the decisions already made, how the
-   review went, and on a stack the stack's PRs. Each shows its count and opens on a tap.
+5. The folded parts: the craft decisions put to the owner's veto, the decisions already made, the
+   Minor findings accepted when the owner merges (the `listed` part), how the review went, and on a stack
+   the stack's PRs. Each shows its count and opens on a tap. The listed part shows each finding the
+   review record lists for the merge verdict as its title and `<severity>: <reason>`, with no card;
+   [the review record reference](../skills/review-code/reference/review-record.md#what-reviewed-means)
+   says which findings it lists.
 6. The merge verdict.
 
 How the review went carries, per review, the rounds. When some reviewers read an earlier commit it adds
@@ -278,10 +282,10 @@ each line names its PR.
 A part with nothing in it is left out, except the items. With no card, the items say one of three things,
 read from what the build recorded about the covered PR bodies. They say that the review left nothing
 for the owner only when the build recorded that every covered PR body lists no acceptance
-(`prSheet.nothingListed`). They say the sheet was checked and every acceptance is covered by a Canon
+(`prSheet.nothingListed`; an acceptance accounted to a listed finding, like a fixed-above one, is not counted). They say the sheet was checked and every acceptance is covered by a Canon
 ruling, naming the entry ids, only when the build recorded that the bodies list at least one acceptance
 and each one is accounted to a Canon ruling (`prSheet.canonAccounted`, the ids sorted and distinct, each
-appearing in the summary). With neither record they say the sheet was not checked against the PR body. The
+appearing in the summary; an acceptance accounted to a listed finding is not counted here either). With neither record they say the sheet was not checked against the PR body. The
 app bar follows the same rule for its count. With cards the app bar says "<k> of <n> accepted". The headings and these lines are in the `pr`
 block of `sheet-words.json`, the home of the words.
 

@@ -3749,6 +3749,9 @@ def _advance(state, config):
     elif step == P_SYNTHESIS:
         payload = {"findings": state.get("_verified") or [], "refuted": state.get("_refuted") or [],
                    "earlier": repeat_marks.order_list(_earlier_pool(state))}
+        if not payload["findings"]:
+            # Repeat-only order: the orchestrator dispatches the seat with `dispatch-review --nothing-to-group` (issue 2527).
+            payload["nothingToGroup"] = True
     elif step == P_SEAMS:
         payload = {"fullDiff": True, "slices": _seams_slices(state)}
     elif step == P_SECOND_TEST:
@@ -9843,7 +9846,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # the breaker's canonical class key collapses to a title-less `dim::tax::` alias that merges two
     # DISTINCT classKeys sharing dimension/taxonomy into a false stall (#507 R2 v2).
     audit_round = {"round": state["round"], "outcomes": [
-        {"identity": a.get("identity"), "ruling": a.get("ruling"),
+        {"identity": a.get("identity"), "ruling": a.get("ruling"), "id": a.get("id"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
         for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
@@ -16667,12 +16670,15 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
 
 # record-result refusal: a landed panel read list that is not the list the runner graded for the run
 EVIDENCE_READ_PARTS_MISMATCH_REFUSAL = "evidence-read-parts-mismatch"
+# record-result refusal: a synthesis run opened with --nothing-to-group landed on a round that has survivors
+EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL = "evidence-nothing-to-group-mismatch"
 
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
-                                phase):
+                                phase, verified=None):
     """Bind runner telemetry to the driver's order hash.
 
+    `verified` is the round's surviving findings (`state["_verified"]`), read only for the synthesis seat.
     Returns (envelope, refusal_reason, extra, cited_head_source)."""
     if not evidence_run_dir:
         return None, None, {}, None
@@ -16686,6 +16692,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
                                                  "orderSha256": order_sha}, None
+    # axis: a run opened with --nothing-to-group cannot answer a round that has survivors — see bite-proof record wo_a_2527_nothing_to_group
+    if (phase == P_SYNTHESIS and record.get("nothingToGroup") is True
+            and isinstance(verified, list) and verified):
+        return None, EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL, {
+            "survivors": len(verified)}, None
     result_digest = record.get("resultDigest")
     result_kind = record.get("resultKind")
     if (not isinstance(result_digest, str) or not result_digest
@@ -16915,7 +16926,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
             assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir, cited_head, phase)
+                session_dir, envelope, evidence_run_dir, cited_head, phase,
+                verified=state.get("_verified"))
             if assembly_source is not None:
                 cited_head_source = assembly_source
             if ev_reason is not None:
@@ -18419,13 +18431,30 @@ def _attest_roster(session_dir, state):
     if reason is not None or not isinstance(roster, (list, tuple)):
         return {}
     roster = [s for s in roster if isinstance(s, str)]
-    superseded = set(e.get("seat") for e in read_journal(session_dir) if e.get("superseded"))
+    # axis: a superseded row labels only its own slot (phase, round, attempt, seat, occurrence) — see bite-proof record i2443_identity_match
+    superseded = []
+    for e in read_journal(session_dir):
+        if not isinstance(e, dict) or not e.get("superseded"):
+            continue
+        # a bool is not an int here: `True` must never read as round/attempt/occurrence 1; a row
+        # whose `occurrence` is absent or not an int names occurrence 0
+        row_round, row_attempt, row_occ = e.get("round"), e.get("attempt"), e.get("occurrence")
+        superseded.append({"phase": e.get("phase"), "seat": e.get("seat"),
+                           "round": row_round if type(row_round) is int else None,
+                           "attempt": row_attempt if type(row_attempt) is int else None,
+                           "occurrence": row_occ if type(row_occ) is int else 0})
     out = {}
     for seat, occurrence, env in _seat_slot_records(session_dir, rnd, phase, attempt, roster):
         label = _slot_label(seat, occurrence)
         if env is None:
             out[label] = "absent"
-        elif seat in superseded:
+        elif any(type(rnd) is int and type(attempt) is int
+                 and row["phase"] == phase
+                 and row["round"] == rnd
+                 and row["attempt"] == attempt
+                 and row["seat"] == seat
+                 and row["occurrence"] == occurrence
+                 for row in superseded):
             out[label] = "superseded"
         elif env.get("schema") == round_records.SEAT_MISSING_SCHEMA:
             out[label] = "missing"

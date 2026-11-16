@@ -484,16 +484,35 @@ def _raiser(f):
     return v if isinstance(v, str) and v.strip() else None
 
 
+def _record_damaged(rec):
+    """True when a review record is missing evidence: a record that lost its reviewers or findings (a refusal body, a partial read)
+    is unknown coverage, not an empty review; one whose raw reviewer output could not be read (`unreadFiles`) is likewise missing
+    evidence; a damaged reviewer row or finding row is missing evidence, not a review that caught nothing. The one check the latest
+    record and every earlier record of a PR take."""
+    return bool(rec.get("ok") is False or rec.get("unreadFiles") not in (None, [])
+                or not isinstance(rec.get("reviewers"), list) or not rec["reviewers"]
+                or not isinstance(rec.get("findings"), list)
+                or any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES
+                            and isinstance(r.get("name"), str) and r["name"].strip())
+                       for r in rec["reviewers"])
+                or any(not _finding_ok(f) for f in rec["findings"]))
+
+
 def tally(records, escapes, since, *, until=None, window_days=None):
-    """The input is one review record per PR, the latest, as the record writer reads it (`review_record.py read --pr <n>`);
-    a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
-    Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, leaving out merged members
-    (the representative carries the catch). A catch is credited to the seat whose run raised it (its rows' `raisedBy`) when the record
-    shows that seat ran on the PR; when it does not (the record shows only its latest review session), that seat is never credited and its
+    """The input is every review record of each PR, as the record writer reads each (the same `records` list the measures row reads);
+    records are grouped by PR. A PR's latest record is the one with the greatest `writtenAt` (compared as strings), never input order;
+    the PR is dated by that record, and counts when that day is on or after the adoption day and inside the window. When the latest
+    record is outside the range, every record of the PR is left out unread, counted in the latest record's bucket. When two or more
+    records of a PR inside the range share the greatest `writtenAt`, the latest is ambiguous: each record beyond the first at that time
+    reads malformed and the tally reads `incomplete-evidence`, and the PR is counted no further. Every record of a counted PR is checked,
+    earlier ones included, and a damaged one reads malformed and `incomplete-evidence`.
+    Its reviews are its seat rows that ran in any of its records; its catches are the latest record's fixed findings, one per finding key,
+    leaving out merged members (the representative carries the catch). A catch is credited to the seat whose run raised it (its rows' `raisedBy`)
+    when any record of the PR shows that seat ran; when none does, that seat is never credited and its
     `caught` reads `unmeasured`, and the catch counts in `raiserRunNotShown`. A catch whose raiser names no lens seat at all (a stage)
     counts in `unattributedCatches`. A catch with no recorded raiser is credited to no seat,
     counts in `raiserNotRecorded`, and reads `caught` as `unmeasured` for every seat that ran on its PR; `raiserNotRecorded` and
-    `raiserRunNotShown` are None wherever `unattributedCatches` is None. A PR supplied more than once reads `incomplete-evidence`.
+    `raiserRunNotShown` are None wherever `unattributedCatches` is None.
     An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None.
     An escape's optional `kind` (one of ESCAPE_KINDS, what would have caught it) is counted in `escapesByKind`; an escape with no
     kind counts there as `unmeasured`, never as `nothing-reachable`, and a kind outside the list reads malformed.
@@ -520,10 +539,10 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         return "beforeWindow" if d < low else "afterWindow" if d > end else None
 
     reviews, caught = collections.defaultdict(set), collections.Counter()
-    seen_prs = set()
+    by_pr = {}  # str(pr) -> [(day, record)]: every review record of a PR that has a day and an identity
     unattributed, not_recorded, incomplete = 0, 0, False  # incomplete: evidence went missing, so no count is a zero
-    run_not_shown = 0  # catches with a raiser seat the latest record does not show running (an earlier session's run)
-    unread = set()  # the seats whose `caught` is unmeasured: those that ran on a PR whose catch names no raiser, and raiser seats the record does not show running
+    run_not_shown = 0  # catches with a raiser seat no record of the PR shows running
+    unread = set()  # the seats whose `caught` is unmeasured: those that ran on a PR whose catch names no raiser, and raiser seats no record of the PR shows running
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
         if not isinstance(rec, dict):
@@ -534,42 +553,43 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             left["undated"] += 1
             incomplete = True
             continue
-        if outside(day):  # a record outside the counting range is left out before its evidence is checked, so it never turns the tally incomplete
-            left[outside(day)] += 1
-            continue
-        # a record that lost its reviewers or findings (a refusal body, a partial read) is unknown coverage, not an empty review;
-        # one whose raw reviewer output could not be read (`unreadFiles`) is likewise missing evidence, not a measured zero
-        if (rec.get("ok") is False or rec.get("unreadFiles") not in (None, [])
-                or not isinstance(rec.get("reviewers"), list) or not rec["reviewers"]
-                or not isinstance(rec.get("findings"), list)):
-            left["malformed"] += 1
-            incomplete = True
-            continue
         pr, session = rec.get("pr"), rec.get("sessionId")  # the review's identity: without both, reviews and catches collapse together
         if not (isinstance(pr, (str, int)) and not isinstance(pr, bool) and pr != ""
                 and isinstance(session, str) and session.strip()):
-            left["malformed"] += 1
+            if outside(day):  # a record that cannot be grouped is left out when its own date is outside the counting range
+                left[outside(day)] += 1
+            else:
+                left["malformed"] += 1
+                incomplete = True
+            continue
+        by_pr.setdefault(str(pr), []).append((day, rec))
+    for pr, group in by_pr.items():
+        latest_day, latest = max(group, key=lambda p: p[1]["writtenAt"])  # the latest record by `writtenAt` as a string, never input order
+        if outside(latest_day):  # the latest record places the whole PR: every record of it is left out unread, so none turns the tally incomplete
+            left[outside(latest_day)] += len(group)
+            continue
+        tied = [p for p in group if p[1]["writtenAt"] == latest["writtenAt"]]
+        # axis: two records of a PR at its latest time make the latest ambiguous and read incomplete, never a second catch — see bite-proof record i2517_tally_all_records
+        if len(tied) > 1:
+            left["malformed"] += len(tied) - 1
             incomplete = True
             continue
-        if str(pr) in seen_prs:  # the caller did not reduce to one record per PR: a retried or duplicated record is never a second catch
-            left["malformed"] += 1
+        # axis: every record of a counted PR is checked, an earlier one included, whatever its own date — see bite-proof record i2517_tally_all_records
+        damaged = [p for p in group if _record_damaged(p[1])]
+        if damaged:
+            left["malformed"] += len(damaged)  # one per damaged record
             incomplete = True
             continue
-        seen_prs.add(str(pr))
-        if any(not (isinstance(r, dict) and r.get("ran") in review_record.RAN_STATES
-                    and isinstance(r.get("name"), str) and r["name"].strip())
-               for r in rec["reviewers"]) or any(not _finding_ok(f) for f in rec["findings"]):
-            left["malformed"] += 1  # a damaged row is missing evidence, not a review that caught nothing
-            incomplete = True
-            continue
-        ran_on_pr = set()  # the seats that ran on this PR; a carried row is an earlier run on the same PR and counts
-        for row in rec["reviewers"]:
-            if row["ran"] != review_record.RAN_NOT_RUN:
-                for seat in _seats(row.get("name")):
-                    reviews[seat].add(str(pr))
-                    ran_on_pr.add(seat)
+        ran_on_pr = set()  # the seats that ran on this PR in any of its records; a carried row is an earlier run on the same PR and counts
+        # axis: a seat that ran in any record of the PR is credited its catch, so a catch carried into the latest record keeps its raiser's run — see bite-proof record i2517_tally_all_records
+        for _, rec in group:
+            for row in rec["reviewers"]:
+                if row["ran"] != review_record.RAN_NOT_RUN:
+                    for seat in _seats(row.get("name")):
+                        reviews[seat].add(pr)
+                        ran_on_pr.add(seat)
         fixed = {}  # the PR's catches, one per findingKey: [the raiser seats its rows name, whether any row names a raiser]
-        for f in rec["findings"]:
+        for f in latest["findings"]:
             if f.get("outcome") == _FIXED and not _merged_member(f):
                 # axis: a finding with no findingKey is keyed by its id, so distinct keyless findings stay distinct — see bite-proof record wo_a_1718_keyless-id
                 # axis: rows sharing a findingKey are one catch crediting the union of their raisers' seats, so row order never changes the tally
