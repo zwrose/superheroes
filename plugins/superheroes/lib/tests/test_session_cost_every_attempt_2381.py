@@ -47,7 +47,17 @@ def attempt(stdout, wall, ended=True, **over):
 def journal_run(tmp_path, attempts, engine="codex"):
     """A real run directory opened without spawning, then one journaled attempt per spec (attempts number from 1)."""
     run_dir = str(tmp_path / "run")
-    _manual_open_review_run(tmp_path, run_dir)
+    earlier = os.environ.get(ED.JOURNAL_ROOT_ENV)
+    os.environ[ED.JOURNAL_ROOT_ENV] = str(tmp_path / "journal")  # the engine journal stays inside the test's own folder
+    try:
+        _manual_open_review_run(tmp_path, run_dir)
+    finally:
+        if earlier is None:
+            os.environ.pop(ED.JOURNAL_ROOT_ENV, None)
+        else:
+            os.environ[ED.JOURNAL_ROOT_ENV] = earlier
+    with open(os.path.join(run_dir, "journal-root.txt"), encoding="utf-8") as fh:  # the open's pointer keeps every later read on that root
+        assert fh.read().strip().startswith(str(tmp_path))
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":

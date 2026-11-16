@@ -30,7 +30,7 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     its minutes when no run lacks a figure (#2545); `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
     A seat's tokens are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it, and its minutes likewise when every such session's `sessionCost` has no run lacking a figure (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
     A session with a partial run (#2514: `runsPartial` of one or more, written when a silence-watchdog-ended attempt left no usage total beside a measured one) is never complete, so its PR stays out of the tokens figures; but a partial run's minutes are every attempt's wall time, so a PR whose only shortfall is partial runs counts in the minutes figures. A `sessionCost` that says `complete` with a partial run is not well-formed. A seat unmeasured only because every session that blanks it is partial-only (no run lacking a figure, one or more partial) reads `cost-partial`, which is now only ever a tokens reason in practice (a partial-only session does not blank minutes); any other blanking keeps `cost-not-recorded`.
-    The window figures are over the measured PRs, and `prsLeftOut.<k>` counts the rest for that measure (`count`), saying why (`why`) and how many of them hold a session with a partial run (`partial`).
+    The window figures are over the measured PRs, and `prsLeftOut.<k>` counts the rest for that measure (`count`), saying why (`why`) and how many of them hold a session with a partial run (`partial`); a PR left out for `k` only because every session unmeasured for `k` has a latest record with no `sessionCost` key (a hand-written account) counts under `prsLeftOut.<k>.handWritten`, not in `count`, so each left-out PR counts once. Each measure is read on its own, and `partial` counts only the PRs under `count`, so it never exceeds `count`; a PR left out of a measure only by hand-written sessions counts under `handWritten` for it even beside a partial session.
   - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat, or only a seat that did not run on the PR (in any of its valid records, in the window or not), counts under `unattributed` and credits that seat nothing, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -95,6 +95,7 @@ MEASURE_KEYS = {"roundsPerPr": ("median", "p90"), "sessionsPerPr": ("median", "p
                 "escapes": ("missed", "seenAndLeft", "falsePrClaims"), "capChoices": CAP_CHOICES,
                 **dict.fromkeys(COSTLY, ("basis", "value", "source")), **dict.fromkeys(BY_RELEASE, ("byRelease", "unplaced"))}
 LEFT_OUT_WHY = "a review session has no complete sessionCost"
+HAND_WRITTEN_WHY = "cost not measured (hand-written)"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
@@ -220,6 +221,16 @@ def _pr_cost(rs, k):
             # axis: a session gives its figure for `k` only when whole for `k`, else the PR is unmeasured for `k` — see bite-proof record i2545_partial_minutes
             figures.append(sc[k] if _whole(sc, k) else None)
     return _sum(figures, k, exact=True)
+
+
+def _hand_written_only(rs, k):
+    """True when a PR left out of the `k` cost figure is left out only because it was hand-written: every in-window
+    session whose figure is unmeasured for `k` (by `_pr_cost`, which reads `_whole(sc, k)`, so each measure is judged on its own)
+    has a latest record with no `sessionCost` key at all (the session writer
+    writes one on every record). A `sessionCost` that is present but malformed or incomplete is incomplete, never hand-written."""
+    unmeasured = [_latest(recs) for recs in _by_session(rs) if _pr_cost(recs, k) is None]
+    # axis: a session counts hand-written only when its latest record carries no sessionCost key, and a PR only when every unmeasured session does — see bite-proof record i2515_hand_cost
+    return bool(unmeasured) and all("sessionCost" not in r for r in unmeasured)
 
 
 def _cap_outcome(choice, key, pr, later, escapes, before=frozenset()):
@@ -412,10 +423,14 @@ def compute(inp, start, end, written_at=None):
         for k in ("tokens", "minutes"):
             totals = [_pr_cost(rs, k) for rs in prs.values()]
             measured = [t for t in totals if t is not None]
-            # axis: `partial` counts the left-out PRs holding a session whose cost is partial, never more than `count` — see bite-proof record i2514_partial_cost
-            out[k] = {"count": len(totals) - len(measured), "why": LEFT_OUT_WHY,
+            hands = [t is None and _hand_written_only(rs, k) for rs, t in zip(prs.values(), totals)]
+            hand = sum(hands)
+            # axis: `partial` counts the PRs under `count` holding a session whose cost is partial, never more than `count` — see bite-proof record i2514_partial_cost
+            # axis: partial counts only left-out PRs under count, so a PR left out for k only by a hand-written session is never partial for k — see bite-proof record i2515_hand_cost
+            out[k] = {"count": len(totals) - len(measured) - hand, "why": LEFT_OUT_WHY,
                       "partial": sum(any(_partial_session(_latest(recs)) for recs in _by_session(rs))
-                                     for rs, t in zip(prs.values(), totals) if t is None)}
+                                     for rs, t, h in zip(prs.values(), totals, hands) if t is None and not h),
+                      "handWritten": {"count": hand, "why": HAND_WRITTEN_WHY}}
             if not measured:
                 m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "no-measured-pr")
                 continue
