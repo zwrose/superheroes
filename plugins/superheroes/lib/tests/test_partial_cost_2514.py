@@ -256,21 +256,21 @@ def test_t11b_a_pr_whose_only_session_is_partial_is_left_out_and_counted_partial
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=partial)], ciRuns=ci[:2]), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 3.0  # the partial PR's 1.5 minutes count (#2545)
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0} and RM.problems(row) == []
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
+    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}} and RM.problems(row) == []
     # a PR left out for a run without a figure is not partial; a PR with one whole session and one partial session is
     lacking = _sc(100, 1.5, runs=2, without=1)
     records = [_rec(1), _rec(2, sc=partial), _rec(3, sc=lacking), _rec(4, "a"), _rec(4, "b", sc=partial)]
     row = RM.compute(_full(records=records, ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
-    assert cost["prsLeftOut"]["tokens"] == {"count": 3, "why": RM.LEFT_OUT_WHY, "partial": 2}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 3, "why": RM.LEFT_OUT_WHY, "partial": 2, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
     # only PR 3, the one with a run lacking a figure, stays out of the minutes; PRs 2 and 4 are partial-only (#2545)
-    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0} and RM.problems(row) == []
+    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}} and RM.problems(row) == []
     # no PR measured at all: the tokens are unmeasured, the partial PR's minutes are measured (#2545)
     row = RM.compute(_full(records=[_rec(2, sc=partial)], ciRuns=ci[1:2]), FROM, UNTIL)
     assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
     assert row["measures"]["reviewerCostPerPr"]["minutes"]["total"] == 1.5 and "reviewerCostPerPr.minutes" not in _why(row)
-    assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
+    assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
 
 
 def test_t11c_a_seat_only_partial_sessions_blank_reads_cost_partial_and_any_other_blanking_does_not():
