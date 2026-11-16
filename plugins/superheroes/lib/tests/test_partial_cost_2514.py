@@ -249,36 +249,38 @@ def test_t11a_the_measures_reader_checks_runs_partial_and_the_complete_rule():
 
 
 def test_t11b_a_pr_whose_only_session_is_partial_is_left_out_and_counted_partial():
-    # axis: a PR holding a partial session stays unmeasured and prsLeftOut.<k>.partial counts the left-out PRs that hold one
+    # axis: a PR holding a partial session stays out of the tokens figures and prsLeftOut.tokens.partial counts the left-out PRs that hold one (its minutes count: #2545)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2514_partial_cost.md
     ci = [{"pr": n, "minutes": 1} for n in (1, 2, 3, 4)]
     partial = _psc(100, 1.5, by_seat=_SEC)
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=partial)], ciRuns=ci[:2]), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
-    assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
+    assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 3.0  # the partial PR's 1.5 minutes count (#2545)
     assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1} and RM.problems(row) == []
+    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0} and RM.problems(row) == []
     # a PR left out for a run without a figure is not partial; a PR with one whole session and one partial session is
     lacking = _sc(100, 1.5, runs=2, without=1)
     records = [_rec(1), _rec(2, sc=partial), _rec(3, sc=lacking), _rec(4, "a"), _rec(4, "b", sc=partial)]
     row = RM.compute(_full(records=records, ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["prsLeftOut"]["tokens"] == {"count": 3, "why": RM.LEFT_OUT_WHY, "partial": 2}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 3, "why": RM.LEFT_OUT_WHY, "partial": 2} and RM.problems(row) == []
-    # no PR measured at all
+    # only PR 3, the one with a run lacking a figure, stays out of the minutes; PRs 2 and 4 are partial-only (#2545)
+    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0} and RM.problems(row) == []
+    # no PR measured at all: the tokens are unmeasured, the partial PR's minutes are measured (#2545)
     row = RM.compute(_full(records=[_rec(2, sc=partial)], ciRuns=ci[1:2]), FROM, UNTIL)
     assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
+    assert row["measures"]["reviewerCostPerPr"]["minutes"]["total"] == 1.5 and "reviewerCostPerPr.minutes" not in _why(row)
     assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
 
 
 def test_t11c_a_seat_only_partial_sessions_blank_reads_cost_partial_and_any_other_blanking_does_not():
-    # axis: a seat unmeasured only because every session that blanks it is partial-only reads cost-partial; any other blanking reads cost-not-recorded
+    # axis: a seat's tokens unmeasured only because every session that blanks it is partial-only read cost-partial; any other blanking reads cost-not-recorded (its minutes read a number: #2545)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2514_partial_cost.md
     partial = _psc(100, 1.5, by_seat=_SEC)
     row = RM.compute(_full(records=[_rec(1, sc=partial)]), FROM, UNTIL)
     seats, why = row["measures"]["seats"], _why(row)
-    assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
-    assert why["seats.security-reviewer.tokens"] == "cost-partial" and why["seats.security-reviewer.minutes"] == "cost-partial"
+    assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == 1.5
+    assert why["seats.security-reviewer.tokens"] == "cost-partial" and "seats.security-reviewer.minutes" not in why
     # a complete session beside the partial one: the partial one alone blanks the seat
     row = RM.compute(_full(records=[_rec(1, "a"), _rec(1, "b", sc=partial)]), FROM, UNTIL)
     assert row["measures"]["seats"]["security-reviewer"]["tokens"] == U and _why(row)["seats.security-reviewer.tokens"] == "cost-partial"
