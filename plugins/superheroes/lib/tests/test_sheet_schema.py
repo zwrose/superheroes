@@ -99,6 +99,7 @@ CENSUS = {
     "pr number": PR + "number",
     "pr commit": PR + "commit",
     "previous commit": PR + "previousCommit",
+    "held": PR + "held",
     "what changed": PR + "whatChanged",
     "what changed summary": PR + "whatChanged/properties/summary",
     "reviewers": PR + "whatChanged/properties/reviewers",
@@ -153,7 +154,7 @@ def resolve_ref(schema, ref):
 
 def test_every_sheet_item_has_a_schema_path():
     # Axis: each item the data file must carry has a property definition at a named schema path.
-    assert len(CENSUS) == 57
+    assert len(CENSUS) == 58
     schema = load_schema()
     for item, path in CENSUS.items():
         try:
@@ -575,6 +576,30 @@ def test_a_carried_forward_block_that_breaks_its_rules_is_refused_by_both_reader
     # Axis: carriedForward without previousCommit, with no digest, a repeated or non-hex digest, a date that is not YYYY-MM-DD, an empty or missing text, or an unknown key is refused by the schema and by the page's check.
     sheet = carried_pr_sheet()
     change(sheet)
+    assert errors_for(sheet) != []
+    assert check_sheet_problems(sheet) != []
+
+
+def held_pr_sheet(build=pr_sheet):
+    sheet = build()
+    sheet["prSheet"]["held"] = True
+    sheet["cards"] = []
+    return sheet
+
+
+def test_a_held_pr_or_stack_sheet_validates_on_both_readers():
+    # Axis: a pr sheet and a stack sheet taken down (prSheet.held true, no cards) are accepted by the schema and the page's check.
+    for build in (pr_sheet, stack_sheet):
+        sheet = held_pr_sheet(build)
+        assert errors_for(sheet) == [], sheet["kind"]
+        assert check_sheet_problems(sheet) == [], sheet["kind"]
+
+
+@pytest.mark.parametrize("value", [False, "true", 1, None])
+def test_held_is_true_or_absent_on_both_readers(value):
+    # Axis: prSheet.held is the boolean true only; false, a string, a number or null is refused by the schema and by the page's check.
+    sheet = held_pr_sheet()
+    sheet["prSheet"]["held"] = value
     assert errors_for(sheet) != []
     assert check_sheet_problems(sheet) != []
 

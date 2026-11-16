@@ -63,7 +63,8 @@ def test_a_fixed_check_at_the_final_head_marks_the_carried_finding_fixed_and_the
     assert rec["carriedRechecks"] == [{"finding": "f-1", "settled": "fixed", "result": "fixed", "why": "fixed", "commit": FIX,
                                        "checkedHead": HEAD, "evidence": "ran the test; it passes"}]
     assert calls == [(None, FIX, HEAD)]
-    sheet = pr_sheet.build([rec], {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S"}, WORDS)
+    sheet = pr_sheet.build([rec], {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S",
+                                   "headNow": {"7": {"commit": HEAD, "ci": "green"}}}, WORDS)
     assert not [c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]
     assert X["title"] in sheet["prSheet"]["whatChanged"]["caught"]
 
@@ -79,7 +80,7 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
                            + said + "still reads past the end")
     (row,) = rec["carriedRechecks"]
     assert (row["result"], row["settled"], row["why"]) == ("kept", settled, said + "still reads past the end")
-    advisor = {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S"}
+    advisor = {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S", "headNow": {"7": {"commit": HEAD, "ci": "green"}}}
     with pytest.raises(pr_sheet.Refusal) as refused:
         pr_sheet.build([rec], advisor, WORDS)
     assert any(X["title"] in p or "f-1" in p for p in refused.value.problems)

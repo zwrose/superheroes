@@ -2,6 +2,7 @@
   "schema": "pr-sheet-input/1",
   "kind": "pr",
   "number": 2075,
+  "headNow": {"2075": {"commit": "049519a241d6f0f2adac1ffff8911f9da262d588", "ci": "green"}},
   "title": "Review seats run no programs",
   "summary": "A review seat can no longer run a program on your machine: codex seats get a closed tool set and every seat order says what the seat may run.",
   "leftovers": {

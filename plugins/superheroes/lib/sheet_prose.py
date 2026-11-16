@@ -549,12 +549,12 @@ def offered_walk_answers(kind):
 def _pr_body(sheet):
     """A PR or stack sheet's prose after its title line, in the order the page shows it; ends with a blank line."""
     prsheet, stack = sheet["prSheet"], sheet["kind"] == "stack"
+    if prsheet.get("held") is True:
+        # axis: a held sheet's prose is the held heading and notice alone: no what-changed, card, folded part or verdict — see bite-proof record i2496_wo_c_sheet_head (E-held-page)
+        return ["**%s**" % PR["heldHeading"], "", PR["held"], ""]
     lines = _pr_what_changed(prsheet)
-    if "carriedForward" in prsheet:
-        carried = prsheet["carriedForward"]
-        lines += ["**%s**" % PR["carriedHeading"], "", _fill(PR["carried"], date=carried["date"], previous=_short(prsheet["previousCommit"]),
-                                                              moved=_text(carried["moved"]), why=_text(carried["whyNotMaterial"])), ""]
-    elif "previousCommit" in prsheet:
+    # axis: a carried sheet shows no note of the carry (neither the carried box nor the changed box); only an uncarried sheet with previousCommit shows the changed box — see bite-proof record i2496_wo_c_sheet_head (E-nonote)
+    if "carriedForward" not in prsheet and "previousCommit" in prsheet:
         lines += ["**%s**" % PR["changedHeading"], "", _fill(PR["changed"], previous=_short(prsheet["previousCommit"])), ""]
     if "walk" in prsheet:
         lines += _pr_walk(sheet)
