@@ -496,8 +496,8 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)   # clear round-1
 
-    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
-                        lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
+    # the session captured a refusal (it started on an unreadable core.md)
+    state["calibrationPin"]["enginePrefs"] = RD.engine_pref.refusal_engine_prefs("core.md unreadable")
     seat = _seat_for(phase)
     RD._emit_orders_manifest(session_dir, state, state["round"], phase, 0, [seat],
                              journal_cmd="next", pending_payload=_payload_for(phase), seat_map={})

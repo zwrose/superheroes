@@ -28,7 +28,7 @@ def left_out(*records, k="tokens"):
 
 def test_a_pr_whose_only_session_has_no_sessionCost_key_reads_hand_written():
     # axis: a session whose latest record carries no sessionCost key at all counts under handWritten, never in count
-    want = {"count": 0, "why": RM.LEFT_OUT_WHY, "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
+    want = {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
     assert left_out(_rec(1, sc=None)) == want
     assert left_out(_rec(1, sc=None), k="minutes") == want
 
@@ -41,7 +41,7 @@ def test_the_hand_written_reason_is_pinned():
 def test_an_incomplete_sessionCost_is_incomplete_never_hand_written():
     # axis: E6, a sessionCost key that is present but incomplete stays in count
     bad = _sc(100, 1.5, runs=2, without=1)
-    assert left_out(_rec(1, sc=bad)) == {"count": 1, "why": RM.LEFT_OUT_WHY,
+    assert left_out(_rec(1, sc=bad)) == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0,
                                          "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
 
 
@@ -70,6 +70,6 @@ def test_a_measured_pr_stays_measured_with_the_same_figures():
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=None), _rec(3, sc=_sc(1, 1, runs=2, without=1))], ciRuns=CI), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY,
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0,
                                             "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
     assert RM.problems(row) == []

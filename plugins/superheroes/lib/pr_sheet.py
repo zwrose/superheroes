@@ -661,13 +661,16 @@ def _record(raw, n, problems):
     for f in rec["findings"]:
         out, name = (f.get("outcome"), _title(f)) if isinstance(f, dict) else (None, None)
         waits = review_record.waits_for_owner(f, rec["findings"])
+        # a card-shaped finding waits or is a repeat another card holds, a no-outcome Minor or Nit card included
+        card = review_record.card_shaped(f)
         if not _text(name):
             problems.append(f"{where}: a finding has no title, summary or id")
         # axis: a null outcome is admitted only on a finding the record lists or cards (a Minor or Nit); every other null is refused — see bite-proof record i2493_wo2_sheet (E-null, E-null-important)
-        elif out not in rfs.OUTCOMES and not (out is None and (review_record.listed_for_merge(f) or waits)):
+        # axis: a no-outcome Minor or Nit card another card holds is admitted, and shows no card of its own — see bite-proof record i2531_cards (e6)
+        elif out not in rfs.OUTCOMES and not (out is None and (review_record.listed_for_merge(f) or card)):
             problems.append(f"{where}: finding {name!r} has outcome {out!r}, not one of {', '.join(rfs.OUTCOMES)}")
         # axis: every finding that waits for the owner needs a consequence, whatever its outcome; a left-for-owner finding of any kind (a held repeat too) needs one — see bite-proof record i2493_wo2_sheet (E-consequence)
-        elif (out == _LEFT or waits) and not _text(f.get("consequence")):
+        elif (out == _LEFT or waits or card) and not _text(f.get("consequence")):
             problems.append(f"{where}: left-for-owner finding {name!r} has no consequence")
         elif out in (_CRAFT, _RULING, _SHOWN_WRONG) and not _text(f.get("reason")):
             problems.append(f"{where}: {out} finding {name!r} has no reason")

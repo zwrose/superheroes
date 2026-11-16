@@ -177,7 +177,8 @@ pushes, edits code, or files issues.**
 
 The dispositions ledger record shape is defined in `guardian_ledger.LEDGER_RECORD_FIELDS`.
 The report card grades each lens from adjudicated outcomes (authoritative home:
-`guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals tracked each sweep (authoritative home:
+`guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`); a record flagged `deferredByPolicy`
+(`guardian_ledger.DEFERRED_BY_POLICY`) counts neither way and is shown as its own count. Vitals tracked each sweep (authoritative home:
 `guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
 `guardian_vitals.DRIFT_THRESHOLDS`).
 
@@ -769,6 +770,12 @@ ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
 so a stalled external CLI is killed well before the ceiling; the ceiling is never
 disabled, and these limits are not owner-configurable through `enginePreferences`
 (that channel was retired as dead surface).
+
+Panel independence is that every seat sits outside every maker's family. The critical seats'
+two-family spread (`critical-diversity`) is a composition preference: a seat map whose seats are all
+outside the makers' families carries no `critical-diversity` violation or degradation and certifies
+in its normal shape. A seat from a maker's family, an unknown author family, malformed maker
+evidence, an unresolvable seat family or no filled critical seat is judged as before.
 
 **Seat-map preflight economics** (#610, #795): the composition preflight that decides which
 **(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
