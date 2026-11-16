@@ -110,6 +110,27 @@ def _kinds(state):
     return [dec["kind"] for dec in state["decisions"]]
 
 
+def _b1_hand_back(state, config, open_ids, held, session_dir=None):
+    """What B1's settle did with findings left open before B2 (issue 2554): hand back `round-cap`."""
+    parts = []
+    if open_ids:
+        parts.append("not discharged: %s" % ", ".join(sorted(open_ids)))
+    if held:
+        parts.append("new issue(s) raised: %s" % "; ".join(str(ni.get("title")) for ni in held))
+    pending = RD._pending_owner_rulings(state)
+    if pending:
+        parts.append("owner guidance recorded but never sent to a fixer: %s" % "; ".join(pending))
+    RD._hand_back(state, "round-cap",
+                  "Round cap %s reached: the bounded pass audited the cap round's fixes and left "
+                  "them open (%s). The PR is handed back with its findings still open; "
+                  "certification is withheld." % (CAP, "; ".join(parts)), cap=True)
+
+
+def _b2_off(monkeypatch):
+    """Switch B2's entry off, for a test whose purpose is B1's own hand-back."""
+    monkeypatch.setattr(RD, "_begin_bounded_fix", _b1_hand_back)
+
+
 def _after_cap_verify(trace):
     """The (action, round) pairs emitted after the cap round's last verify gate."""
     verifies = [i for i, (action, rnd) in enumerate(trace) if action == RD.P_VERIFY and rnd == CAP]
@@ -179,8 +200,9 @@ def test_t2_a_pass_whose_audits_all_discharge_converges_bounded_pass(tmp_path):
 
 # --- T3: a fix not discharged: handed back `round-cap`, no round past cap + 1 ------------------------
 
-def test_t3_a_fix_the_pass_does_not_discharge_hands_back_round_cap(tmp_path):
+def test_t3_a_fix_the_pass_does_not_discharge_hands_back_round_cap(tmp_path, monkeypatch):
     # axis: an undischarged audit id keeps the pass from converging — see bite-proof record i2552_bounded_pass_b1
+    _b2_off(monkeypatch)  # B1's own hand-back; B2's continuation is `test_bounded_pass_b2_2554.py`
     d, terminal, trace = _session(tmp_path, _respond("not-discharged"))
     assert terminal["payload"]["verdict"] == "handed-back"
     final = X._state(d)
@@ -215,9 +237,10 @@ def test_t4_a_minor_or_nit_new_issue_does_not_hold_the_pass_open_and_is_settled(
 
 @pytest.mark.parametrize("severity", ["Important", "Critical", MISSING, 3, "minor", "Trivial", None],
                          ids=["important", "critical", "missing", "non-string", "wrong-case", "unknown", "none"])
-def test_t4_any_other_severity_holds_the_pass_open_and_hands_back_round_cap(tmp_path, severity):
+def test_t4_any_other_severity_holds_the_pass_open_and_hands_back_round_cap(tmp_path, severity, monkeypatch):
     # axis: the severity rule fails closed — a missing, non-string or unknown severity holds the pass open — see
     # bite-proof record i2552_bounded_pass_b1
+    _b2_off(monkeypatch)  # B1's own hand-back
     d, terminal, _trace = _session(tmp_path, _respond(new_issue=_issue(severity)))
     assert terminal["payload"]["verdict"] == "handed-back"
     final = X._state(d)
@@ -269,7 +292,7 @@ def test_the_extra_audit_verb_refuses_a_session_that_ran_the_bounded_pass(tmp_pa
     # axis: the verb refuses every call with the retired token, so it never writes `extraAudit` into a session
     # holding `boundedPass` — see bite-proof record i2552_bounded_pass_b1
     d, _terminal, _trace = _session(tmp_path, _respond("not-discharged"))
-    assert X._state(d)["decisions"][-1]["kind"] == "round-cap"
+    assert X._state(d)["decisions"][-1]["kind"] == "converged"  # B2 (issue 2554) settles the open finding left-for-owner
     out = RD.cmd_extra_audit(d, str(tmp_path / "order.json"), "advisor", X.PR)
     assert out["ok"] is False and out["reason"] == "extra-audit-retired", out
     assert "extraAudit" not in X._state(d)
@@ -285,6 +308,12 @@ def test_t6_after_the_cap_rounds_verify_only_audits_are_dispatched(tmp_path, scr
                "important-new-issue": _respond(new_issue=_issue("Important")),
                "minor-new-issue": _respond(new_issue=_issue("Minor"))}[script]
     _d, _terminal, trace = _session(tmp_path, respond)
+    if script in ("not-discharged", "important-new-issue"):
+        # B1 leaves a finding open: the pass continues (issue 2554) with B2's one fix, its gate and its audits
+        assert _after_cap_verify(trace) == [(RD.P_AUDITS, CAP + 1), (RD.P_APPLY_FIXES, CAP + 1),
+                                            (RD.P_VERIFY, CAP + 1), (RD.P_AUDITS, CAP + 2),
+                                            (RD.P_TERMINAL, CAP + 2)], trace
+        return
     assert _after_cap_verify(trace) == [(RD.P_AUDITS, CAP + 1), (RD.P_TERMINAL, CAP + 1)], trace
 
 
@@ -380,9 +409,10 @@ def _guided_bounded_pass(tmp_path, ruled):
     return n, X._state(d)
 
 
-def test_a_guidance_ruling_no_fixer_received_hands_the_bounded_pass_back_round_cap(tmp_path):
+def test_a_guidance_ruling_no_fixer_received_hands_the_bounded_pass_back_round_cap(tmp_path, monkeypatch):
     # axis: owner guidance recorded but never sent to a fixer holds the bounded pass open, so it hands back
     # round-cap instead of converging — see bite-proof record i2552_bounded_pass_b1
+    _b2_off(monkeypatch)  # B1's own hand-back; B2 sends the ruled finding to its fixer (test_bounded_pass_b2_2554.py)
     _n, final = _guided_bounded_pass(tmp_path, ruled=True)
     assert final["terminal"] == "handed-back", final.get("certification")
     last = final["decisions"][-1]
@@ -519,7 +549,8 @@ def test_t8_a_converged_bounded_pass_session_is_labelled_not_counted_and_stopped
     assert "audited in round %d" % (CAP + 1) in line and "not counted" in line
 
 
-def test_t8_a_handed_back_bounded_pass_session_is_stopped_at_the_cap_and_not_counted(tmp_path):
+def test_t8_a_handed_back_bounded_pass_session_is_stopped_at_the_cap_and_not_counted(tmp_path, monkeypatch):
+    _b2_off(monkeypatch)  # a handed-back pass is B1's own hand-back now
     d, _terminal, _trace = _session(tmp_path / "run", _respond("not-discharged"))
     account = X._account(tmp_path, X._state(d))
     assert account["rounds"]["count"] == CAP and account["rounds"]["stoppedAtCap"] is True
