@@ -13,6 +13,7 @@ Drives the real round driver: `run_loop` with scripted seams for the loop-shaped
 
 Bite-proof record: c1l4_wo_a
 """
+import copy
 import os
 import sys
 
@@ -350,8 +351,16 @@ def _stopped_at_cap(tmp_path, terminal, decisions):
     return RS.account_from_session(s.save(), TRRS.extras())["rounds"]["stoppedAtCap"]
 
 
+def _rounds_of_state(tmp_path, state):
+    """The record's `rounds` for a complete session state (its config, rounds and `boundedPass` as the driver left
+    them), as `test_c1l4b_extra_audit._account` builds it."""
+    session = TRRS.Session(tmp_path, **copy.deepcopy(state)).seat("code-reviewer").save()
+    return RS.account_from_session(session, TRRS.extras())["rounds"]
+
+
 def test_t6_the_stall_pass_and_the_held_choice_did_not_stop_at_the_cap(tmp_path):
-    # axis: stoppedAtCap reads the session's own ending — a "cap" terminal state alone is not a stop at the cap
+    # axis: stoppedAtCap reads the session's own ending — a "cap" terminal state alone is not a stop at the cap; the
+    # stalled world is read from its complete state, so its bounded pass is what the record sees
     _r, stalled = TRD._run_loop_capturing_state(
         _failing_fix_seams([_BUG]), _cfg_scoped_finder_seated(maxRounds=20))
     _r, choice = TRD._run_loop_capturing_state(
@@ -359,7 +368,9 @@ def test_t6_the_stall_pass_and_the_held_choice_did_not_stop_at_the_cap(tmp_path)
     assert stalled["decisions"][-1]["kind"] == "converged"
     assert stalled["boundedPass"]["trigger"] == "fix-keeps-failing"
     assert choice["decisions"][-1]["kind"] == "owner-choice-open"
-    assert _stopped_at_cap(tmp_path / "stalled", stalled["terminal"], stalled["decisions"]) is False
+    rounds = _rounds_of_state(tmp_path / "stalled", stalled)
+    assert rounds["stoppedAtCap"] is False
+    assert rounds["boundedPass"]["trigger"] == "fix-keeps-failing", rounds
     assert _stopped_at_cap(tmp_path / "choice", choice["terminal"], choice["decisions"]) is False
 
 

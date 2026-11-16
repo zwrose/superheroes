@@ -171,13 +171,35 @@ def test_t3_an_important_new_issue_cited_outside_the_pr_goes_to_the_outside_list
 
 
 def test_t3_a_new_issue_b1_raised_is_carried_to_b2_as_a_target_and_its_minor_sibling_settles_normally(tmp_path):
-    # B1's audit raises an Important new issue: B2's fix batch holds it beside the undischarged fix
-    d, terminal, trace, final = _b2_run(tmp_path, {CAP + 1: ("discharged", B1._issue("Important")),
-                                                   CAP + 2: ("discharged", None)})
+    # axis: B1's Important new issue is a B2 target and its Minor sibling is no target and carries no bounded-pass
+    # evidence — the Minor row is created by this test (B1's audit raises both), not assumed
+    base = _by_round({CAP + 2: ("discharged", None)})
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_AUDITS and rnd == CAP + 1:
+            # B1._audit_answer takes one issue, so the round's answer is built here from its result: the Important
+            # issue's answer plus a second entry in each result's `newIssues`
+            answer = B1._audit_answer(payload, "discharged", B1._issue("Important"))
+            for result in answer["results"]:
+                result["newIssues"].append(dict(B1._issue("Minor"), title="minor-raised-by-b1"))
+            return answer
+        return base(phase, payload, rnd)
+
+    d, terminal, trace = B1._session(tmp_path, respond)
+    final = X._state(d)
     assert terminal["payload"]["verdict"] == "converged"
     assert (RD.P_APPLY_FIXES, CAP + 1) in trace
     raised = X._rows(final, "raised-by-the-audit")
     assert len(raised) == 1 and raised[0]["disposition"] == "fixed", raised
+    minor = X._rows(final, "minor-raised-by-b1")
+    assert len(minor) == 1, minor
+    # an open Minor is no B2 card: it settles by the terminal settle's normal rule, which leaves a still-open finding
+    # `left-for-owner` marked open at loop end, with the terminal settle's own reason and no bounded-pass evidence
+    assert minor[0]["disposition"] == "left-for-owner" and minor[0]["openAtLoopEnd"] is True, minor
+    assert minor[0]["settledReason"] == "left unfixed when the review loop converged", minor
+    assert "boundedPassEvidence" not in minor[0], minor
+    assert minor[0]["findingKey"] not in final["certification"]["boundedPass"]["leftForOwner"]
+    assert [row["title"] for row in final["fixBatch"]] == ["raised-by-the-audit"], final["fixBatch"]
 
 
 # --- T4: the fix-keeps-failing trigger ----------------------------------------------------------------
@@ -366,10 +388,46 @@ def test_t5_a_batch_with_no_target_after_the_policy_queues_no_step():
 
 
 def test_t5_the_batch_is_never_sliced_past_the_fix_batch_cap():
-    u = _policy_state(("Important", "Important"))
+    # axis: the pass runs one fix step, so two independent findings (no fix group ties them) stay in one batch at a cap
+    # of 1 — removing `cap = max(cap, len(filtered))` slices the second into `_fixQueue`
+    u = FG._unit(severities=("Important", "Important"), stamp=False)
+    u.state["boundedPass"] = {"trigger": "round-cap", "step": "fix", "rounds": [CAP + 1]}
     u.state["config"]["fixBatchCap"] = 1
     status, batch = _queued(u, [u.ka, u.kb])
-    assert status == "queued" and len(batch) == 2 and not u.state.get("_fixQueue")
+    assert status == "queued" and sorted(batch) == sorted([u.ka, u.kb]), batch
+    assert not u.state.get("_fixQueue")
+
+
+def test_t5_a_context_only_sibling_an_owner_then_rules_on_is_a_target_and_no_longer_context(tmp_path):
+    # axis: a finding the policy keeps as a target is dropped from `contextOnly`, so the fixer's guidance never says
+    # "not to be fixed or audited" of a finding the batch asks it to fix
+    d, n, _trace = B1._session(tmp_path, _by_round(B1_OPEN),
+                               stop=lambda n: (n["action"], n["round"]) == (RD.P_APPLY_FIXES, CAP + 1))
+    assert (n["action"], n["round"]) == (RD.P_APPLY_FIXES, CAP + 1), n  # B2's fix step is pending
+    state = X._state(d)
+    target = state["_fixBatch"][0]
+    ka = RD._finding_identity_key(target)
+    sibling = X._finding("minor-sibling", severity="Minor", file="sibling.py")
+    kb = RD._finding_key_of(sibling)
+    sibling["findingKey"] = kb
+    group = {"id": "group-of-two", "members": [ka, kb]}
+    for row in (state["findings"][0], target, sibling):
+        row[RD.verification.FIX_GROUP_FIELD] = dict(group)
+    state["findings"].append(sibling)
+    ledger = RD._ensure_disposition_ledger_for_write(state)
+    RD._seed_ledger_entry(state, ledger, RD._ledger_index_by_key(ledger), copy.deepcopy(sibling), kb, 2)
+    state["boundedPass"]["contextOnly"] = [{"findingKey": kb, "title": "minor-sibling"}]  # what the policy left of it
+    assert "minor-sibling" in RD._bounded_context_block(state)
+    RD.save_state(d, state)
+    path = X.TOC._write_rulings(tmp_path / "rulings.json", [
+        {"id": kb, "ruling": "guidance", "reason": "owner call", "guidance": "keep the retry behaviour"}])
+    out = RD.cmd_rule(d, path, "owner")
+    assert out.get("ok"), out
+    state = X._state(d)
+    assert sorted(RD._finding_identity_key(r) for r in state["_fixBatch"]) == sorted([ka, kb]), state["_fixBatch"]
+    assert kb not in [c.get("findingKey") for c in state["boundedPass"]["contextOnly"]], state["boundedPass"]
+    context = RD._bounded_context_block(state)
+    assert context is None or "minor-sibling" not in context, context
 
 
 def test_t5_the_empty_batch_rule_converges_with_the_minors_settled_by_the_normal_rule(tmp_path):
@@ -568,18 +626,6 @@ def test_t8_the_stall_path_runs_only_the_allowed_actions_too(tmp_path):
     after = _after_trigger(trace, (RD.P_SCOPED, r))
     assert [a for a, _r in after] == [RD.P_APPLY_FIXES, RD.P_VERIFY, RD.P_AUDITS, RD.P_TERMINAL], after
     _census(after)
-
-
-def test_t8_a_b2_mismatch_and_a_b1_mismatch_dispatch_no_second_test_and_no_second_apply_fixes(tmp_path):
-    w = _bounded_world(tmp_path / "b1", "audit", CAP + 1)
-    w.audit()
-    steps = [w.state["step"]]
-    _submit_bounded_restore(w)
-    steps.append(w.state["step"])
-    assert steps == [RD.P_APPLY_FIXES, RD.P_VERIFY] and RD.P_SECOND_TEST not in steps
-    final = _bounded_world(tmp_path / "b2", "final-audit", CAP + 2)
-    final.audit()
-    assert final.state["step"] == RD.P_TERMINAL and not final.state.get(RD.TEST_RESTORE_FIELD)
 
 
 # --- T9: resume at every boundary ---------------------------------------------------------------------

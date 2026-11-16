@@ -10740,6 +10740,9 @@ def _apply_bounded_queue_policy(state, rows):
     for row in rows:
         (kept if _bounded_stays_target(state, row, ledger_by_key, effective) else context).append(row)
     held = state["boundedPass"].setdefault("contextOnly", [])
+    kept_keys = {k for k in (_finding_identity_key(row) for row in kept) if k}
+    # axis: a finding now kept as a target is no longer context, so the fixer is never told not to fix what its batch asks it to fix
+    held[:] = [c for c in held if not isinstance(c, dict) or c.get("findingKey") not in kept_keys]
     for row in context:
         key = _finding_identity_key(row)
         if key not in {c.get("findingKey") for c in held}:
@@ -10986,14 +10989,14 @@ def _settle_bounded_fix(state, config, session_dir=None):
         evidence = {"fixCommit": _bounded_fix_commit(state, key),
                     "audit": {"ruling": audit.get("ruling"), "reasonKind": audit.get(audits.AUDIT_REASON_KIND_FIELD),
                               "reason": audit.get("reason")}}
-        _record_disposition(state, key, "left-for-owner", state["round"], openAtLoopEnd=True,
+        _record_disposition(state, key, review_findings_schema.LEFT_FOR_OWNER, state["round"], openAtLoopEnd=True,
                             settledReason="still open after the bounded pass's one fix step and audit round",
                             **{session_contract.BOUNDED_PASS_EVIDENCE_FIELD: evidence})
         left.append(key)
     if raised:
         _seed_pending_new_issues(state)  # the raised issues are on the ledger, so each takes a disposition
     for key in raised:
-        _record_disposition(state, key, "left-for-owner", state["round"], openAtLoopEnd=True,
+        _record_disposition(state, key, review_findings_schema.LEFT_FOR_OWNER, state["round"], openAtLoopEnd=True,
                             settledReason="raised by the bounded pass's final audit and still open",
                             **{session_contract.BOUNDED_PASS_EVIDENCE_FIELD: {"fixCommit": None, "raisedByFinalAudit": True}})
         left.append(key)

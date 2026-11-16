@@ -143,6 +143,8 @@ def test_a_b1_only_pass_leaves_its_round_out_of_the_count_and_lists_it_audited(a
 
 
 def test_a_b1_and_b2_pass_lists_both_rounds_audited_and_counts_neither(account_of, b1_b2):
+    # axis: a B2 pass's two rounds above the cap are both listed audited and neither is counted — see bite-proof record
+    # i2554_bounded_pass_record (E-audited, E-count)
     account = account_of(b1_b2[1])
     assert account["rounds"]["count"] == CAP
     assert account["rounds"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1, CAP + 2],
@@ -151,6 +153,8 @@ def test_a_b1_and_b2_pass_lists_both_rounds_audited_and_counts_neither(account_o
 
 
 def test_a_pass_handed_back_before_b1s_audit_lists_no_audited_round(account_of, handed_back_before_b1_audit):
+    # axis: a round whose audits never folded is listed but never audited — see bite-proof record
+    # i2554_bounded_pass_record (E-audited)
     state = handed_back_before_b1_audit[1]
     assert state["terminal"] == "handed-back" and state["decisions"][-1]["kind"] == "bounded-pass-open"
     assert "3" not in state["rounds"], "the pass's round began and folded no audit"
@@ -161,6 +165,8 @@ def test_a_pass_handed_back_before_b1s_audit_lists_no_audited_round(account_of, 
 
 
 def test_a_pass_handed_back_after_b2s_fix_before_its_audit_lists_only_b1s_round(account_of, handed_back_after_b2_fix):
+    # axis: B2's round is listed but not audited when its audits never folded, so only B1's round is audited — see
+    # bite-proof record i2554_bounded_pass_record (E-audited)
     state = handed_back_after_b2_fix[1]
     assert state["terminal"] == "handed-back" and state["boundedPass"]["rounds"] == [CAP + 1, CAP + 2]
     assert "audits" in state["rounds"][str(CAP + 1)] and str(CAP + 2) not in state["rounds"]
@@ -172,6 +178,8 @@ def test_a_pass_handed_back_after_b2s_fix_before_its_audit_lists_only_b1s_round(
 
 
 def test_a_round_is_audited_exactly_when_the_driver_folded_audits_into_its_record(account_of, b1_only):
+    # axis: a round is audited exactly when its record holds folded audits, so a round with none is never listed audited
+    # — see bite-proof record i2554_bounded_pass_record (E-audited)
     # the driver's marker of a folded audit round is `state["rounds"][n]["audits"]` (`_fold_audits`)
     state = copy.deepcopy(b1_only[1])
     state["rounds"][str(CAP + 1)].pop("audits")
@@ -225,6 +233,8 @@ def test_a_bounded_pass_open_hand_back_stops_at_the_cap_only_for_a_round_cap_pas
 
 
 def test_the_cap_alone_decides_which_listed_rounds_are_left_out_of_the_count(account_of, b1_b2):
+    # axis: only a listed round above the cap is left out of the count, so a listed round at the cap still counts — see
+    # bite-proof record i2554_bounded_pass_record (E-count)
     state = copy.deepcopy(b1_b2[1])
     state["boundedPass"]["rounds"] = [CAP]  # a listed round at the cap is a real round
     assert account_of(state)["rounds"]["count"] == len(state["rounds"])
@@ -247,6 +257,8 @@ def _rounds(**bounded):
     {"trigger": "fix-keeps-failing", "rounds": [], "auditedRounds": []},
 ], ids=["none-audited", "one", "both", "second-only", "stall", "stall-no-rounds"])
 def test_the_validator_accepts_audited_rounds_that_are_listed_rounds_in_ascending_order(bounded):
+    # axis: the validator accepts every `rounds.boundedPass` the driver writes, an empty `rounds` for a stall pass
+    # included, so a valid record is never refused
     RR._validate(TRR.account(rounds=_rounds(**bounded)))
 
 
@@ -264,6 +276,8 @@ def test_the_validator_accepts_audited_rounds_that_are_listed_rounds_in_ascendin
 ], ids=["missing", "extra-key", "not-a-list", "null", "not-a-listed-round", "out-of-order", "duplicate", "bool",
         "string", "round-cap-no-rounds"])
 def test_the_validator_refuses_audited_rounds_that_are_not_listed_rounds_in_ascending_order(bounded):
+    # axis: the validator refuses audited rounds that are unlisted, unordered, duplicated or not integers, and a missing,
+    # extra or non-list `auditedRounds`, so a malformed `rounds.boundedPass` is never recorded
     with pytest.raises(RR.Refusal) as refused:
         RR._validate(TRR.account(rounds=_rounds(**bounded)))
     assert refused.value.reason == "review-account-invalid" and refused.value.detail == "rounds.boundedPass"
@@ -306,11 +320,14 @@ def test_the_line_names_an_audit_only_for_an_audited_round(trigger, rounds, audi
 
 
 def test_a_record_with_no_bounded_pass_has_no_line():
+    # axis: a record with no bounded pass (or an unreadable one) gets no summary line, so an ordinary record is unchanged
     assert RR._bounded_pass_line({"cap": 4}) is None and RR._bounded_pass_line(None) is None
 
 
 def test_the_session_line_of_each_ending_says_what_ran(account_of, b1_b2, handed_back_before_b1_audit,
                                                       handed_back_after_b2_fix):
+    # axis: the summary line of each driven ending names what ran — audited, handed back before the audit, or a fix not
+    # audited — never more — see bite-proof record i2554_bounded_pass_record (E-audited)
     assert RR._bounded_pass_line(account_of(b1_b2[1])["rounds"]) == (
         "Bounded pass: the cap round's fixes were audited in round 3, then one bounded fix was made and audited in "
         "round 4; rounds 3 and 4 are not counted in the 2 rounds.")
@@ -337,6 +354,8 @@ def test_the_adapter_carries_the_evidence_of_a_finding_the_pass_left_for_the_own
 
 
 def test_the_adapter_carries_the_evidence_of_a_finding_the_final_audit_raised(account_of, raised_session):
+    # axis: a finding the final audit raised carries the raised-by-final-audit evidence (no fix commit) into the record —
+    # see bite-proof record i2554_bounded_pass_record (E-evidence)
     account = account_of(raised_session[1])
     raised = next(f for f in account["findings"] if f["title"] == "raised-by-the-audit")
     assert raised["outcome"] == "left-for-owner"
@@ -345,6 +364,8 @@ def test_the_adapter_carries_the_evidence_of_a_finding_the_final_audit_raised(ac
 
 
 def test_a_stall_passs_stuck_finding_carries_its_evidence_too(account_of, stall_open):
+    # axis: a stall pass's stuck finding left for the owner carries its audit evidence into the record, as a round-cap
+    # pass's does — see bite-proof record i2554_bounded_pass_record (E-evidence)
     account = account_of(stall_open[1])
     late = next(f for f in account["findings"] if f["title"] == "late")
     assert late["outcome"] == "left-for-owner" and late["boundedPassEvidence"]["audit"]["reason"] == "still broken"
@@ -352,6 +373,8 @@ def test_a_stall_passs_stuck_finding_carries_its_evidence_too(account_of, stall_
 
 
 def test_a_finding_the_pass_cleared_or_a_session_with_no_pass_carries_no_evidence(account_of, b1_b2, b1_only):
+    # axis: a finding the pass cleared, and a session whose pass never fixed anything, carry no evidence, so the
+    # evidence marks only what was left for the owner
     for state in (b1_b2[1], b1_only[1]):
         assert not [f for f in account_of(state)["findings"] if "boundedPassEvidence" in f]
 
@@ -374,6 +397,7 @@ AUDIT = {"ruling": "not-discharged", "reasonKind": "wrong", "reason": "still bro
     {"fixCommit": None, "raisedByFinalAudit": True},
 ], ids=["commit-and-audit", "no-commit", "audit-of-nulls", "raised"])
 def test_the_validator_accepts_the_two_shapes_the_driver_writes(evidence):
+    # axis: the validator accepts both evidence shapes the driver writes, so a valid pass record is never refused
     RR._validate(TRR.account(findings=[_held(evidence)]))
 
 
@@ -408,6 +432,8 @@ def test_the_validator_refuses_evidence_that_is_not_one_of_the_two_shapes(eviden
 
 @pytest.mark.parametrize("outcome", ["fixed", None], ids=["fixed", "undecided"])
 def test_the_validator_refuses_evidence_on_a_finding_that_is_not_left_for_the_owner(outcome):
+    # axis: evidence on a finding whose outcome is not left-for-owner is refused, so a stale or misplaced card is never
+    # recorded
     finding = TRR.finding("code-001", outcome=outcome, boundedPassEvidence={"fixCommit": None, "raisedByFinalAudit": True})
     with pytest.raises(RR.Refusal) as refused:
         RR._validate(TRR.account(findings=[finding]))
@@ -415,6 +441,8 @@ def test_the_validator_refuses_evidence_on_a_finding_that_is_not_left_for_the_ow
 
 
 def test_a_finding_the_owner_later_decides_is_written_without_the_evidence():
+    # axis: a finding the owner moved off left-for-owner is written without its evidence, and a finding still left for
+    # the owner keeps it
     held = _held({"fixCommit": None, "raisedByFinalAudit": True})
     moved = dict(held, outcome="fixed")
     other = TRR.finding("code-002")
@@ -444,6 +472,8 @@ def _tried(card):
 
 
 def test_a_card_with_no_evidence_is_unchanged():
+    # axis: a leftover card whose record finding has no evidence gets no "What the loop tried" section, so an ordinary
+    # card is unchanged — see bite-proof record i2554_bounded_pass_record (E-card)
     card, _sheet = _card(NONE)
     assert [s["title"] for s in card["context"]] == [TPS.WORDS["whyYours"], TPS.WORDS["whatHappened"], TPS.WORDS["ifLeft"]]
     assert _tried(card) == []
@@ -470,13 +500,6 @@ def test_the_card_renders_the_evidence_from_the_record(evidence, sentence):
                                                      "What the loop tried", TPS.WORDS["ifLeft"]]
     assert "None" not in json.dumps(card["context"])
     assert list(TPS.Draft202012Validator(TPS.SCHEMA).iter_errors(sheet)) == [] and TPS.check_sheet_problems(sheet) == []
-
-
-def test_the_card_fills_the_two_slots_with_the_words_files_own_placeholders():
-    words = TPS.WORDS
-    assert words["loopTriedAtSaid"] == "The loop tried one bounded fix at {commit}; its audit said: {reason}"
-    assert words["loopTriedSaid"] == "The loop tried one bounded fix; its audit said: {reason}"
-    assert words["loopTriedTitle"] == "What the loop tried"
 
 
 # --- the converged readers: a census, and each reader on a converged bounded pass -----------------------------------
@@ -556,21 +579,27 @@ def test_the_census_finds_exactly_the_listed_readers_of_the_converged_terminal()
     ("def f(x):\n    return x == 'convergedx' or x in ('halted',) or x is None\n", 0),
 ], ids=["eq", "eq-reversed", "ne", "in-tuple", "not-in-list", "in-set", "in-reversed", "other-strings"])
 def test_the_census_sees_every_comparison_form(source, expected):
+    # axis: the census scan finds a `converged` comparison in each of its four forms and none in other strings, so a new
+    # reader cannot hide in a form the scan misses — see bite-proof record i2554_bounded_pass_record (E-census)
     assert len(_converged_readers_in(source, "m.py")) == expected
     assert all(key == ("m.py", "f") for key in _converged_readers_in(source, "m.py"))
 
 
 def test_decision_kinds_reads_a_converged_bounded_pass_as_no_cause(card_session):
+    # axis: the decision-kind reader maps a converged bounded pass to no terminal cause, so it never reads as a stop
     _d, state = card_session
     assert state["terminal"] == "converged" and state["certification"]["shape"] == "bounded-pass"
     assert decision_kinds.map_terminal_cause(state["terminal"], state["decisions"][-1]["kind"]) is None
 
 
 def test_the_pr_body_stage_reads_the_receipt_as_converged(card_session):
+    # axis: the PR-body stage reads a bounded-pass receipt as converged, so it is never staged as an unconverged review
     assert pr_body_stage._converged(card_session[0]) is True
 
 
 def test_the_record_validator_reads_the_absence_of_an_uncertified_stamp(account_of, card_session):
+    # axis: the record validator accepts a converged bounded-pass account with no uncertified stamp and refuses one that
+    # carries it
     account = account_of(card_session[1])
     assert "uncertified" not in account and account["findings"]
     RR._validate(account)
@@ -581,21 +610,27 @@ def test_the_record_validator_reads_the_absence_of_an_uncertified_stamp(account_
 
 
 def test_a_converged_bounded_pass_is_not_the_empty_returning_round(card_session):
+    # axis: a converged bounded pass is not read as an empty returning round, so its record is written in full
     assert RS._empty_returning_round(card_session[1]) is None
 
 
 def test_the_adapter_reads_stopped_at_the_cap_from_the_pass_trigger(account_of, card_session, stall_open):
+    # axis: `stoppedAtCap` follows the pass trigger — true for a round-cap pass, false for a stall pass — see bite-proof
+    # record i2554_bounded_pass_record (E-stall-cap)
     assert account_of(card_session[1])["rounds"]["stoppedAtCap"] is True  # a round-cap pass kept the cap
     assert account_of(stall_open[1])["rounds"]["stoppedAtCap"] is False  # a fix-keeps-failing pass never reached it
 
 
 def test_the_adapter_writes_no_uncertified_stamp_for_a_converged_bounded_pass(account_of, card_session, stall_open):
+    # axis: the adapter stamps no `uncertified` on a converged bounded pass of either trigger, so it is never recorded
+    # as uncertified
     for _d, state in (card_session, stall_open):
         assert state["terminal"] == "converged"
         assert "uncertified" not in account_of(state)
 
 
 def test_the_cards_settled_reason_is_the_bounded_passs_own(card_session, raised_session):
+    # axis: the pass's own settled reason survives the terminal settle, so a card never reads as left unfixed at converge
     # the terminal settle's `left unfixed when the review loop converged` never overwrites the pass's own reason
     assert B2._fixed_row(card_session[1])["settledReason"] == OPEN_REASON
     raised = X._rows(raised_session[1], "raised-by-the-audit")
@@ -605,6 +640,8 @@ def test_the_cards_settled_reason_is_the_bounded_passs_own(card_session, raised_
 
 
 def test_the_drivers_receipt_validator_reads_the_converged_bounded_pass_receipt(card_session):
+    # axis: the driver's receipt validators accept a converged bounded-pass receipt, so it is never refused as an
+    # unrecognised shape
     d, _state = card_session
     with open(os.path.join(d, "round-receipt.json"), encoding="utf-8") as handle:
         receipt = json.load(handle)

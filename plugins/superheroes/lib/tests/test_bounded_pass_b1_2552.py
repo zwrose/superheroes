@@ -493,14 +493,22 @@ def test_a_lane_that_would_need_a_panel_hands_the_bounded_round_back_instead_of_
     # record i2552_bounded_pass_b1; modelled on `test_c1l4b_extra_audit.py::test_t12_*`
     import lane_call
     d = _at_cap_verify(tmp_path)
-    monkeypatch.setattr(lane_call, "call", lambda root, paths, proposed=None: {"floor": "full"})
+    calls = []  # the session holds a `calibrationPin`, so the driver reads the lane through `call_pinned`, not `call`
+
+    def pinned(root, paths, stored, proposed=None):
+        calls.append((root, paths, stored, proposed))
+        return {"floor": "full"}
+
+    monkeypatch.setattr(lane_call, "call_pinned", pinned)
     state = X._state(d)
     state["config"]["seatMap"] = {"laneBasis": {"floor": None}}
+    state["config"]["repoRoot"] = str(tmp_path)  # a real root, so the driver takes the pinned branch, not `unavailable`
     RD.save_state(d, state)
     n, trace = _run(d, None, _respond())
     final = X._state(d)
     assert final["terminal"] == "handed-back" and final["decisions"][-1]["kind"] == "bounded-pass-open"
     assert "composes no panel" in final["decisions"][-1]["detail"], final["decisions"][-1]
+    assert calls, "the stubbed pinned lane call was never reached"
     assert not any(dec["kind"] == RD.LANE_EXPANDED_RECOMPOSE for dec in final["decisions"])
     assert final["round"] == CAP + 1 and final["boundedPass"]["step"] == "done"
     assert [a for a, r in trace if r > CAP] == [RD.P_TERMINAL], trace  # no audits, panel or recompose past the cap
