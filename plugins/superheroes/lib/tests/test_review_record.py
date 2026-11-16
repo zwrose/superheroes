@@ -62,6 +62,8 @@ class Fake:
             "create_comment": self._create,
             "changed_paths": lambda pr, repo: self.changed,
             "decision_sources": self._sources,
+            # unknown risk, so a Minor or Nit left for the owner stays a card here; a test of the listed case injects False
+            "finding_risk": lambda root, file: None,
         }
 
     def _sources(self, root, base_ref, sheet_answers, pr):
@@ -227,8 +229,8 @@ def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_not_reviewed
 
 
 def test_null_outcome_is_not_reviewed():
-    # axis: the outcome condition; a finding with no outcome counted as reviewed
-    rec = build(account(findings=[finding(outcome=None)]))
+    # axis: the outcome condition; a finding with no outcome counted as reviewed (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
+    rec = build(account(findings=[finding(outcome=None, severity="Important")]))
     assert rec["status"] == "not-reviewed" and "finding code-001 has no outcome" in rec["whatIsMissing"]
 
 
@@ -239,10 +241,10 @@ def test_finding_without_reason_is_not_reviewed():
 
 
 @pytest.mark.parametrize("ci,word", [(RED, "red"), (PENDING, "pending"), (None, "none")])
-def test_ci_that_is_not_green_is_not_reviewed(ci, word):
-    # axis: the CI condition; red, pending or unreadable CI counted as reviewed
+def test_ci_that_is_not_green_is_kept_in_the_record_and_withholds_nothing(ci, word):
+    # axis: the CI condition (#2493); red, pending or unreadable CI withholding the certificate, or the record dropping the CI reading
     rec = build(account(), Fake(ci=ci))
-    assert rec["status"] == "not-reviewed" and rec["ci"]["state"] == word
+    assert rec["status"] == "reviewed" and rec["ci"]["state"] == word and rec["whatIsMissing"] == []
 
 
 def test_green_claimed_on_an_earlier_sha_is_not_reviewed():
@@ -255,13 +257,13 @@ def test_green_claimed_on_an_earlier_sha_is_not_reviewed():
     assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["sha"] == HEAD
 
 
-def test_status_rejects_ci_read_on_a_different_sha_than_the_final_commit():
-    # axis: status CI-sha check; green CI read on another commit counted as reviewed
+def test_status_ignores_ci_read_on_a_different_sha_than_the_final_commit():
+    # axis: status CI-sha check (#2493); CI read on another commit withholding the certificate, which no longer reads CI
     rec = build(account())
     assert rec["status"] == "reviewed"
     rec["ci"] = dict(rec["ci"], sha=EARLIER)
     status, _, lines = rr._status(rec)
-    assert status == "not-reviewed" and "not on the final commit" in lines[0]
+    assert status == "reviewed" and lines == []
 
 
 def test_missing_security_review_parks_unless_the_owner_went_ahead():
@@ -452,9 +454,9 @@ def test_unreadable_pr_is_not_reviewed():
 
 
 def test_null_outcome_writes_and_a_foreign_outcome_is_refused(tmp_path):
-    # axis: outcome spelling; a foreign outcome accepted, or a null outcome refused
+    # axis: outcome spelling; a foreign outcome accepted, or a null outcome refused (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
     fake = Fake()
-    ok = rr.write(put(tmp_path, account(findings=[finding(outcome=None)])), str(tmp_path), fake.readers())
+    ok = rr.write(put(tmp_path, account(findings=[finding(outcome=None, severity="Important")])), str(tmp_path), fake.readers())
     assert ok["ok"] and ok["status"] == "not-reviewed"
     bad = rr.write(put(tmp_path, account(findings=[finding(outcome="done")])), str(tmp_path), fake.readers())
     assert (bad["ok"], bad["reason"]) == (False, "review-account-invalid") and "outcome" in bad["detail"]
@@ -667,14 +669,14 @@ def test_w1_only_creates(tmp_path):
 
 
 def test_w2_the_one_check_across_sessions(tmp_path):
-    # axis: the unaccounted check; an earlier finding dropped by a later account, or a pending one refused on relisting
+    # axis: the unaccounted check; an earlier finding dropped by a later account, or a pending one refused on relisting (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
     fake = Fake()
-    send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call")])
+    send(tmp_path, fake, findings=[finding("a-1", outcome="left-for-owner", reason="owner call", severity="Important")])
     out = rr.write(put(tmp_path, account(findings=[])), str(tmp_path), fake.readers())
     assert (out["ok"], out["reason"]) == (False, "review-record-unaccounted")
     assert out["detail"] == "earlier findings with no outcome in this account: a-1"
     assert len(fake.comments) == 1
-    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="")])), str(tmp_path), fake.readers())
+    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="", severity="Important")])), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
     assert rr.read(7, readers=fake.readers())["status"] == "not-reviewed"
     shown = wrong("a-1", reason="not a bug here")
@@ -3182,19 +3184,19 @@ def test_the_record_names_the_workflow_it_read_ci_from(tmp_path):
     missing = dict(Fake(ci=(CHECK_OK, NO_STATUS, wfs(wf_run("Release Please", id=1)))).readers(),
                    ci_workflow=lambda root: DECLARED_CI)
     rec = rr.build_record(account(), missing)
-    assert rec["status"] == "not-reviewed" and rec["ci"]["state"] == "none"
-    assert f"CI is none on {HEAD[:7]} (workflow CI: no run on this commit)" in rec["whatIsMissing"]
+    assert rec["status"] == "reviewed" and rec["ci"]["state"] == "none"
+    assert rec["ci"]["read"] == "workflow CI: no run on this commit" and rec["whatIsMissing"] == []
     unavailable = rr.build_record(account(), dict(declared, check_data=lambda sha, repo: None))
     assert unavailable["ci"] == {"state": "none", "sha": None, "source": "unavailable", "workflow": "CI",
                                  "read": "CI could not be read"}
 
 
-def test_a_status_line_for_a_record_written_before_the_read_key_keeps_the_old_wording():
-    # axis: the missing-line wording; a record with no read key failing to render, or the old wording changing
+def test_a_status_for_a_record_written_before_the_read_key_still_reads_and_names_no_ci_line():
+    # axis: the missing-line list (#2493); a record with no read key failing to read, or a CI line coming back into the certificate
     rec = build(account(), Fake(ci=RED))
     old = {**rec, "ci": {k: v for k, v in rec["ci"].items() if k not in ("workflow", "read")}}
-    lines = rr._status(old)[2]
-    assert f"CI is red on {HEAD[:7]}" in lines and not any(line.startswith(f"CI is red on {HEAD[:7]} (") for line in lines)
+    status, _, lines = rr._status(old)
+    assert status == "reviewed" and not any(line.startswith("CI ") for line in lines)
 
 
 def write_core(repo, block_extra=None, raw_block=None, schema=core_md.SCHEMA_VERSION):

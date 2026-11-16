@@ -169,7 +169,7 @@ def test_a_claim_naming_no_left_for_owner_finding_is_ignored():
         "left-for-owner finding 'The old balance is rounded twice' on PR #10 has no leftovers entry (key '10:balance/f-2'); "
         "give it why, context and options, or a craft determination",
         'PR #10\'s acceptance 10:210485cfa6 ("f-9 Some other finding — fixed-above #11 1a2b3c4") is not accounted for: '
-        'give accounting "10:210485cfa6" one of item, fold with line, leftover, or canon',
+        'give accounting "10:210485cfa6" one of item, fold with line, leftover, listed, or canon',
     ], problems
 
 
