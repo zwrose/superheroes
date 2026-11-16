@@ -460,3 +460,30 @@ FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_builder_
 212 passed in 19.07s
 ```
 This disclosure is unadjudicated: it travels to the next independent reader of the record.
+
+---
+
+## Added at the second review session, round 1: E-rename (2026-11-16, typed and run by the build session)
+
+**guard:** `head_coverage.py:290` in `_qualification`, the rename and copy source paths read with the changed files
+(`"--", *files, *[s for s in sources if s not in files]`), together with the `moved` set in `_check` that keeps a file
+moved after review out of reconstruction and copy proofs. Added at the loop's apply-fixes step in commit d4758f2d and
+proved in a detached probe worktree at that commit.
+
+**neutralization:** the pathspec cut back to `"--", *files` (destination paths only).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k rename_after_review -q -p no:cacheprovider`
+```
+E       assert ('judgement' == 'needs-review'
+E       assert ('judgement' == 'needs-review'
+2 failed, 11 deselected in 6.62s
+```
+
+**restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing after it.
+
+**green:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -q -p no:cacheprovider`
+```
+13 passed in 1.18s
+```
+
+**Not neutralized here:** the `moved` set on its own (with the pathspec intact, the renamed section already fails qualification), pinned by the same two tests and by `test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement`.
