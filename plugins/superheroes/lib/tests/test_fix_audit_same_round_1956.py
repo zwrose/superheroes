@@ -55,6 +55,11 @@ def _fold(result, allowed=(), target=None, **kw):
     return AU.apply_audit_results([target or _target()], [body], change_allowed_ids=allowed, **kw)
 
 
+# #2495: an unnamed change is refused only when the target's own carried decision forbids it; every
+# refusal below carries this decision. Without it the same result is a scope-only hold (cleared).
+FORBIDS = {"ownerRuling": {"ruling": "guidance", "allowsChange": False}}
+
+
 def _refused(out):
     assert out["discharged"] == [] and out["notDischarged"] == ["a"]
     assert out["unnamedChange"] == ["a"] and out["attributedChange"] == []
@@ -95,16 +100,27 @@ def test_a_discharged_but_new_issue_result_with_a_verifying_claim_keeps_its_new_
 def test_an_unnamed_change_with_no_claim_is_refused_though_the_record_has_candidates():
     # axis: an unclaimed unnamed change keeps today's refusal, same reason text and outcome list
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
-    out = _fold({"unnamedChange": UNNAMED})
+    out = _fold({"unnamedChange": UNNAMED}, target=_target(**FORBIDS))
     _refused(out)
     for empty in ({"unnamedChangeFixes": []}, {"unnamedChangeReverts": []},
                   {"unnamedChangeFixes": None, "unnamedChangeReverts": None}):
-        _refused(_fold({"unnamedChange": UNNAMED, **empty}))
+        _refused(_fold({"unnamedChange": UNNAMED, **empty}, target=_target(**FORBIDS)))
+
+
+def test_an_unclaimed_unnamed_change_on_a_target_that_forbids_nothing_is_a_scope_only_hold():
+    # #2495: the same result with no forbidding decision clears, noted for the vet, never attributed
+    out = _fold({"unnamedChange": UNNAMED})
+    assert out["discharged"] == ["a"] and out["scopeHeld"] == ["a"] and out["unnamedChange"] == []
+    assert out["attributedChange"] == []
+    audit = out["audits"][0]
+    assert audit["ruling"] == "discharged" and audit["scopeNote"] == UNNAMED
+    assert "attributedChange" not in audit and "allowedChange" not in audit
 
 
 def test_a_discharged_but_new_issue_result_with_no_claim_is_still_refused():
     issue = {"file": "g.py", "line": 3, "title": "fresh", "severity": "Minor"}
-    out = _fold({"ruling": "discharged-but-new-issue", "unnamedChange": UNNAMED, "newIssues": [issue]})
+    out = _fold({"ruling": "discharged-but-new-issue", "unnamedChange": UNNAMED, "newIssues": [issue]},
+                target=_target(**FORBIDS))
     assert out["discharged"] == [] and out["unnamedChange"] == ["a"]
     assert [n["title"] for n in out["newIssues"]] == ["fresh"]
 
@@ -112,30 +128,35 @@ def test_a_discharged_but_new_issue_result_with_no_claim_is_still_refused():
 def test_a_fixes_claim_naming_an_id_outside_round_findings_is_refused():
     # axis: the fixes claim must be a finding of the driver's own roundFindings
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
-    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["elsewhere"]}))
+    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["elsewhere"]},
+                   target=_target(**FORBIDS)))
 
 
 @pytest.mark.parametrize("target", [
-    _target(round_findings=None), _target(round_findings=()), _target(roundFindings="m"),
-    _target(roundFindings=[{"title": "no id"}, "m", {"id": "  "}, {"id": 7}]),
+    _target(round_findings=None, **FORBIDS), _target(round_findings=(), **FORBIDS),
+    _target(roundFindings="m", **FORBIDS),
+    _target(roundFindings=[{"title": "no id"}, "m", {"id": "  "}, {"id": 7}], **FORBIDS),
 ], ids=["absent", "empty", "not-a-list", "no-usable-id"])
 def test_a_fixes_claim_on_a_target_with_no_usable_round_findings_is_refused(target):
     _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["m"]}, target=target))
 
 
 def test_a_fixes_claim_naming_one_known_and_one_unknown_id_is_refused():
-    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["m", "elsewhere"]}))
+    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["m", "elsewhere"]},
+                   target=_target(**FORBIDS)))
 
 
 def test_a_reverts_claim_naming_a_ref_outside_reported_changes_is_refused():
     # axis: the reverts claim must be a ref of the driver's own reportedUnnamedChanges
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
-    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeReverts": ["r9:a"]}))
+    _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeReverts": ["r9:a"]},
+                   target=_target(**FORBIDS)))
 
 
 @pytest.mark.parametrize("target", [
-    _target(reported=None), _target(reported=()), _target(reportedUnnamedChanges="r2:a"),
-    _target(reportedUnnamedChanges=[{"round": 2}, "r2:a", {"ref": ""}, {"ref": 7}]),
+    _target(reported=None, **FORBIDS), _target(reported=(), **FORBIDS),
+    _target(reportedUnnamedChanges="r2:a", **FORBIDS),
+    _target(reportedUnnamedChanges=[{"round": 2}, "r2:a", {"ref": ""}, {"ref": 7}], **FORBIDS),
 ], ids=["absent", "empty", "not-a-list", "no-usable-ref"])
 def test_a_reverts_claim_on_a_target_with_no_usable_reported_changes_is_refused(target):
     _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeReverts": ["r2:a"]}, target=target))
@@ -153,12 +174,12 @@ def test_a_failing_fixes_claim_is_not_rescued_by_a_verifying_reverts_claim():
     # axis: every claim given must verify — one failing claim refuses the whole result
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
     _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["elsewhere"],
-                    "unnamedChangeReverts": ["r2:a"]}))
+                    "unnamedChangeReverts": ["r2:a"]}, target=_target(**FORBIDS)))
 
 
 def test_a_failing_reverts_claim_is_not_rescued_by_a_verifying_fixes_claim():
     _refused(_fold({"unnamedChange": UNNAMED, "unnamedChangeFixes": ["m"],
-                    "unnamedChangeReverts": ["r9:a"]}))
+                    "unnamedChangeReverts": ["r9:a"]}, target=_target(**FORBIDS)))
 
 
 def test_claims_without_an_unnamed_change_have_no_effect_and_record_nothing():
@@ -201,8 +222,11 @@ def test_an_unauthenticated_clearing_result_stays_unauthenticated_with_a_verifyi
 
 
 def test_the_claim_text_alone_never_unlocks_a_discharge():
-    out = _fold({"unnamedChange": "it is the fix of m (unnamedChangeFixes: m)"})
+    out = _fold({"unnamedChange": "it is the fix of m (unnamedChangeFixes: m)"}, target=_target(**FORBIDS))
     assert out["discharged"] == [] and out["unnamedChange"] == ["a"]
+    # and on a target that forbids nothing it is a scope-only hold, never an attributed change
+    out = _fold({"unnamedChange": "it is the fix of m (unnamedChangeFixes: m)"})
+    assert out["discharged"] == ["a"] and out["attributedChange"] == [] and out["scopeHeld"] == ["a"]
 
 
 MALFORMED = [("m", "a string"), ({"m": 1}, "a dict"), (True, "a bool"), (0, "zero"), ([""], "blank"),
@@ -303,7 +327,7 @@ def test_audit_targets_skip_a_non_dict_round_finding():
     assert [r["id"] for r in target["roundFindings"]] == [_key("Stale comment", 9)]
 
 
-def test_a_fixes_claim_naming_an_owner_skipped_finding_is_refused_at_the_fold():
+def test_a_fixes_claim_naming_an_owner_skipped_finding_is_not_attributed_at_the_fold():
     state = _round_state(_finding("Stale comment", line=9, severity="Minor"))
     _decide(state, _key("Stale comment", 9), "out-of-scope", 1)
     (target,) = _targets(state)
@@ -312,7 +336,10 @@ def test_a_fixes_claim_naming_an_owner_skipped_finding_is_refused_at_the_fold():
     out = AU.apply_audit_results(
         [target], [body], expected_auditors={target["id"]: "codex"},
         collection_manifest={target["id"]: "codex"})
-    assert out["discharged"] == [] and out["unnamedChange"] == [target["id"]]
+    # #2495: the claim credits no attribution; the change is a scope-only hold (no forbidding decision)
+    assert out["attributedChange"] == [] and "attributedChange" not in out["audits"][0]
+    assert out["discharged"] == [target["id"]] and out["scopeHeld"] == [target["id"]]
+    assert out["unnamedChange"] == []
 
 
 # --- the driver's own record: reportedUnnamedChanges --------------------------------------------
@@ -377,9 +404,10 @@ def test_history_skips_what_it_cannot_read():
 
 # --- the loop -----------------------------------------------------------------------------------
 
-def _same_round_loop(captured_state, claims_by_round, extra=()):
+def _same_round_loop(captured_state, claims_by_round, extra=(), forbid=False):
     """Round 1 raises the Important (the fix batch) and `extra` findings outside the batch; each audit
-    round reports an unnamed change plus whatever `claims_by_round[rnd](target)` returns."""
+    round reports an unnamed change plus whatever `claims_by_round[rnd](target)` returns. With `forbid`
+    the owner rules, in round 1, that the Important's fix may not change behaviour it does not name."""
     batch_key = _key("Null deref")
     offers, seen = [], []
 
@@ -391,6 +419,8 @@ def _same_round_loop(captured_state, claims_by_round, extra=()):
 
     def fix_step(batch, rnd, payload):
         offers.append((rnd, [RD._fix_batch_row_key(r) for r in batch]))
+        if len(offers) == 1 and forbid:
+            _decide(captured_state["state"], batch_key, "guidance", rnd, allowsChange=False)
         return {"fixes": [], "headDiff": TRD._headf(len(offers)), "changedSubjects": ["Code"]}
 
     def auditor(targets, rnd):
@@ -457,7 +487,7 @@ def test_a_revert_of_an_earlier_reported_change_is_discharged_and_does_not_stall
         return {"unnamedChangeReverts": [target["reportedUnnamedChanges"][0]["ref"]]}
 
     key, state, offers, seen = _same_round_loop(
-        captured_state, {2: lambda t: {}, 3: revert_round_three})
+        captured_state, {2: lambda t: {}, 3: revert_round_three}, forbid=True)
     assert state["terminal"] == "converged"
     assert state["rounds"]["2"]["auditUnnamedChange"] == [key]
     round_three = state["rounds"]["3"]["audits"][0]
@@ -473,7 +503,8 @@ def test_a_revert_of_an_earlier_reported_change_is_discharged_and_does_not_stall
 
 def test_an_unclaimed_unnamed_change_still_ends_with_an_unnamed_change_on_the_round(captured_state):
     minor = _finding("Stale comment", line=2, severity="Minor")
-    key, state, offers, seen = _same_round_loop(captured_state, {2: lambda t: {}}, extra=[minor])
+    key, state, offers, seen = _same_round_loop(captured_state, {2: lambda t: {}}, extra=[minor],
+                                                forbid=True)
     assert state["terminal"] == "converged"
     audit = state["rounds"]["2"]["audits"][0]
     assert audit["ruling"] == "not-discharged"
@@ -487,7 +518,7 @@ def test_an_unclaimed_unnamed_change_still_ends_with_an_unnamed_change_on_the_ro
 def test_a_claim_naming_a_finding_that_is_not_a_round_finding_still_ends_with_an_unnamed_change(
         captured_state):
     key, state, _offers, _seen = _same_round_loop(
-        captured_state, {2: lambda t: {"unnamedChangeFixes": ["f.py::invented@L4"]}})
+        captured_state, {2: lambda t: {"unnamedChangeFixes": ["f.py::invented@L4"]}}, forbid=True)
     assert state["rounds"]["2"]["auditUnnamedChange"] == [key]
     assert state["rounds"]["2"]["audits"][0]["ruling"] == "not-discharged"
 

@@ -287,10 +287,24 @@ def _fold(result, allowed=(), target=None, **kw):
     return AU.apply_audit_results([target], [body], change_allowed_ids=allowed, **kw)
 
 
-def test_t4_edge4_an_unnamed_change_without_an_allowing_ruling_is_not_discharged():
+FORBIDDING_TARGET = {"id": "a", "file": "f.py", "line": 1, "title": "t", "severity": "Important",
+                     "ownerRuling": {"ruling": "guidance", "allowsChange": False}}
+
+
+def test_t4_edge4_an_unnamed_change_without_an_allowing_ruling_is_a_scope_only_hold():
+    # #2495: with no allowing and no forbidding decision the fix reads cleared, the change noted for the vet
     out = _fold({"unnamedChange": UNNAMED})
+    assert out["discharged"] == ["a"] and out["notDischarged"] == []
+    assert out["unnamedChange"] == [] and out["scopeHeld"] == ["a"]
+    assert out["audits"][0]["ruling"] == "discharged"
+    assert out["audits"][0]["scopeNote"] == UNNAMED
+    assert "allowedChange" not in out["audits"][0]
+
+
+def test_t4_edge4_an_unnamed_change_the_findings_own_decision_forbids_is_not_discharged():
+    out = _fold({"unnamedChange": UNNAMED}, target=dict(FORBIDDING_TARGET))
     assert out["discharged"] == [] and out["notDischarged"] == ["a"]
-    assert out["unnamedChange"] == ["a"]
+    assert out["unnamedChange"] == ["a"] and out["scopeHeld"] == []
     assert out["audits"][0]["ruling"] == "not-discharged"
     assert out["audits"][0]["reason"] == "%s: %s" % (UNNAMED_REASON_PREFIX, UNNAMED)
 
@@ -302,14 +316,20 @@ def test_t4_edge4_an_allowing_ruling_keeps_the_discharge_and_records_the_change(
     assert out["audits"][0]["allowedChange"] == UNNAMED
 
 
-def test_t4_edge4_a_target_not_in_the_allowed_ids_is_refused_even_when_another_is_allowed():
-    out = _fold({"unnamedChange": UNNAMED}, allowed=["b"])
+def test_t4_edge4_a_target_not_in_the_allowed_ids_gets_no_allowance_when_another_is_allowed():
+    # the other id's allowance never credits this one: no `allowedChange`; it is refused when its own
+    # decision forbids the change, and a scope-only hold otherwise
+    out = _fold({"unnamedChange": UNNAMED}, allowed=["b"], target=dict(FORBIDDING_TARGET))
     assert out["discharged"] == [] and out["unnamedChange"] == ["a"]
+    out = _fold({"unnamedChange": UNNAMED}, allowed=["b"])
+    assert out["discharged"] == ["a"] and out["scopeHeld"] == ["a"] and out["unnamedChange"] == []
+    assert "allowedChange" not in out["audits"][0]
 
 
 def test_t4_edge4_new_issues_of_a_refused_clearing_result_still_route():
     out = _fold({"ruling": "discharged-but-new-issue", "unnamedChange": UNNAMED,
-                 "newIssues": [{"file": "g.py", "line": 3, "title": "fresh", "severity": "Minor"}]})
+                 "newIssues": [{"file": "g.py", "line": 3, "title": "fresh", "severity": "Minor"}]},
+                target=dict(FORBIDDING_TARGET))
     assert out["discharged"] == [] and out["unnamedChange"] == ["a"]
     assert [n["title"] for n in out["newIssues"]] == ["fresh"]
     assert out["newIssues"][0]["originAuditId"] == "a"
@@ -345,7 +365,8 @@ def test_t4_edge6_an_unauthenticated_clearing_result_stays_unauthenticated():
 
 # --- Part B: the loop ---------------------------------------------------------------------------
 
-def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_ruling="discharged"):
+def _unnamed_change_loop(captured_state, *, allow, forbid=False, unnamed_rounds=(2,),
+                         refusal_ruling="discharged"):
     key = _key("Null deref")
     offers, seen_targets, history = [], [], {}
 
@@ -358,8 +379,8 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
     def fix_step(batch, rnd, payload):
         state = captured_state["state"]
         offers.append((rnd, [RD._fix_batch_row_key(r) for r in batch]))
-        if len(offers) == 1 and allow:
-            _decide(state, key, "guidance", rnd, allowsChange=True)
+        if len(offers) == 1 and (allow or forbid):
+            _decide(state, key, "guidance", rnd, allowsChange=bool(allow))
         if len(offers) == 2:
             history.update(RD._finding_history(state))
         return {"fixes": [], "headDiff": TRD._headf(len(offers)), "changedSubjects": ["Code"]}
@@ -390,9 +411,10 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
 
 def test_t3_a_fix_with_an_unnamed_change_is_not_fixed_and_returns_with_the_auditors_reason(
         captured_state):
-    # axis: refusal — a clearing audit that names an unnamed change is not credited without a ruling
+    # axis: refusal — a clearing audit that names an unnamed change the finding's own decision forbids is not credited
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo2_c7_fix_scope.md
-    key, state, offers, seen_targets, history = _unnamed_change_loop(captured_state, allow=False)
+    key, state, offers, seen_targets, history = _unnamed_change_loop(
+        captured_state, allow=False, forbid=True)
     assert state["terminal"] == "converged"
     audit = state["rounds"]["2"]["audits"][0]
     assert audit["ruling"] == "not-discharged"
@@ -813,7 +835,7 @@ def test_fixer_delta_does_not_invent_changes_where_hunks_merge():
 
 def test_a_scope_refused_fix_stays_not_discharged_until_the_fix_drops_the_change(captured_state):
     key, state, offers, seen_targets, _history = _unnamed_change_loop(
-        captured_state, allow=False, unnamed_rounds=(2, 3))
+        captured_state, allow=False, forbid=True, unnamed_rounds=(2, 3))
     audits_by_round = {rnd: state["rounds"][rnd]["audits"][0] for rnd in ("2", "3", "4")}
     assert audits_by_round["2"]["ruling"] == "not-discharged"
     assert audits_by_round["3"]["ruling"] == "not-discharged"
@@ -823,7 +845,7 @@ def test_a_scope_refused_fix_stays_not_discharged_until_the_fix_drops_the_change
     assert state["terminal"] == "converged"
     assert _ledger(state)[key]["disposition"] == "fixed"
     assert _ledger(state)[key]["dispositionRound"] == 4
-    assert all("ownerRuling" not in t for targets in seen_targets for t in targets)
+    assert all(t["ownerRuling"]["allowsChange"] is False for targets in seen_targets for t in targets)
 
 
 def test_an_allowing_guidance_ruling_rides_the_audit_target(captured_state):
@@ -910,8 +932,12 @@ def test_a_ruling_recorded_after_the_audit_target_stays_pending():
     RD._fold_audits(state, state["config"], artifact)
     outcome = state["_auditOutcome"]
     assert newer > target["ownerRulingSeq"]
-    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
-    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+    # #2495: the later ruling credits nothing (no `allowedChange`, never marked delivered); the change
+    # is a scope-only hold, the fix reads cleared with the change noted for the vet
+    assert outcome["discharged"] == [key_a] and outcome["scopeHeld"] == [key_a]
+    assert outcome["unnamedChange"] == []
+    assert "allowedChange" not in outcome["audits"][0]
+    assert newer not in set(state.get("sentUnderDecision", {}).values())
 
 
 # --- Review round 2 regressions ------------------------------------------------------------------
@@ -945,7 +971,7 @@ def test_a_not_discharged_audit_keeps_its_unnamed_change_for_the_next_fixer(capt
 
 def test_the_next_audit_target_carries_the_last_audit_that_refused(captured_state):
     key, state, offers, seen_targets, _history = _unnamed_change_loop(
-        captured_state, allow=False)
+        captured_state, allow=False, forbid=True)
     assert "priorAudit" not in seen_targets[0][0]
     prior = seen_targets[1][0]["priorAudit"]
     assert prior["ruling"] == "not-discharged" and prior["round"] == 2
@@ -991,8 +1017,12 @@ def test_an_allowing_ruling_replaced_while_the_audit_is_pending_credits_nothing(
     (target,) = RD._audit_targets(state, state["config"], {})
     _decide(state, key_a, "out-of-scope", 1)
     outcome = _fold_one(state, target, key_a, unnamedChange=UNNAMED)
-    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
-    assert _ledger(state).get(key_a, {}).get("disposition") != "fixed"
+    # #2495: the replaced allowance credits nothing (no `allowedChange`, nothing marked delivered); the
+    # change is a scope-only hold
+    assert outcome["discharged"] == [key_a] and outcome["scopeHeld"] == [key_a]
+    assert outcome["unnamedChange"] == []
+    assert "allowedChange" not in outcome["audits"][0]
+    assert not state["sentUnderDecision"]
 
 
 def _sibling_pair(a_allows=None, b_allows=True):
@@ -1044,20 +1074,24 @@ def test_an_unnamed_change_with_no_seq_is_refused_even_with_a_siblings_allowance
     assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
 
 
-def test_a_named_seq_that_has_since_been_replaced_is_refused():
+def test_a_named_seq_that_has_since_been_replaced_credits_nothing_and_is_a_scope_only_hold():
     state, target_a, key_a, key_b = _sibling_pair()
     named = _seq(state, key_b)
     _decide(state, key_b, "guidance", 1, allowsChange=True, guidance="Another ruling.")
     assert _seq(state, key_b) != named
     outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED, unnamedChangeAllowedBySeq=named)
-    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert outcome["discharged"] == [key_a] and outcome["scopeHeld"] == [key_a]
+    assert outcome["unnamedChange"] == [] and "allowedChange" not in outcome["audits"][0]
+    assert not state["sentUnderDecision"]
 
 
-def test_a_named_seq_not_carried_on_the_target_is_refused():
+def test_a_named_seq_not_carried_on_the_target_credits_nothing_and_is_a_scope_only_hold():
     state, target_a, key_a, key_b = _sibling_pair()
     outcome = _fold_one(state, target_a, key_a, unnamedChange=UNNAMED,
                         unnamedChangeAllowedBySeq=_seq(state, key_b) + 1000)
-    assert outcome["discharged"] == [] and outcome["unnamedChange"] == [key_a]
+    assert outcome["discharged"] == [key_a] and outcome["scopeHeld"] == [key_a]
+    assert outcome["unnamedChange"] == [] and "allowedChange" not in outcome["audits"][0]
+    assert not state["sentUnderDecision"]
 
 
 @pytest.mark.parametrize("value", ["3", True, 1.5, [1]])

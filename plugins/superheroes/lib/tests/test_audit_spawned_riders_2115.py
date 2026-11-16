@@ -513,11 +513,14 @@ def test_t7_an_archived_rider_rides_its_parents_round_findings_and_its_fix_is_at
     assert audit["ruling"] == "discharged" and audit["sameRoundFixes"] == [X_KEY]
 
 
-def test_t7_without_the_rider_in_round_findings_the_same_claim_is_refused(folded_only):
+def test_t7_without_the_rider_in_round_findings_the_same_claim_is_not_attributed(folded_only):
     state = _round_three()
     state["findings"] = [f for f in state["findings"] if f["title"] == "Null deref"]
     state["auditSpawned"] = {}
     clearing = dict(_ruling(P_KEY), unnamedChange="it also rewords the stale comment",
                     unnamedChangeFixes=[X_KEY])
     outcome = _fold_round_three(state, [clearing])
-    assert outcome["unnamedChange"] == [P_KEY] and outcome["discharged"] == []
+    # #2495: the claim does not verify, so it credits no attribution; with no forbidding decision the
+    # change is a scope-only hold and the fix reads cleared
+    assert outcome["attributedChange"] == [] and outcome["unnamedChange"] == []
+    assert outcome["scopeHeld"] == [P_KEY] and outcome["discharged"] == [P_KEY]

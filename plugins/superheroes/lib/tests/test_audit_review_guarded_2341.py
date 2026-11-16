@@ -269,7 +269,10 @@ def test_t9_the_rendered_fix_auditor_order_names_the_answer_token():
 def test_t10_an_id_refused_later_in_the_same_pass_is_not_listed_as_review_guarded():
     # axis: G7 — the `reviewGuarded` listing only on a final clear
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
-    outcome = _fold([_guarded(unnamedChange="also reworks the retry policy")], _target(RUBRIC_MD))
+    # #2495: only a change the target's own decision forbids is refused after the gate; an unforbidden one
+    # is a scope-only hold that clears (test_audit_strike_kinds_2495.py keeps `reviewGuarded` on it).
+    forbidding = _target(RUBRIC_MD, ownerRuling={"ruling": "guidance", "allowsChange": False})
+    outcome = _fold([_guarded(unnamedChange="also reworks the retry policy")], forbidding)
     entry = _only(outcome)
     assert outcome["unnamedChange"] == ["t0"] and outcome["notDischarged"] == ["t0"]
     assert outcome["discharged"] == [] and outcome["reviewGuarded"] == []
