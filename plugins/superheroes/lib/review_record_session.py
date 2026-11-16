@@ -1748,6 +1748,12 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
             **({"silenceWatchdogEnds": watchdog_ends} if watchdog_ends else {}),
+            # the residuals the session pinned at its start, so the record settles cited decisions on the same read
+            **({"pinnedResiduals": state["calibrationPin"].get("residuals")}
+               if isinstance(state.get("calibrationPin"), dict) else {}),
+            # the risk areas the session pinned at its start, so the record reads each finding's risk on the same read
+            **({"pinnedRiskAreas": state["calibrationPin"].get("riskAreas")}
+               if isinstance(state.get("calibrationPin"), dict) else {}),
             # axis: the account lists the unbound runs exactly when there are any, never an empty list — see bite-proof record i2516_unbound_runs
             **({"unboundRuns": unbound_runs} if unbound_runs else {}),
             "reviewers": reviewers, "sessionCost": session_cost, "makers": makers, "findings": findings, "rawFindingsFiles": raw,

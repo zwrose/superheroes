@@ -222,6 +222,25 @@ action that owns it, leaving the rest of the calibration untouched:
   setup text: with no script in the clone, the setup text withholds its stamp and the setup does
   not finish.
 
+- **Name the trees the duplication lens skips (item 20)** → write only item 20. Show the current
+  value from the view's item 20 row. To set it, save the owner's JSON list of repo-relative globs
+  (Python `fnmatch`, matched against the path from the repository root, `*` also crosses `/`):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item duplicationSkip --cwd . <<'SUPERHEROES_ANSWER'
+  ["snapshots/**", "styles/generated/*.css"]
+  SUPERHEROES_ANSWER
+  ```
+
+  To clear it, store `[]`. Read the result the same way as the `stackingTool` write above: only
+  `written` or `noop` means it was saved, and `refused` with `malformed-value` names a value that is
+  not a list of non-empty, non-absolute strings. Each skipped glob and the number of files it
+  covered appear in every sweep report, and an unreadable value skips nothing and the report says
+  so. This answers a different question from set-up § 4.9: size count exclusions decide what counts
+  toward a pull request's size, while this decides which duplication is not worth reporting, so
+  neither value is copied into the other.
+
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a
   new example of what counts as a material consequence in Canon as a standing ruling, by

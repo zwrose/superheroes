@@ -78,6 +78,12 @@ positively set).
 | `firstBaselineValidateMax` | Non-negative int | `_DEFAULT_FIRST_BASELINE_VALIDATE_MAX` (10) | Caps first-baseline candidates routed through validation (`guardian_sweep.read_config`, used during collect) |
 | `reportCard` | Object `{"actionabilityBar": float, "minAdjudicated": int, "minSweeps": int}`; a **non-object** value degrades the **whole** config. `actionabilityBar` must be a finite number in `(0, 1]` (bool, NaN, and non-numeric values rejected); `minAdjudicated` and `minSweeps` must be positive non-bool ints (`guardian_ledger._resolve_thresholds`). Findings deferred by policy are outside the ratio and outside `minAdjudicated` (see "Deferred by policy is outside the ratio" below) | `guardian_ledger.REPORT_CARD_DEFAULTS` = `{"actionabilityBar": 0.90, "minAdjudicated": 10, "minSweeps": 3}` | Parsed at `guardian_sweep.read_config`; thresholds and benching in `guardian_ledger.report_card` / `_resolve_thresholds` |
 
+**Read from outside `guardian.md`.** The duplication lens also reads configuration item 20,
+`duplicationSkip` (set in configure's set-up § 4.10 or tune § 2): path globs, matched from the
+repository root, for frozen or generated trees. Files matching a glob are left out of both sides
+of every duplication pair, and the report's `Skipped trees` section names each glob and how many
+files it covered. A value that cannot be read skips nothing, and the section says so.
+
 ## Load-bearing behaviours
 
 **Healthy absence.** No fence (or no `guardian.md` layer at all) is not an error — defaults govern

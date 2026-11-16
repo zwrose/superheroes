@@ -118,6 +118,22 @@ def _hash_and_policy(path):
     return digest, _policy_version(text), digests
 
 
+_PINNED_PATH_RE = re.compile(r"""/[^\s'"`()]*/calibration-pin/[^\s'"`()]*""")
+
+
+def _pinned_copies(order_text):
+    """{label: pinned copy path} from the manifest of the first pinned path the order names; {} when none loads."""
+    import calibration_pin  # lazy: calibration_pin imports this module
+    for match in _PINNED_PATH_RE.finditer(order_text):
+        manifest = calibration_pin.manifest_for(match.group(0))
+        if manifest is not None:
+            files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+            pairs = ((LABEL_CORE, "core"), (LABEL_REVIEW_CREW, "layer"), (LABEL_CLAUDE_MD, "claudeMd"))
+            return {label: files[key].get("path") for label, key in pairs
+                    if isinstance(files.get(key), dict) and isinstance(files[key].get("path"), str)}
+    return {}
+
+
 def stamp(repo_root, order_text):
     """Calibration files the order names, with the hash and policy version they have now.
 
@@ -138,8 +154,12 @@ def stamp(repo_root, order_text):
         claude_md = os.path.join(root, "CLAUDE.md") if root else ""
         candidates = [(LABEL_CORE, core_path, True), (LABEL_REVIEW_CREW, layer_path, True),
                       (LABEL_CLAUDE_MD, claude_md if os.path.isfile(claude_md) else None, False)]
+        pinned = _pinned_copies(order_text)
         out = []
         for label, path, own_realpath in candidates:
+            if pinned.get(label):
+                # axis: an order that names a session's pinned copies stamps those copies, under the original file name
+                path, own_realpath = pinned[label], False
             if not isinstance(path, str) or not path:
                 continue
             # axis: a file is named by the order under any spelling of its root, so a symlinked root keeps it
