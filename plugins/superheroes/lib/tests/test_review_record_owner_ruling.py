@@ -21,7 +21,7 @@ X = {"id": "f-1", "title": "Unchecked index", "severity": "Important", "file": "
      "consequence": "the total on the page is wrong", "outcome": "left-for-owner", "reason": "waits for the owner",
      "reviewer": "r1"}
 Y = dict(X, id="f-2", title="Unbounded loop", line=20)
-ADVISOR = {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S"}
+ADVISOR = {"schema": "pr-sheet-input/1", "kind": "pr", "number": 7, "title": "T", "summary": "S", "headNow": {"7": {"commit": HEAD, "ci": "green"}}}
 CARD = {"why": "the check found it open", "context": "the index is read unchecked", "options": "none"}
 
 

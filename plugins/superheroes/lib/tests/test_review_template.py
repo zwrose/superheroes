@@ -4691,3 +4691,101 @@ def test_links_are_built_without_markup_strings():
     assert "innerHTML" not in page and "insertAdjacentHTML" not in page and "outerHTML" not in page
     assert page.count("function linkedElement(") == 1
     assert 'setAttribute("target", "_blank")' in page and 'setAttribute("rel", "noopener noreferrer")' in page
+
+
+# --- issue 2496: a carried sheet shows no note of the carry, and a held sheet shows only its notice ---
+
+_PR_SAMPLE_2496 = json.loads((THEME / "sample-pr-sheet.json").read_text(encoding="utf-8"))
+_CARRIED_2496 = {"sheets": ["a" * 64], "date": "2026-09-30", "moved": "the branch was brought current with main", "whyNotMaterial": "main added only a README line"}
+# Every node the page drew anywhere, by id and by text, and every control a person could press or type in on the cards and the last card.
+_EVERYTHING_2496 = """
+  const nodes = Object.values(elements).flatMap((root) => [...walk(root)]);
+  const hosts = [...walk(elements["sheet-cards"]), ...walk(elements["sheet-final"])];
+  return {
+    ids: nodes.map((node) => node.id).filter((id) => id !== ""),
+    texts: nodes.map((node) => node.textContent).filter((text) => text !== ""),
+    tags: hosts.map((node) => node.tagName),
+    cardIds: hosts.filter((node) => node.tagName === "article").map((node) => node.id),
+    controls: t.controls(),
+    reads: t.reads.map((read) => read.name),
+    finalChildren: elements["sheet-final"].children.length,
+    heldBox: hosts.filter((node) => node.id === "pr-held").map((node) => node.children.map((child) => child.textContent)),
+  };
+"""
+
+
+def _pr_page_2496(sheet, host=None):
+    page = _run_page(_sample_files(sheet), host=host, scenario=_EVERYTHING_2496)
+    assert page["settled"], "the page never settled: %s" % page
+    assert page["errorHidden"] is True, page["errors"]
+    return page
+
+
+def _with_2496(sheet, change):
+    clone = copy.deepcopy(sheet)
+    change(clone)
+    return clone
+
+
+def _carry_2496(clone):
+    clone["prSheet"]["previousCommit"] = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432"
+    clone["prSheet"]["carriedForward"] = dict(_CARRIED_2496)
+
+
+# Bites on: the page drawing a carried-forward box (id pr-carried) or the changed box for a carried sheet, or showing the carry's date, what moved or why it is not material anywhere.
+def test_a_carried_sheet_renders_no_carried_note_and_no_changed_box():
+    # Axis: a sheet republished after a non-material move draws no element with id pr-carried and no carried text, and no pr-changed box either; the verdict and its answers are untouched.
+    sheet = _with_2496(_PR_SAMPLE_2496, _carry_2496)
+    page = _pr_page_2496(sheet)["result"]
+    assert "pr-carried" not in page["ids"] and "pr-changed" not in page["ids"]
+    assert "sheet-verdict" in page["ids"] and page["cardIds"]
+    words = WORDS["pr"]
+    shown = "\n".join(page["texts"])
+    for text in ("Carried forward", "carry forward", _CARRIED_2496["moved"], _CARRIED_2496["whyNotMaterial"], _CARRIED_2496["date"],
+                 words.get("carriedHeading", "\0"), words.get("carried", "\0")):
+        assert text not in shown, text
+    assert words["changed"].split("{previous}")[0] not in shown
+
+
+# Bites on: the changed box dropped along with the carried one, so a material republish (previousCommit alone) says nothing of the move.
+def test_an_uncarried_republish_with_a_previous_commit_still_draws_the_changed_box():
+    sheet = _with_2496(_PR_SAMPLE_2496, lambda clone: clone["prSheet"].__setitem__("previousCommit", "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432"))
+    page = _pr_page_2496(sheet)["result"]
+    assert "pr-changed" in page["ids"] and "pr-carried" not in page["ids"]
+
+
+def _held_2496(sheet, emptied):
+    def change(clone):
+        clone["prSheet"]["held"] = True
+        if emptied:
+            clone["cards"] = []
+    return _with_2496(sheet, change)
+
+
+# Bites on: a held page still drawing a card, a walk, a folded part or the merge verdict (or any control), or drawing no notice, or drawing the notice's words other than the words file's.
+@pytest.mark.parametrize("emptied", [True, False], ids=["emptied", "cards-left-on-the-sheet"])
+@pytest.mark.parametrize("carried", [False, True], ids=["plain", "carried-chain"])
+def test_a_held_sheet_renders_the_held_notice_no_card_and_no_verdict_control(emptied, carried):
+    # Axis: fail-closed edge: a held page shows no card and no verdict control, whatever else the sheet holds (cards, a walk, a carry chain); its one box is the held heading and notice from the words file.
+    sheet = _held_2496(_with_2496(_PR_SAMPLE_2496, _carry_2496) if carried else _PR_SAMPLE_2496, emptied)
+    assert sheet["cards"] == [] or not emptied
+    page = _pr_page_2496(sheet)["result"]
+    words = WORDS["pr"]
+    assert page["heldBox"] == [[words["heldHeading"], words["held"]]]
+    assert page["cardIds"] == [] and page["controls"] == [] and page["finalChildren"] == 0
+    for gone in ("sheet-verdict", "pr-what-changed", "pr-walk", "pr-accepting", "pr-craft", "pr-decided", "pr-review", "pr-carried", "pr-changed"):
+        assert gone not in page["ids"], gone
+    assert "button" not in page["tags"] and "textarea" not in page["tags"]
+
+
+def test_a_held_page_reads_a_verdict_nowhere_and_writes_nothing():
+    # Bites on: a held page restoring a stored Merge onto a verdict control, or saving a document of its own.
+    # Axis: a held page reads no verdict: a Merge stored under the sheet's own digest or its carry chain restores no control, and no document is written.
+    carried = _with_2496(_PR_SAMPLE_2496, _carry_2496)
+    merge = {"id": "a" * 64, "data": {"verdict": "merge", "note": "my verdict note", "sheet": "a" * 64, "covers": []}}
+    host = {"collections": {"answers": [], "verdict": [merge]}}
+    plain = _run_page(_sample_files(carried), host=host, scenario=_EVERYTHING_2496)
+    assert "verdict" in plain["result"]["reads"], "the carried sheet that is not held reads its verdict, so the held page's silence below means something"
+    page = _run_page(_sample_files(_held_2496(carried, emptied=True)), host=host, scenario=_EVERYTHING_2496)
+    assert page["settled"] and page["errorHidden"] is True, page["errors"]
+    assert page["recordedSets"] == [] and page["result"]["controls"] == [] and page["result"]["reads"] == ["answers"]

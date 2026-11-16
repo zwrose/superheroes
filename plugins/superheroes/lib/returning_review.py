@@ -208,6 +208,38 @@ def _merge_reproduces_head(run, base, last_reviewed, head, path):
     return code == 0 and merged == expected
 
 
+# The public names of the helpers ``head_coverage`` shares; the private names keep working.
+production_git = _production_git
+merge_reproduces_head = _merge_reproduces_head
+
+
+def changed_files(run, base, last_reviewed, head, proven=()):
+    """``(files, sources)``: the files whose section's own change differs between ``base...last_reviewed`` and
+    ``base...head`` (a file is not changed for an ``index`` line or a hunk header's line numbers, unless the
+    sections differ and no three-way merge of the file reproduces the head byte for byte), proven copies left
+    out, sorted; ``sources`` is ``{file: {old paths}}`` for every renamed or copied section. None when git cannot
+    produce either diff or a section's header cannot be read. ``run(argv) -> (returncode, stdout_text)`` is the git
+    runner (``production_git(repo_root)``)."""
+    diff_args = list(_DIFF_ARGS)
+    code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
+    code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
+    sources = {}
+    reviewed = _sections_by_file(reviewed_text, sources) if code_a == 0 else None
+    current = _sections_by_file(current_text, sources) if code_b == 0 else None
+    if reviewed is None or current is None:
+        return None
+    proven_files = _proven_files(proven)
+    # Axis: a file is changed when its own change differs, never for an index line or a hunk header's line numbers — see bite-proof record c1l11d_wo_c_fold
+    # axis: stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head byte for byte, so an edit moved between identical blocks is a changed file — see bite-proof record c1l11d_wo_c_fold
+    files = sorted(f for f in set(reviewed) | set(current)
+                   if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, ""))
+                   or (reviewed.get(f, "") != current.get(f, "")
+                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
+    # Axis: a proven copy is never a changed file, so it is neither read, counted nor matched against a risk area.
+    files = [f for f in files if f not in proven_files]
+    return files, sources
+
+
 def _covers_final_commit(earlier):
     reviewers = earlier.get("reviewers")
     if not isinstance(reviewers, list):
@@ -366,22 +398,11 @@ def _decide(result, repo_root, base, head, earlier, proven, git, ci_state=None):
     if not _is_sha(base):
         return _full(result, WHY_DIFF_UNREADABLE, "the base is not a full commit sha")
     diff_args = list(_DIFF_ARGS)
-    code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
-    code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
-    sources = {}
-    reviewed = _sections_by_file(reviewed_text, sources) if code_a == 0 else None
-    current = _sections_by_file(current_text, sources) if code_b == 0 else None
-    if reviewed is None or current is None:
+    changed = changed_files(run, base, last_reviewed, head, proven)
+    if changed is None:
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff of the earlier review or of the head against the base")
+    files, sources = changed
     proven_files = _proven_files(proven)
-    # Axis: a file is changed when its own change differs, never for an index line or a hunk header's line numbers — see bite-proof record c1l11d_wo_c_fold
-    # axis: stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head byte for byte, so an edit moved between identical blocks is a changed file — see bite-proof record c1l11d_wo_c_fold
-    files = sorted(f for f in set(reviewed) | set(current)
-                   if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, ""))
-                   or (reviewed.get(f, "") != current.get(f, "")
-                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
-    # Axis: a proven copy is never a changed file, so it is neither read, counted nor matched against a risk area.
-    files = [f for f in files if f not in proven_files]
     if ci_pending:
         settled, text = _ci_settled(ci_state, last_reviewed, head, files)
         if not settled:

@@ -36,7 +36,9 @@ Refresh the collector preamble per `## The collector preamble — canonical snip
 
 Read the project's revisit-trigger registry per `## The revisit-trigger registry` before proposing a decline, so a decline already ruled on is cited rather than re-argued.
 
-Resolve the collector's issue pointer from the advisor's durable memory (showrunner duty 4); when the pointer cannot be resolved, ask the owner for the issue number and never open a second collector; record the pointer once found.
+Resolve the collector's number from calibration first (`project_config.py advisor-issues`) and from the advisor's durable memory second (showrunner duty 4); an `unreadable` item 21 is named in the report; when neither gives a number, ask the owner for the issue number and never open a second collector; record the pointer once found.
+
+At the start of the walk, read every declared inbox as `skills/showrunner/reference/owner-decisions.md` § Declared inboxes says, and triage what is new before the filter.
 
 Read the collector before searching parks — it is authoritative and may already subsume an in-session duplicate.
 

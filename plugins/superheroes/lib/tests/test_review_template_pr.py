@@ -111,9 +111,7 @@ def _expected_what_changed(sheet):
 def _expected_order(sheet):
     prs = sheet["prSheet"]
     expected = ["pr-what-changed"]
-    if "carriedForward" in prs:
-        expected.append("pr-carried")
-    elif "previousCommit" in prs:
+    if "carriedForward" not in prs and "previousCommit" in prs:
         expected.append("pr-changed")
     if "walk" in prs:
         expected.append("pr-walk")
@@ -168,7 +166,7 @@ def _canon_emptied(sheet):
     return _with(_emptied(sheet, listed=False), mutate)
 
 
-# Bites on: the five parts of a pr sheet or a stack sheet drawn in any other order (What changed, the walk, What you're accepting, the folded parts with the stack's PR list, the merge verdict), a part with nothing in it kept, or the box that says the PR moved drawn anywhere but directly under What changed.
+# Bites on: the five parts of a pr sheet or a stack sheet drawn in any other order (What changed, the walk, What you're accepting, the folded parts with the stack's PR list, the merge verdict), a part with nothing in it kept, or the box that says the PR moved drawn anywhere but directly under What changed, or a box (carried or changed) drawn for a carried sheet.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
 @pytest.mark.parametrize("variant", ["as-is", "moved", "carried", "emptied"])
 def test_parts_are_drawn_in_order(kind, variant):
@@ -176,7 +174,7 @@ def test_parts_are_drawn_in_order(kind, variant):
     page = _page(sheet, "return order();")
     assert page["result"] == _expected_order(sheet)
     if variant == "carried":
-        assert page["result"][:3] == ["pr-what-changed", "pr-carried", "pr-walk"] and "pr-changed" not in page["result"]
+        assert page["result"][:2] == ["pr-what-changed", "pr-walk"] and "pr-changed" not in page["result"] and "pr-carried" not in page["result"]
     if variant == "as-is":
         folded = ["pr-craft", "pr-decided", "pr-review"] + (["pr-prs"] if kind == "stack" else [])
         cards = ["card"] * (3 if kind == "pr" else 1)
@@ -263,18 +261,23 @@ def test_this_pr_changed_shows_only_with_a_previous_commit():
     assert page["result"]["className"] == "sh-box"
 
 
-# Bites on: the carried-forward box missing when carriedForward is present, drawn when it is absent, the changed box still drawn beside it, or its words not the carried words filled with the date, the first 7 characters of previousCommit, what moved and why.
+# Bites on: a carried sheet (carriedForward present) drawing a carried-forward box (pr-carried), drawing the changed box (pr-changed) in its place, or showing the carried words, the carry's date, what moved or why anywhere on the page; or an uncarried sheet with previousCommit losing its changed box.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
-def test_the_carried_box_replaces_the_changed_box_only_with_a_carry(kind):
+def test_a_carried_sheet_draws_no_carried_box_and_no_changed_box(kind):
+    # Axis: carriedForward present: neither pr-carried nor pr-changed is a part of the page and none of the carried words (heading, text, the carry's date, moved, whyNotMaterial) is shown; carriedForward absent with previousCommit: pr-changed is drawn and pr-carried is not.
     without = _page(_with_previous(SAMPLES[kind]), 'return order();')
-    assert "pr-carried" not in without["result"] and "pr-changed" in without["result"]
+    assert "pr-changed" in without["result"] and "pr-carried" not in without["result"]
     sheet = _carried_from(SAMPLES[kind])
-    page = _page(sheet, 'return { order: order(), box: shape(part("pr-carried")), className: part("pr-carried").className, noChanged: part("pr-changed") === undefined };')
-    previous = sheet["prSheet"]["previousCommit"]
-    assert page["result"]["box"] == [PW["carriedHeading"], _fill(PW["carried"], date=CARRY["date"], previous=previous[:7], moved=CARRY["moved"], why=CARRY["whyNotMaterial"])]
-    assert previous[:7] in page["result"]["box"][1] and previous not in page["result"]["box"][1] and "{" not in page["result"]["box"][1]
-    assert page["result"]["className"] == "sh-box" and page["result"]["noChanged"] is True
-    assert page["result"]["order"][:2] == ["pr-what-changed", "pr-carried"]
+    page = _page(sheet, 'return { order: order(), carried: part("pr-carried") === undefined, changed: part("pr-changed") === undefined, texts: t.everyText() };')
+    assert page["result"]["carried"] is True and page["result"]["changed"] is True
+    assert "pr-carried" not in page["result"]["order"] and "pr-changed" not in page["result"]["order"]
+    assert page["result"]["order"][:2] == ["pr-what-changed", "pr-walk"]
+    shown = "\n".join(page["result"]["texts"])
+    assert PW["whatChangedHeading"] in shown, "the page drew its parts, so the absences below mean something"
+    fragments = [piece for piece in re.split(r"\{\w+\}", PW["carried"]) if len(piece) >= 10]
+    assert len(fragments) >= 2
+    for text in (PW["carriedHeading"], *fragments, CARRY["date"], CARRY["moved"], CARRY["whyNotMaterial"], PW["changedHeading"], PW["changed"].split("{previous}")[0]):
+        assert text not in shown, text
 
 
 # Bites on: the walk's stops out of order, a stop's PR not named on a stack (or named on a pr sheet), or a stop without its own answer controls.
@@ -685,7 +688,7 @@ def test_a_wording_file_missing_a_pr_word_shows_the_error_box():
 def test_every_new_word_comes_from_the_words_file():
     new_keys = [
         "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark", "caughtHeading", "roundsLine", "ciLine",
-        "laneLine", "describesCommit", "changedHeading", "changed", "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading",
+        "laneLine", "describesCommit", "changedHeading", "changed", "heldHeading", "held", "walkHeading", "walkStopPr", "acceptingHeading",
         "craftHeading", "decidedHeading", "reviewHeading", "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel",
         "notYetLabel", "verdictCaption", "acceptedCount", "nothingToAcceptCount", "nothingToAccept", "acceptingUnchecked", "acceptingUncheckedCount",
         "acceptingCanon", "acceptingCanonCount", "historyCap", "mineLockedOne", "mineLockedMany", "decidedForYouHeading", "decidedForYouIntro", "decidedGround",
@@ -713,6 +716,7 @@ def test_every_new_word_comes_from_the_words_file():
     collect(_canon_emptied(PR_SAMPLE))
     collect(PR_SAMPLE)
     collect(_carried_from(PR_SAMPLE))
+    collect(_with(PR_SAMPLE, lambda clone: (clone["prSheet"].__setitem__("held", True), clone.__setitem__("cards", []))))
     collect(_with_decided(PR_SAMPLE, DECIDED_1, DECIDED_2), DECIDED_JS + """
       t.click(mineButton(D1));
       await t.tick();
