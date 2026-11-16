@@ -435,9 +435,9 @@ def test_a_marker_lane_takes_the_cleaned_reason_from_the_issue_call():
 # --- the record-writer half ---
 
 def test_each_finding_carries_the_sheet_part_its_outcome_lands_in():
-    # axis: sheetPart; a part restated here, or missing on an undecided finding
+    # axis: sheetPart; a part restated here, or missing on an undecided finding (an Important: a no-outcome Minor or Nit is listed or a card since #2493)
     found = [finding(f"o-{n}", title=f"t{n}", outcome=o, reason="r") for n, o in enumerate(rfs.OUTCOMES)]
-    found.append(finding("o-none", title="undecided", outcome=None))
+    found.append(finding("o-none", title="undecided", outcome=None, severity="Important"))
     rec = build(account(findings=found), Fake(sources={}))
     assert [f["sheetPart"] for f in rec["findings"][:5]] == [rfs.OUTCOME_SHEET_PART[o] for o in rfs.OUTCOMES]
     assert rec["findings"][5]["sheetPart"] is None and rec["findings"][5]["outcome"] is None
@@ -620,8 +620,9 @@ def test_the_summary_says_how_many_rounds_ran_against_which_cap(rounds, line):
     # axis: the cap line; the cap kind or the stop left unsaid
     rec = build(account(rounds=rounds), Fake())
     lines = rr.render(rec).split("\n")
-    ci = next(i for i, l in enumerate(lines) if l.startswith("CI on the final commit"))
-    assert lines[ci + 1] == line
+    assert not any(l.startswith("CI on the final commit") for l in lines)
+    makers = next(i for i, l in enumerate(lines) if l.startswith("Makers: "))
+    assert lines[makers + 1] == line
     assert rec["rounds"]["capKind"] == rounds.get("capKind", "rounds")
 
 

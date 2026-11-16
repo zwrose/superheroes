@@ -12,7 +12,6 @@
   "record": {
     "carriedRechecks": [],
     "checked": [
-      "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
@@ -45,6 +44,7 @@
         "file": "a.py",
         "findingKey": "rr1:1b450b736ba4a053a9a8a6d1a4511d8e",
         "id": "code-null-guard",
+        "inRiskArea": null,
         "line": 3,
         "outcome": "fixed",
         "reason": "fixed in 1a2b3c4",
@@ -77,6 +77,7 @@
       ]
     },
     "leftForOwner": [],
+    "listedForMerge": [],
     "makers": [
       {
         "family": "anthropic"

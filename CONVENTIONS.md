@@ -771,6 +771,12 @@ so a stalled external CLI is killed well before the ceiling; the ceiling is neve
 disabled, and these limits are not owner-configurable through `enginePreferences`
 (that channel was retired as dead surface).
 
+Panel independence is that every seat sits outside every maker's family. The critical seats'
+two-family spread (`critical-diversity`) is a composition preference: a seat map whose seats are all
+outside the makers' families carries no `critical-diversity` violation or degradation and certifies
+in its normal shape. A seat from a maker's family, an unknown author family, malformed maker
+evidence, an unresolvable seat family or no filled critical seat is judged as before.
+
 **Seat-map preflight economics** (#610, #795): the composition preflight that decides which
 **(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
 runs only on panel-dispatching entries; a compose within the TTL rides a **short-TTL

@@ -3884,6 +3884,234 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     assert SM.classify_violations(seats, model_registry.family_for("implementer", "claude"))["excusedByPin"]
 
 
+def _legacy_pinned_single_vendor_map(moved_critical_seat=None):
+    """A map stored before #2530: every critical seat pinned to codex, the author's family (anthropic)
+    seated nowhere, and a `critical-diversity` violation and degradation submitted with it. Under the
+    old rule `classify_violations` returned that violation under `excusedByPin`. With
+    ``moved_critical_seat`` set, that one critical seat is seated in the author's family (still pinned)."""
+    SM = _load("seat_map")
+    live = ["codex"]
+    pins = {seat: {"vendor": "codex"} for seat in sorted(SM.CRITICAL_SEATS)}
+    built = SM.build(SM.PANEL_ROSTER, live, "anthropic", 0, pins=pins)
+    stored = SM.to_receipt(built, "anthropic")
+    stored.update(_nonpanel_cell_proof(live))
+    stored["seats"] = dict(stored["seats"])
+    for seat in SM.CRITICAL_SEATS:
+        assert stored["seats"][seat]["source"] == "pinned"
+        assert stored["seats"][seat]["vendor"] == "codex"
+    if moved_critical_seat is not None:
+        model, effort = model_registry.matrix_config("reviewer-deep", "claude")
+        stored["seats"][moved_critical_seat] = {
+            "vendor": "claude", "model": model, "effort": effort, "tier": "reviewer-deep",
+            "family": "anthropic", "source": "pinned",
+        }
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"] + [
+        {"constraint": "critical-diversity", "reason": "relaxed critical-diversity — no assignment spanned ≥2 families"},
+    ]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _certify_stored_map(stored):
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    _set_seat_map(state, stored)
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    return state, RD.build_receipt(state)
+
+
+def test_a_legacy_single_vendor_pinned_panel_outside_the_makers_certifies_full_panel_confirmed():
+    # axis: a legacy stored critical-diversity record on a panel outside every maker's family no longer
+    # drives seat-pin — see bite-proof record wo_a_2530_single_vendor_panel
+    SM = _load("seat_map")
+    stored = _legacy_pinned_single_vendor_map()
+    driver_family = model_registry.family_for("implementer", "claude")
+    assert driver_family == "anthropic"
+    assert SM.panel_outside_makers(stored, driver_family)
+    assert SM.classify_violations(stored, driver_family) == {
+        "unexcused": [], "excusedByPin": [], "excusedByLiveness": [],
+    }
+    state, receipt = _certify_stored_map(stored)
+    assert state["certification"]["shape"] == "full-panel-confirmed"
+    assert "seat-pin" not in state["certification"]["shapeDrivers"]
+    assert not [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
+    emitted = receipt["seatMap"]
+    assert not any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert not any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
+def _certify_session(maps, former_fixer_families=None):
+    """Certify a session whose seat-map receipts are ``maps`` in order (round 1, 2, ...), optionally with
+    ``state["formerFixerFamilies"]`` — the driver's whole maker set, not one map's."""
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMapReceipts"] = [{"round": str(i + 1), "map": dict(m)} for i, m in enumerate(maps)]
+    if former_fixer_families is not None:
+        state["formerFixerFamilies"] = former_fixer_families
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    return state, RD.build_receipt(state)
+
+
+def _earlier_receipt_naming_openai():
+    """A clean round-1 map whose seats are all cursor (family xai) and which names openai as a maker, so
+    the session's maker set holds openai while the latest, all-codex map leaves it out."""
+    SM = _load("seat_map")
+    earlier = SM.to_receipt(SM.build(SM.PANEL_ROSTER, ["cursor"], "anthropic", 0), "anthropic")
+    earlier.update(_nonpanel_cell_proof(["cursor"]))
+    earlier["makerFamilies"] = ["anthropic", "openai"]
+    return earlier
+
+
+def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
+    # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
+    # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+    SM = _load("seat_map")
+    latest = _legacy_pinned_single_vendor_map()
+    earlier = _earlier_receipt_naming_openai()
+    state, receipt = _certify_session([earlier, latest])
+    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
+    # seat-pin is its own shape driver; the `independence` field reads a different channel (_degraded)
+    assert state["certification"]["independence"] == "independent"
+    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    assert any(v.get("constraint") == "critical-diversity" for v in receipt["seatMap"].get("violations", []))
+    # the latest map alone reads outside the makers (what 12a3c1b0 judged); with the session's makers it does not
+    assert SM.panel_outside_makers(latest, "anthropic")
+    assert not SM.panel_outside_makers(latest, "anthropic", extra_makers={"openai"})
+
+
+def test_a_former_fixer_family_is_a_maker_for_the_exemption():
+    # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+    stored = _legacy_pinned_single_vendor_map()
+    state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
+    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
+    assert state["certification"]["independence"] == "independent"
+    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    # the emitted seat map keeps the critical-diversity row and violation: the panel is in a maker's family
+    emitted = receipt["seatMap"]
+    assert any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
+def _unpinned_single_vendor_map():
+    """The all-codex map of `_legacy_pinned_single_vendor_map` with no seat pinned: built from the same
+    live vendor and author with no pins, so the builder seats every seat (`source` is never `pinned`),
+    with the same stored `critical-diversity` violation and degradation."""
+    SM = _load("seat_map")
+    live = ["codex"]
+    built = SM.build(SM.PANEL_ROSTER, live, "anthropic", 0)
+    stored = SM.to_receipt(built, "anthropic")
+    stored.update(_nonpanel_cell_proof(live))
+    stored["seats"] = dict(stored["seats"])
+    for seat, cfg in stored["seats"].items():
+        assert cfg["source"] != "pinned"
+    for seat in SM.CRITICAL_SEATS:
+        assert stored["seats"][seat]["vendor"] == "codex"
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"] + [
+        {"constraint": "critical-diversity", "reason": "relaxed critical-diversity — no assignment spanned ≥2 families"},
+    ]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _single_vendor_map(pinned, recorded):
+    """The all-codex map (author anthropic), its seats pinned or not, its own `violations` recording
+    `critical-diversity` or not (the degradation row stays as in the fixtures above)."""
+    stored = _legacy_pinned_single_vendor_map() if pinned else _unpinned_single_vendor_map()
+    # live alternatives exist (claude, codex, cursor, proven by the synthesized cell source), so the
+    # excusal arithmetic has a live family outside the makers to count; the seats stay all codex
+    stored["liveVendors"] = ["claude", "codex", "cursor"]
+    stored["liveCellsSource"] = "synthesized"
+    stored["livenessPinScoped"] = False
+    if not recorded:
+        stored["violations"] = []
+    return stored
+
+
+def _single_vendor_shape(shape, pinned, recorded):
+    """The certified shape of vet 952's shape ``a`` (a later receipt leaves out an earlier receipt's maker)
+    or ``b`` (``formerFixerFamilies`` holds the maker) over `_single_vendor_map`."""
+    latest = _single_vendor_map(pinned, recorded)
+    if shape == "a":
+        state, _ = _certify_session([_earlier_receipt_naming_openai(), latest])
+    else:
+        assert shape == "b"
+        state, _ = _certify_session([latest], former_fixer_families=["openai"])
+    return state["certification"]["shape"]
+
+
+def test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats():
+    # axis: the liveness excusal never reads the session's makers out of the live alternatives, so a
+    # recorded critical-diversity on unpinned seats is no cleaner than base — see bite-proof record
+    # wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape("a", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+
+
+def test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats():
+    # axis: same as above, for the maker held in formerFixerFamilies — see bite-proof record
+    # wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape("b", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
+
+
+@pytest.mark.parametrize(
+    "shape, pinned, recorded, base_shape",
+    [
+        ("a", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("a", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("a", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("a", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("b", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+        ("b", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
+    ],
+)
+def test_no_variant_of_the_two_shapes_reads_cleaner_than_base(shape, pinned, recorded, base_shape):
+    # axis: with live alternatives proven, no variant of shape a or b (pinned or not, recorded or not)
+    # certifies cleaner than the base commit does — see bite-proof record wo_a_2530_single_vendor_panel (J1)
+    assert _single_vendor_shape(shape, pinned, recorded) == base_shape
+
+
+def test_a_malformed_former_fixer_families_names_no_extra_maker():
+    # E5: absent, a scalar, or a list with a non-string / empty member adds no maker — the healthy shape holds
+    stored = _legacy_pinned_single_vendor_map()
+    for bad in (None, "openai", 7, {"openai": True}, [None, 5, ""]):
+        state, _ = _certify_session([stored], former_fixer_families=bad)
+        assert state["certification"]["shape"] == "full-panel-confirmed", bad
+
+
+def test_a_healthy_all_codex_panel_with_no_other_maker_stays_full_panel_confirmed():
+    # E3: no other maker in any receipt or in formerFixerFamilies — behaviour exactly as at 12a3c1b0
+    stored = _legacy_pinned_single_vendor_map()
+    for maps, former in (([stored], None), ([stored], []), ([dict(stored), dict(stored)], None)):
+        state, receipt = _certify_session(maps, former_fixer_families=former)
+        assert state["certification"]["shape"] == "full-panel-confirmed", (len(maps), former)
+        assert state["certification"]["independence"] == "independent"
+        assert state["certification"]["shapeDrivers"] == []
+        assert not [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
+
+
+def test_a_legacy_pinned_panel_with_a_critical_seat_in_the_authors_family_keeps_todays_shape():
+    # the break-it twin: one critical seat moved to the author's family (anthropic, still pinned) is not
+    # outside the makers, so the record is classified exactly as before #2530. Shape measured on base.
+    SM = _load("seat_map")
+    stored = _legacy_pinned_single_vendor_map(moved_critical_seat="security-reviewer")
+    assert not SM.panel_outside_makers(stored, "anthropic")
+    state, receipt = _certify_stored_map(stored)
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert state["certification"]["shapeDrivers"] == ["seat-map-violation"]
+    assert any(
+        "critical-diversity (an alternative was available)" in line and "maker-family (seat security-reviewer)" in line
+        for line in receipt["degraded"]
+    )
+    emitted = receipt["seatMap"]
+    assert any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
+    assert any(d.get("constraint") == "critical-diversity" for d in emitted.get("degradations", []))
+
+
 def test_seat_map_unproven_liveness_shape_driver():
     SM = _load("seat_map")
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -4529,7 +4757,16 @@ def test_assertable_seat_map_allows_excused_derived_violations():
     SM = _load("seat_map")
     m = _assertable_seat_map(["claude", "codex"], "codex")
     assert SM.unexcused_violations(m, "openai") == []
-    assert SM.derived_violations(m, "openai") != []
+    # #2530: this panel (all claude, author openai) is outside every maker's family, so it carries no
+    # critical-diversity record at all. The excused derived violation this test pins needs a panel that
+    # is not: the same map with its one shared family (anthropic) also named a maker, the record stored.
+    assert SM.derived_violations(m, "openai") == []
+    held = dict(
+        m, makerFamilies=sorted(set(m["makerFamilies"]) | {"anthropic"}),
+        violations=[{"constraint": "critical-diversity"}],
+    )
+    assert SM.unexcused_violations(held, "openai") == []
+    assert SM.derived_violations(held, "openai") != []
 
 
 def _all_run_status(dims=None):
