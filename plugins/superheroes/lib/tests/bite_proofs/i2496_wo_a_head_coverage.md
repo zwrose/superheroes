@@ -287,3 +287,48 @@ FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_an_excepti
 ....................................................                     [100%]
 196 passed in 19.60s
 ```
+
+---
+
+## Added at review round 1: E-mode and E-lex (2026-11-16, typed and run by the build session)
+
+Two guards the round-1 review found missing, each added at the loop's apply-fixes step in commit b9ff148f and proved in a
+detached probe worktree at that commit by one targeted Edit and its inverse. Captures keep only the assertion lines and the
+summary line (the full tracebacks are long and repeat the same result dict); nothing is redacted.
+
+### E-mode — a file whose mode changed is never reconstructed
+
+**guard:** `head_coverage.py:351`, `same_mode = modes[path][0] is not None and modes[path][0] == modes[path][1]`.
+
+**neutralization:** `same_mode = True`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest "plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py::test_an_executable_bit_change_after_review_reads_needs_review" -q -p no:cacheprovider`
+```
+E       assert 'proven' == 'needs-review'
+E       assert 'proven' == 'needs-review'
+2 failed in 0.51s
+```
+
+**restore:** the inverse Edit.
+
+### E-lex — a comment-looking line counts only where the tokenizer reads a comment
+
+**guard:** `head_coverage.py:254`, `return _lexically_insignificant(run, x, head, section)`.
+
+**neutralization:** `return True`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k inside_a_python_string -q -p no:cacheprovider`
+```
+E       assert ('judgement' == 'needs-review'
+E       assert 'judgement' == 'needs-review'
+2 failed, 5 deselected in 2.26s
+```
+
+**restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing after it.
+
+**green (both restored):** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -q -p no:cacheprovider`
+```
+7 passed in 3.00s
+```
+
+**Not neutralized here:** the copy-mode condition (`wanted` in `_check`, pinned by `test_a_copy_proof_for_a_file_whose_mode_changed_proves_nothing`), and `_changed_lines`' hunk walk (pinned by the string and comment tests).
