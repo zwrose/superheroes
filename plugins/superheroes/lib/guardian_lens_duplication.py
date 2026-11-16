@@ -16,6 +16,7 @@ lens read a JSON object off stdout: the injected seam's conformance payloads arr
 (lens-contract.md); a real jscpd prints none, so a missing file degrades.
 """
 import difflib
+import fnmatch
 import json
 import os
 import shutil
@@ -96,6 +97,57 @@ def _strip_format_suffix(name):
 def _pair_id(path_a, path_b):
     a, b = sorted([path_a, path_b])
     return "duplication:%s|%s" % (a, b)
+
+
+_PAIR_PREFIX = "duplication:"
+
+
+def _root_relative(cwd, rel_cwd, repo_root=None):
+    """A cwd-relative path as a ``/``-separated path relative to the repository root.
+
+    With no ``repo_root`` the cwd-relative path itself is returned (``/``-normalized).
+    """
+    if not repo_root:
+        return rel_cwd.replace(os.sep, "/")
+    try:
+        rel = os.path.relpath(
+            os.path.join(cwd, rel_cwd), os.path.realpath(repo_root))
+    except ValueError:
+        return rel_cwd.replace(os.sep, "/")
+    return rel.replace(os.sep, "/")
+
+
+def skip_matches(rel_path_from_root, globs):
+    """The first glob in ``globs`` matching the root-relative path, or None.
+
+    Globs are ``fnmatch.fnmatchcase`` patterns over the ``/``-normalized path (``*``
+    crosses ``/``), the same matcher family as ``sizeExclude``.
+    """
+    path = str(rel_path_from_root).replace(os.sep, "/")
+    for glob in globs or ():
+        if isinstance(glob, str) and fnmatch.fnmatchcase(path, glob):
+            return glob
+    return None
+
+
+def pair_touches_skip(pid, globs, *, cwd, repo_root=None):
+    """True when either side of duplication pair id ``pid`` matches a skip glob.
+
+    ``pid`` is ``duplication:<a>|<b>`` with cwd-relative paths that may themselves
+    contain ``|``, so every ``|`` split is tried. Not a duplication id -> False.
+    """
+    if not isinstance(pid, str) or not pid.startswith(_PAIR_PREFIX) or not globs:
+        return False
+    rest = pid[len(_PAIR_PREFIX):]
+    for i, ch in enumerate(rest):
+        if ch != "|":
+            continue
+        for side in (rest[:i], rest[i + 1:]):
+            if not side:
+                continue
+            if skip_matches(_root_relative(cwd, side, repo_root), globs) is not None:
+                return True
+    return False
 
 
 def _repo_rel(cwd, path):
@@ -787,6 +839,49 @@ class DuplicationLens:
                     "zero tracked files (git ls-files) — no measurable surface"),
             }
 
+        # Calibrated skip trees (configuration item 20): files matching a glob leave BOTH
+        # sides of every pair. They are dropped from the census itself, before the operand
+        # list and before the census-membership check, so a skipped file that jscpd reports
+        # anyway degrades the lens instead of passing.
+        skip = ctx.get("duplicationSkip")
+        skip_globs = []
+        if isinstance(skip, dict):
+            raw_globs = skip.get("globs")
+            if (isinstance(raw_globs, list) and raw_globs
+                    and all(isinstance(g, str) for g in raw_globs)):
+                skip_globs = list(raw_globs)
+        skipped_trees = {"globs": [], "files": 0}
+        if skip_globs:
+            skip_root = skip.get("repoRoot")
+            counts = {g: 0 for g in skip_globs}
+            kept = set()
+            skipped_total = 0
+            for rel in tracked:
+                # bite-proof axis: globs match the repository-root-relative path.
+                hit = skip_matches(_root_relative(cwd, rel, skip_root), skip_globs)
+                if hit is None:
+                    kept.add(rel)
+                else:
+                    counts[hit] += 1
+                    skipped_total += 1
+            skipped_trees = {
+                "globs": [{"glob": g, "files": counts[g]} for g in skip_globs],
+                "files": skipped_total,
+            }
+            # bite-proof axis: a skipped file reaches neither side of a pair.
+            tracked = kept
+            # bite-proof axis: skipping everything is not-collected, never an empty
+            # collected digest and never an empty jscpd path list.
+            if not tracked:
+                return {
+                    "candidates": [],
+                    "digest": None,
+                    "skippedTrees": skipped_trees,
+                    **gc.not_collected(
+                        "every tracked file matched a duplication skip glob "
+                        "(%d files skipped)" % skipped_total),
+                }
+
         operands = sorted(tracked)
 
         # jscpd's json reporter writes a FILE into a throwaway temp dir OUTSIDE the repo,
@@ -807,6 +902,7 @@ class DuplicationLens:
                 return {
                     "candidates": [],
                     "digest": None,
+                    "skippedTrees": skipped_trees,
                     **gc.not_collected(
                         "jscpd temp dir %s resolves inside repo %s — refusing to write "
                         "scanner input under the scan surface" % (tmp_real, repo_real)),
@@ -817,6 +913,7 @@ class DuplicationLens:
                 return {
                     "candidates": [],
                     "digest": None,
+                    "skippedTrees": skipped_trees,
                     **gc.not_collected(
                         "tracked-file operand escapes repo: %s" % exc),
                 }
@@ -844,6 +941,7 @@ class DuplicationLens:
             return {
                 "candidates": [],
                 "digest": None,
+                "skippedTrees": skipped_trees,
                 **gc.not_collected("jscpd reporter setup failed: %s" % exc),
             }
         finally:
@@ -851,10 +949,11 @@ class DuplicationLens:
                 shutil.rmtree(tmp, ignore_errors=True)
 
         if not res["ok"]:
-            return {"candidates": [], "digest": None, **gc.not_collected(res["reason"])}
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
+                    **gc.not_collected(res["reason"])}
 
         if report_file_reason is not None:
-            return {"candidates": [], "digest": None,
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
                     **gc.not_collected(report_file_reason)}
         if report_text is not None:
             report, decode_reason = _decode_report(report_text)
@@ -862,12 +961,14 @@ class DuplicationLens:
             # No report file: only the injected seam carries the report on stdout.
             report, decode_reason = _decode_report(res.get("stdout") or "", no_file=True)
         if report is None:
-            return {"candidates": [], "digest": None, **gc.not_collected(decode_reason)}
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
+                    **gc.not_collected(decode_reason)}
 
         try:
             _validate_report(report)
         except _ReportContractError as exc:
-            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
+                    **gc.not_collected(str(exc))}
 
         # jscpd's per-(file, embedded-language) source-unit count — not a file count; telemetry only.
         scanned = report["statistics"]["total"]["sources"]
@@ -883,6 +984,7 @@ class DuplicationLens:
             return {
                 "candidates": [],
                 "digest": None,
+                "skippedTrees": skipped_trees,
                 **gc.not_collected(
                     "jscpd scanned 0 of %d tracked files — file list was not consumed "
                     "or no tracked file is a format jscpd recognizes" % tracked_count),
@@ -893,11 +995,13 @@ class DuplicationLens:
         try:
             escaped = _first_untracked_reported_path(report, cwd, tracked)
         except _ReportContractError as exc:
-            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
+                    **gc.not_collected(str(exc))}
         if escaped is not None:
             return {
                 "candidates": [],
                 "digest": None,
+                "skippedTrees": skipped_trees,
                 **gc.not_collected(
                     "jscpd reported a path outside the tracked-file census (%s) — "
                     "the census file list was not honored" % escaped),
@@ -910,6 +1014,7 @@ class DuplicationLens:
             return {
                 "candidates": [],
                 "digest": None,
+                "skippedTrees": skipped_trees,
                 **gc.not_collected(
                     "jscpd reported duplicates but normalization yielded zero candidates"),
             }
@@ -918,7 +1023,8 @@ class DuplicationLens:
             pair_jscpd, self_clones_deferred, jscpd_clones_reported = _dedupe_pairs(
                 report, cwd)
         except _ReportContractError as exc:
-            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+            return {"candidates": [], "digest": None, "skippedTrees": skipped_trees,
+                    **gc.not_collected(str(exc))}
 
         plan = _plan_measurement(pair_jscpd, red_threshold)
 
@@ -953,6 +1059,8 @@ class DuplicationLens:
             # Recorded for telemetry only — never compared against a prior digest; a future
             # under-scan guard needs this history, but no code may branch on it.
             "scanRatio": scan_ratio,
+            # The skip globs applied to this census (empty when none are calibrated).
+            "skipGlobs": sorted(skip_globs),
         }
         dup_pct = _reported_duplication_percent(report)
         if dup_pct is not None:
@@ -996,6 +1104,7 @@ class DuplicationLens:
             "candidates": capped,
             "digest": digest,
             "diagnostics": diagnostics,
+            "skippedTrees": skipped_trees,
             **gc.collected(),
         }
 
