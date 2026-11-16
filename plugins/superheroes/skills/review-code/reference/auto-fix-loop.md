@@ -291,7 +291,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`investigated`** is attached only when a claimed path survives the investigation floor.
 > **Recognition is not gradeability** — widening what the transport can read changes nothing about
 > what it will certify: the investigation floor still forfeits an empty payload with no surviving
-> `investigated` path for **every** kind including `grouping`, and an `--expected-result-kind`
+> `investigated` path for **every** kind including `grouping` — with one exception: a run opened with
+> `dispatch-review --nothing-to-group` grades an empty `grouping` from an engaged seat (the runner
+> observed at least one tool call) ok — and an `--expected-result-kind`
 > mismatch still forfeits. Every other top-level key the
 > seat emits is dropped. Callers may pin the expected kind mechanically via
 > `dispatch-review --expected-result-kind {findings,verdicts,grouping,ruling}` (library:

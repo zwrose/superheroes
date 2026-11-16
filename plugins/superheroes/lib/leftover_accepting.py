@@ -75,8 +75,8 @@ def _leftovers(record):
         raise Unreadable("the record's leftForOwner or findings list is missing or malformed")
     out = []
     for name in left:
-        held = [f for f in findings if f.get("outcome") == review_record._LEFT_FOR_OWNER
-                and review_record._name(f) == name and not review_record.repeat_held_elsewhere(f, findings)]
+        # axis: a leftForOwner entry is matched to a finding that waits for the owner, by the record's one predicate; a listed finding is never asked for, a no-outcome risk-area Minor is — see bite-proof record i2493_wo1_record (E-accept)
+        held = [f for f in findings if review_record.waits_for_owner(f, findings) and review_record._name(f) == name]
         # axis: a leftForOwner entry that is not a non-empty string, or names no left-for-owner finding, is unreadable
         if not (isinstance(name, str) and name.strip() and held):
             raise Unreadable("leftForOwner entry %r names no finding left for the owner" % (name,))

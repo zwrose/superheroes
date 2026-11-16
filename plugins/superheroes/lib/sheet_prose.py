@@ -581,6 +581,7 @@ def _pr_body(sheet):
                for found in prsheet["prs"]] if stack else []
     for heading, entries in ((PR["craftHeading"], [_pr_entry(found, stack) for found in prsheet["craft"]]),
                              (PR["decidedHeading"], [_pr_entry(found, stack) for found in prsheet["alreadyDecided"]]),
+                             (PR["listedHeading"], [_pr_entry(found, stack) for found in prsheet.get("listed", [])]),
                              (PR["reviewHeading"], [_text(line) for line in prsheet["history"]]),
                              (PR["prsHeading"], stacked)):
         if entries:
