@@ -144,6 +144,16 @@ def test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_t
         la.missing({"ok": True, "findings": [holder, listed], "leftForOwner": ["k1", "k2"]}, "")
 
 
+def test_a_held_repeat_sharing_the_waiting_cards_display_id_is_not_asked_for():
+    import leftover_accepting as la
+
+    holder = dict(_f("k1"), id="code-001", title="Slow retry")
+    again = dict(_repeat(_f("k2", outcome=None), "k1"), id="code-001", title="Slow retry again")
+    rec = {"ok": True, "findings": [holder, again], "leftForOwner": ["code-001"]}
+    # break-it: matching the entry to every card-shaped finding asks for the held repeat too, so accepting the one card fails handback
+    assert la.missing(rec, "") == [{"id": "code-001", "title": "Slow retry"}]
+
+
 def test_the_merge_sheet_builds_with_a_no_outcome_minor_card_another_card_holds_and_shows_one_card():
     from test_pr_sheet import WORDS, build
     from test_pr_sheet_fixed_above_2332 import pr_input, record
