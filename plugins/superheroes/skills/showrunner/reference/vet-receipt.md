@@ -205,7 +205,7 @@ are never holding the inventory in working memory.
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | the PR carries **iPhone evidence**, or the issue's done-definition names an **iPhone check** | the **iPhone-evidence row** — each piece valid or invalid with its reason. When the issue names the check, add whether the check is complete by the conditions in `skills/showrunner/reference/vetting.md` § iPhone evidence, and if not, the advisor's own iPhone check, recorded before the ruling |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR), or for a stacked feature the vet `skills/showrunner/reference/closure.md#when-closure-fires` § When closure fires names | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
-| the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the five checks are the rows of [The review record checks](#the-review-record-checks) |
+| the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the six checks are the rows of [The review record checks](#the-review-record-checks) |
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, by any seat, as the stop rule and the session rule define that, is named as a **finding**, without listing the forms, unless a sanctioned retry covers it (`SANCTIONED_RETRIES`): a covered re-take is named as a sanctioned re-run and graded on that entry's seats, conditions and disclosure, and one that misses any of them is a finding. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 | the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
@@ -232,7 +232,7 @@ Every review ends by writing a review record on the PR. The record's home, its f
 `read` verb are `skills/review-code/reference/review-record.md`; this section says only what the vet
 reads from it. At a full or light vet, read the latest record with
 `python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>` (`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`)
-and grade the five checks below. **A PR that any row holds is not returned as ready**, and the
+and grade the six checks below. **A PR that any row holds is not returned as ready**, and the
 receipt names the row that held it.
 
 | Check | What it reads from the record | The PR is held when |
@@ -242,6 +242,7 @@ receipt names the row that held it.
 | **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, `listedForMerge`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome and is neither listed nor a Minor or Nit that waits (both are read below); or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and the record does not list it, or is a Minor or Nit with no outcome that waits (`leftForOwner` names it), and is shown to the owner neither as a card on the PR's sheet, nor as an entry of the sheet's decided-for-you list, nor, on a stack sheet, in its caught list as fixed above in a higher layer of that stack, nor, where no sheet is built, under the owner half's `## What we're accepting`; or is a finding the record lists (`listedForMerge`; which findings it lists is [the review record's rule](../../review-code/reference/review-record.md#what-reviewed-means)), which needs no card, and is shown neither in the sheet's listed part nor, where no sheet is built, in the record's summary; or is a listed finding the vet judges misgraded (its severity understated, or its file in a declared risk area the stamp missed) and has not been raised to the owner as a card, because the vet raises any listed finding it judges misgraded; or is shown as fixed above and the vet cannot follow the named layer and commit to a higher PR of the same stack whose history holds that commit; or is an entry of the sheet's decided-for-you list and has a real consequence that none of the template's three grounds covers (another card on the same sheet carries it; a fix in another layer of the same stack, named in the ground, removed it; a Canon entry, cited by id, answers it), names no ground, or re-grades a finding the owner already answered or took back on this PR |
 | **The proven copies match their source** | the record's `provenCopies` and every copy the head-coverage check relied on (each `{file, source, sha256}`); a regenerated file counts only on the vet's own re-run whose output is the head blob | the record carries `provenCopies`, or the check relied on a copy, and the vet has not read each named `source` where the proof names it and compared its sha256 with the entry's `sha256`, or a source cannot be read, or its sha256 does not match (the receipt says, per copy, what was found) |
 | **A merged finding's fix is its own** | every entry of `findings` whose `outcome` is fixed and whose `reason` holds ` (merged into …)`, with its `title`, `consequence` and `body`, and the fix at the record's `finalCommit.sha` | the vet has not read each such finding's own title and consequence against the fix and found its own part fixed at that commit (the receipt names each one read and what in the fix covers it) |
+| **A fix's scope note has a call** | every entry of `findings` whose `outcome` is fixed and whose `reason` holds "listed for the vet", with its `title`, the note after those words, and the fix at the record's `finalCommit.sha` | the vet has not read each such note's extra change at that commit and recorded one call for it in the receipt's scope-notes field; or a call is held; or a call put to the owner is not shown in the owner half's *what is theirs to decide* |
 
 **The head-coverage outcome.** The vet writes what `review_record.py read --pr <n>` prints to a file and runs `lib/head_coverage.py check` with `--base` (the PR's base tip, or the head of the layer below for a stack layer), `--record` (that file), `--head` (the PR's head now), `--repo-root`, and `--proof` for every copy or regenerated file it relies on. It then runs `lib/head_coverage.py outcome` with the check's answer and CI on the head now, and the row holds unless the outcome is `READY`. On `judgement` the vet reads every hunk the check lists and passes `--judged-clear` only when none changes meaning. A hunk changes meaning when it touches product code, a test's assertions or fixtures' expected values, prose that states a rule a session or a gate follows, or a claim the PR makes, or changes behaviour in any other way (configuration, CI, a hook, or test code beyond its assertions, such as a skip mark, a removed test or a changed input). A hunk the vet cannot call non-semantic counts as changing meaning. On `needs-review` the PR goes back for a returning-round review of the listed files, and a stack layer is judged on its own diff and never waits on the layer below. The receipt names the answer, the files and every hunk read.
 
@@ -251,6 +252,31 @@ A flag is a record's `transitDamage` (`sentHashMatches: false`, the parts' `hash
 or the handback. Grade that text from the committed file, the engine artifact or the run directory
 it was made from, and say in the receipt which source you read. A flagged text you cannot reach
 holds the PR as the row it belongs to says.
+
+**A fix's scope note gets one call.** A fixed finding whose `reason` holds "listed for the vet" is a
+fix the audit ruled right that also changed something its finding does not name, and the review did
+not review that change. Read the note, then read the change itself at the record's
+`finalCommit.sha`, and make exactly one of three calls, graded against the
+[owner-vs-craft line](../../../rubric/owner-vs-craft-line.md) with doubt resolving upward:
+
+1. **Accepted as craft.** The change is right and carries no
+   [material consequence](../../../rubric/glossary.md#material-consequence). Its line in the field
+   below is the whole record.
+2. **Held.** The change is wrong, or you cannot tell what it does. The row holds the PR, so it goes
+   back to the builder, and the receipt names the row and the finding.
+3. **Put to the owner.** The change is right but has a material consequence that is the owner's.
+   Record it under `**Open owner calls at merge.**` too, framed as
+   `skills/showrunner/reference/owner-decisions.md` § The per-item spine says, and write it into the
+   owner-half slot's *what is theirs to decide*.
+
+The receipt records every call in one fixed field, `**Scope notes.**`, one bullet per such finding:
+
+```markdown
+**Scope notes.**
+- <finding id> · <title> — craft | held | owner — <what the extra change does, and why this call>
+```
+
+A record with no "listed for the vet" reason needs no line for it: the vet writes no field.
 
 **Whether a seat read its calibration is read from the record's own fields.** Read it from that reviewer row's `calibrationRead`, and, for the test lens, from the record's `testLens`. Never read it from the seat's `investigated` array: the sanitized view tells every seat never to list those absolute paths there, so "no calibration file in `investigated`" holds of every seat, calibrated or not, and is not evidence of anything. A `calibrationRead` entry of `unknown`, and a row or record that reads unmeasured, are not "did not read". The review record checks have no row for the calibration read, and this paragraph holds no PR on its own.
 
@@ -284,7 +310,7 @@ vet's to follow.
 
 **`status` is not the test.** A record whose only open lines are leftovers shown to the owner reads `awaits-owner`, and one with a go-ahead for a review that did not run reads `not-reviewed`; either can still be returned as ready. A record that reads `awaits-owner` is read exactly as `not-reviewed`: it says only that every open line is a finding left for the owner, and it clears nothing. A `reviewed` record may carry listed findings (`listedForMerge`), and the leftover row still reads them. A
 record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
-the fields the rows name. Any line of `whatIsMissing` that the five rows do not account for is a vet
+the fields the rows name. Any line of `whatIsMissing` that the six rows do not account for is a vet
 finding. The line saying no planned reviewer ran is never accounted for: at least one reviewer runs on
 every PR, and a go-ahead covers a planned reviewer that did not run, never the last one
 (`skills/showrunner/SKILL.md` duty 6). A record written before CI left the certificate may hold a line saying CI was pending or none on the final commit; it is accounted

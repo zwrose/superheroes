@@ -822,8 +822,9 @@ ninth duty.
   it read: each seat's finding outcomes by outcome, its tokens, and its minutes. A seat's findings
   are counted for the seat whose run raised them, never the lens they name. A finding from a record
   that does not name its raiser leaves the outcomes of the seats that ran on that PR unmeasured.
-  A seat's tokens and minutes are a number only when every session that ran it recorded a complete
-  cost naming it. They come from
+  A seat's tokens are a number only when every session that ran it recorded a complete cost naming
+  it, and its minutes when every such session recorded a cost naming it with no run lacking a figure
+  (so a reviewer retried after a silence counts its minutes). They come from
   `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The row file is the
   `seatingRow` of the window's review-loop measures row (duty 3). A number the measures do not
   give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
