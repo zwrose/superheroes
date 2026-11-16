@@ -348,6 +348,21 @@ def test_a_commit_by_another_author_that_only_edits_markdown_reads_needs_review(
     assert named_other["answer"] == "judgement" and tokens(named_other) == [HC.WHY_PROSE_OR_COMMENTS]
 
 
+def test_a_builder_commit_after_another_authors_markdown_commit_still_reads_needs_review(tmp_path):
+    # axis: a judgement answer needs EVERY new commit to be the builder's, so a later builder commit never clears an earlier commit by someone else — see bite-proof record i2496_wo_a_head_coverage (E-author-all)
+    repo = TR.Repo(tmp_path)
+    base, reviewed, earlier = TR.returning(repo, first={APP: TR.numbered("app", 100), "docs/notes.md": "notes\n"})
+    repo.write("docs/notes.md", "notes\nmore notes\n")
+    commit_by_other(repo, "docs by someone else")
+    repo.write("docs/notes.md", "notes\nmore notes\neven more notes\n")
+    repo.commit("docs by the builder")
+    got = run_check(repo, base, earlier)
+    assert got["answer"] == "needs-review", got
+    assert tokens(got) == [HC.WHY_OTHER_AUTHOR], got
+    assert got["hunks"] == [], got
+    assert len(got["commits"]) == 2 and {c["author"] for c in got["commits"]} == {"other@example.com", "t@example.com"}, got
+
+
 def test_authors_git_cannot_read_read_needs_review(tmp_path):
     repo = TR.Repo(tmp_path)
     base, reviewed, earlier = TR.returning(repo, first={APP: TR.numbered("app", 100), "docs/notes.md": "notes\n"})
@@ -412,6 +427,15 @@ def test_a_malformed_record_reads_needs_review(tmp_path, record):
     repo = TR.Repo(tmp_path)
     base, reviewed, _ = TR.returning(repo)
     got = run_check(repo, base, record)
+    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_RECORD_UNUSABLE] and got["certified"] is None
+
+
+@pytest.mark.parametrize("ok", [False, "yes", 1], ids=["false", "string", "one"])
+def test_a_record_whose_ok_is_not_true_reads_needs_review_even_with_a_valid_final_commit(tmp_path, ok):
+    # axis: only ok true certifies; a record that names a valid final commit but is not ok certifies nothing
+    repo = TR.Repo(tmp_path)
+    base, reviewed, earlier = TR.returning(repo)
+    got = HC.check(repo.root, base, dict(earlier, ok=ok), reviewed)
     assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_RECORD_UNUSABLE] and got["certified"] is None
 
 

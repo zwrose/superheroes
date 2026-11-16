@@ -287,3 +287,176 @@ FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_an_excepti
 ....................................................                     [100%]
 196 passed in 19.60s
 ```
+
+---
+
+## Added at review round 1: E-mode and E-lex (2026-11-16, typed and run by the build session)
+
+Two guards the round-1 review found missing, each added at the loop's apply-fixes step in commit b9ff148f and proved in a
+detached probe worktree at that commit by one targeted Edit and its inverse. Captures keep only the assertion lines and the
+summary line (the full tracebacks are long and repeat the same result dict); nothing is redacted.
+
+### E-mode — a file whose mode changed is never reconstructed
+
+**guard:** `head_coverage.py:351`, `same_mode = modes[path][0] is not None and modes[path][0] == modes[path][1]`.
+
+**neutralization:** `same_mode = True`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest "plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py::test_an_executable_bit_change_after_review_reads_needs_review" -q -p no:cacheprovider`
+```
+E       assert 'proven' == 'needs-review'
+E       assert 'proven' == 'needs-review'
+2 failed in 0.51s
+```
+
+**restore:** the inverse Edit.
+
+### E-lex — a comment-looking line counts only where the tokenizer reads a comment
+
+**guard:** `head_coverage.py:254`, `return _lexically_insignificant(run, x, head, section)`.
+
+**neutralization:** `return True`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k inside_a_python_string -q -p no:cacheprovider`
+```
+E       assert ('judgement' == 'needs-review'
+E       assert 'judgement' == 'needs-review'
+2 failed, 5 deselected in 2.26s
+```
+
+**restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing after it.
+
+**green (both restored):** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -q -p no:cacheprovider`
+```
+7 passed in 3.00s
+```
+
+**Not neutralized here:** the copy-mode condition (`wanted` in `_check`, pinned by `test_a_copy_proof_for_a_file_whose_mode_changed_proves_nothing`), and `_changed_lines`' hunk walk (pinned by the string and comment tests).
+
+---
+
+## Added at review round 2: E-mode-read, E-fstring and E-author-all (2026-11-16, implementer order `wo-h-2543`)
+
+**Provenance:** implementer WO-H (order `wo-h-2543`, issue 2543, rework 1 of the review-fix surface `lib/head_coverage.py`), worktree `/home/user/wt-2543`, base commit 7db98ccc plus this dispatch's uncommitted work. The order declared three guarded elements, E-mode-read, E-fstring and E-author-all, and named the red detector for each. Each element was neutralized with one targeted Edit and restored with its inverse Edit; no `git checkout`, `restore`, `reset` or `stash` was used. Every run is `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-h-pyc -m pytest <file> -k <test function name> -q -p no:cacheprovider`, selected with `-k` on the exact function name as the order directed (not by a `::` node id). Captures keep the assertion lines and the summary line (the tracebacks repeat the same fixture and the result dict); the `UV_NATIVE_TLS` deprecation warning line is left out. Nothing is redacted: no secrets, tokens or URLs appear.
+
+The axis lines in the code (census: the Grep tool, pattern `bite-proof record i2496_wo_a_head_coverage (E-mode-read|E-fstring|E-author-all)`, over `plugins/superheroes/lib`):
+
+```
+plugins/superheroes/lib/head_coverage.py   _mode:                # axis: a mode git could not read is not an absent file ... (E-mode-read)
+plugins/superheroes/lib/head_coverage.py   _insignificant_lines: # axis: every line from an f-string's start row to its matching end row is significant ... (E-fstring)
+plugins/superheroes/lib/tests/test_head_coverage_2496.py:        # axis: a judgement answer needs EVERY new commit to be the builder's ... (E-author-all)
+```
+
+**Disclosure — shared final green.** Each element has its own red run and its own green run straight after its restore (six runs). One more run, over the six files the order names, was made after the last restore: `212 passed in 19.07s`. The test-command budget was 10 invocations; 8 were used.
+
+### E-mode-read — a mode git could not read is not an absent file
+
+**guarded element:** `head_coverage.py` `_mode` (the None / `ABSENT` / mode-string result) and its two consumers in `_check`, the reconstruction `same_mode` line and the copy `wanted` filter, both of which ask `_real_mode`. **axis:** a failed `ls-tree` keeps the file changed; it never passes the equality clause or the new-and-plain clause.
+
+**neutralization** (`_real_mode`, the one place both consumers decide whether a mode is real; a None from a failed read then counts as a mode again, so two failed reads are equal and pass, as before the fix):
+```python
+-    return isinstance(mode, str)
++    return True
+```
+
+**raw red:** `... -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k test_a_failed_mode_read_keeps_a_copied_file_changed ...`
+```
+>       assert got["answer"] == "needs-review" and got["copies"] == [] and copied in got["files"], got
+E       AssertionError: {'answer': 'proven', 'why': ["proven-copies: 1 file(s) are copies git re-validated at the head, and the pull request's...ge"], 'certified': '60979078307b8524fa8de97d1036f8ad12ee7e54', 'head': '4684733dac38e3a8a1140420c7fb0e220696d0fa', ...}
+E       assert ('proven' == 'needs-review'
+E         - needs-review
+E         + proven)
+FAILED plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py::test_a_failed_mode_read_keeps_a_copied_file_changed
+1 failed, 9 deselected in 4.60s
+```
+The red is on the claimed axis: with every `ls-tree` failing, the copy proof drops the file and the check answers `proven`.
+
+**restore:** the inverse Edit (`return True` back to `return isinstance(mode, str)`).
+
+**restore receipt:** the Grep over `return isinstance\(mode, str\)` in `head_coverage.py` printed `183:    return isinstance(mode, str)`.
+
+**raw green:** same command
+```
+.                                                                        [100%]
+1 passed, 9 deselected in 4.57s
+```
+
+**Not neutralized, and why it matters:** changing only `_mode` to return `ABSENT` on a failed read is not red by itself. The consumers refuse two `ABSENT` modes as well (the reconstruction needs two equal real modes, and the copy filter accepts `ABSENT` only at X with `100644` at the head), so the file stays changed when both reads fail. That variant was reasoned, not run. The distinction the test guards is the real-mode test in the consumers, which is what was neutralized. A failed read at X only, with a readable `100644` head (the finding's second case), is covered by the same `_real_mode` and `is ABSENT` tests but is not separately pinned: the test fails every `ls-tree`.
+
+### E-fstring — every line inside an f-string is significant
+
+**guarded element:** `head_coverage.py` `_insignificant_lines`, the span marking from an `FSTRING_START` token's start row to its matching `FSTRING_END` token's end row. **axis:** a line inside any f-string, debug or not, is never a comment or blank line, so editing it never reads judgement.
+
+**neutralization** (the span is no longer marked; the start stack is still popped):
+```python
+-                significant.update(range(open_starts.pop(), tok.end[0] + 1))
++                open_starts.pop()
+```
+
+**raw red:** `... -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k "test_a_blank_line_inside_a_debug_fstring_changes_the_value_and_reads_needs_review or test_a_blank_line_inside_a_plain_fstring_braces_reads_needs_review" ...` (both tests, the debug and the plain f-string; they share the one neutralization)
+```
+E       AssertionError: {'answer': 'judgement', 'why': ['prose-or-comments: every remaining difference is prose or comment lines by the builde...s)'], 'certified': '151fbe20dcce6509eb8d49c800b0e8284d823f23', 'head': '4d86dde58d302675abcd8bc47712fcd3c51ab486', ...}
+E       assert ('judgement' == 'needs-review'
+E         - needs-review
+E         + judgement)
+E       AssertionError: {'answer': 'judgement', 'why': ['prose-or-comments: every remaining difference is prose or comment lines by the builde...s)'], 'certified': '43bfc7a16622536953842c747d04e7cc206db38f', 'head': '7cf33bf26908570406e599d60311d0d89eb28e1e', ...}
+E       assert ('judgement' == 'needs-review'
+E         - needs-review
+E         + judgement)
+FAILED plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py::test_a_blank_line_inside_a_debug_fstring_changes_the_value_and_reads_needs_review
+FAILED plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py::test_a_blank_line_inside_a_plain_fstring_braces_reads_needs_review
+2 failed, 8 deselected in 2.31s
+```
+The red is on the claimed axis: the added blank line inside the f-string reads as a blank line, and the change reads `judgement`.
+
+**restore:** the inverse Edit (`open_starts.pop()` back to the `significant.update(range(open_starts.pop(), tok.end[0] + 1))` call).
+
+**restore receipt:** the Grep over `significant\.update` in `head_coverage.py` printed `221:                significant.update(range(open_starts.pop(), tok.end[0] + 1))` and `226:            significant.update(range(tok.start[0], tok.end[0] + 1))`.
+
+**raw green:** same command
+```
+..                                                                       [100%]
+2 passed, 8 deselected in 0.44s
+```
+
+**Not neutralized here:** nesting (an f-string inside the braces of another) is handled by the start stack and is not separately pinned by a test; the `getattr(tokenize, "FSTRING_START", None)` fallback for an interpreter without the token type is not run, since the pinned interpreter is Python 3.12.13.
+
+### E-author-all — every new commit must be the builder's
+
+**guarded element:** `head_coverage.py:424`, `authors_ok = ... all(c["author"].lower() == builder.lower() for c in commits)`. **axis:** a builder commit never lets an earlier commit by someone else read judgement.
+
+**neutralization:** `all(` changed to `any(` in that line:
+```python
+-    authors_ok = commits is not None and builder is not None and all(c["author"].lower() == builder.lower() for c in commits)
++    authors_ok = commits is not None and builder is not None and any(c["author"].lower() == builder.lower() for c in commits)
+```
+
+**raw red:** `... -m pytest plugins/superheroes/lib/tests/test_head_coverage_2496.py -k test_a_builder_commit_after_another_authors_markdown_commit_still_reads_needs_review ...`
+```
+>       assert got["answer"] == "needs-review", got
+E       AssertionError: {'answer': 'judgement', 'why': ['prose-or-comments: every remaining difference is prose or comment lines by the builde...s)'], 'certified': 'c096ac65d5cb2131a201bf03f2cab4b2ca211acc', 'head': '5c34ff5d832add3b6bada26f8ce90515edd8265e', ...}
+E       assert 'judgement' == 'needs-review'
+E         - needs-review
+E         + judgement
+FAILED plugins/superheroes/lib/tests/test_head_coverage_2496.py::test_a_builder_commit_after_another_authors_markdown_commit_still_reads_needs_review
+1 failed, 46 deselected in 0.43s
+```
+
+**restore:** the inverse Edit (`any(` back to `all(`).
+
+**restore receipt:** the Grep over `authors_ok = |True or|False and|any\(c\[` in `head_coverage.py` printed only `424:    authors_ok = commits is not None and builder is not None and all(c["author"].lower() == builder.lower() for c in commits)`.
+
+**raw green:** same command
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.47s
+```
+
+**The shared final green (every neutralization undone):** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-h-pyc -m pytest plugins/superheroes/lib/tests/test_head_coverage_2496.py plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py plugins/superheroes/lib/tests/test_head_coverage_modes_breakit.py plugins/superheroes/lib/tests/test_returning_review_c1l11.py plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py plugins/superheroes/lib/tests/test_c1l11e_catch_up.py -q -p no:cacheprovider`
+```
+........................................................................ [ 33%]
+........................................................................ [ 67%]
+....................................................................     [100%]
+212 passed in 19.07s
+```
+This disclosure is unadjudicated: it travels to the next independent reader of the record.

@@ -17,18 +17,20 @@ The rule, in order; the first step that applies answers:
   3. The base or the head is not a full commit sha: needs-review (``input-invalid``).
   4. The changed files (``returning_review.changed_files``: the files whose own change differs between
      ``base...X`` and ``base...head``) cannot be produced by git: needs-review (``diff-unreadable``).
-  5. A changed file is still proven when a clean three-way merge of X's blob, the fork blob and the base blob equals
-     the head blob byte for byte (``reconstructed``). This proof is the check's own; the returning-review decider
-     keeps its stricter rule.
+  5. A changed file is still proven when its mode at the head is its mode at X and a clean three-way merge of X's
+     blob, the fork blob and the base blob equals the head blob byte for byte (``reconstructed``). This proof is the
+     check's own; the returning-review decider keeps its stricter rule.
   6. A changed file is dropped when a copy-proof entry for it is re-validated by git at the head (its file is in the
      ``base...head`` change, bound to the head blob, and the head blob's bytes hash to the entry's sha256;
-     ``review_record.revalidated_copies``). An entry is never trusted for its own word; the entries relied on are
-     listed in ``copies``.
+     ``review_record.revalidated_copies``), and the file keeps its mode at X or is new and plain (``100644``). An
+     entry is never trusted for its own word; the entries relied on are listed in ``copies``.
   7. No changed file is left: proven (``own-change-unchanged``, or ``proven-copies`` when a copy was relied on).
   8. Otherwise the remaining files are read as ``git diff X head`` and the new commits as
      ``git rev-list head --not X base``. A file qualifies when its path ends ``.md``, ``.markdown``, ``.txt`` or
-     ``.rst``, or when every added and removed body line is blank or begins (stripped) with the file's line-comment
-     marker; a binary or unreadable section, a mode change, a rename or copy, a file the diff does not show and any
+     ``.rst``, or, for a ``.py`` file, when every added and removed body line is one Python's tokenizer reads as a
+     comment or blank line outside every string (in the file at X for a removed line, at the head for an added
+     one); a comment in any other language cannot be told from data, so it never qualifies. A binary or unreadable
+     section, a mode change, a rename or copy, a file the diff does not show and any
      other extension never qualify. A commit whose author email is not the builder's (the ``builder_author``
      given, else the author email of X), authors git cannot read, or no new commit to vouch for the difference:
      needs-review (``other-author``). All files qualify and every author is the builder: judgement
@@ -51,10 +53,12 @@ CLI:
 prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record or proof
 file, a bad value)."""
 import argparse
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -89,15 +93,18 @@ WAIT = "WAIT"
 NOT_READY = "NOT-READY"
 
 _PROSE_SUFFIXES = (".md", ".markdown", ".txt", ".rst")
-_HASH_SUFFIXES = (".py", ".sh", ".bash", ".yml", ".yaml", ".toml", ".cfg", ".ini")
-_SLASH_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".h", ".cc", ".cpp",
-                   ".cs", ".swift", ".kt")
 # A line that begins with a comment marker yet is read by a tool as an instruction is no comment.
-_DIRECTIVE_PREFIXES = ("#!", "//go:", "// +build", "//+build")
+_DIRECTIVE_PREFIXES = ("#!",)
+_LAYOUT_TOKENS = (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER)
+_HUNK_NUMBERS_RE = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _REGULAR_MODES = ("100644", "100755")
 _MODE_LINES = ("old mode ", "new mode ")
 _FILE_MODE_LINES = ("new file mode ", "deleted file mode ")
 _HUNK_LINE_RE = re.compile(r"@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+# one ``git ls-tree`` entry: ``<mode> <type> <sha>\t<path>``
+_TREE_ENTRY_RE = re.compile(r"^(\d{6}) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64})\t.+$")
+# ``_mode`` answer for a file that is not in that tree (git exited 0 and listed nothing); None means git failed
+ABSENT = object()
 
 
 def _plain(value):
@@ -156,17 +163,100 @@ def _section_headers(section):
     return [line.rstrip("\r") for line in section["text"].split("\n") if _HUNK_LINE_RE.match(line)]
 
 
-def _marker_of(path):
-    name = path.lower()
-    if name.endswith(_HASH_SUFFIXES):
-        return "#"
-    if name.endswith(_SLASH_SUFFIXES):
-        return "//"
-    return None
+def _mode(run, rev, path):
+    """The tree-entry mode of ``path`` at ``rev`` (for example ``100644``); ``ABSENT`` when git exited 0 and listed
+    nothing (the file is not in that tree); None when git failed or printed anything but one
+    ``<mode> <type> <sha>\\t<path>`` entry. A failed read is never an absent file."""
+    # axis: a mode git could not read is not an absent file, so a failed ls-tree keeps the file changed instead of passing the equality or the new-and-plain test — see bite-proof record i2496_wo_a_head_coverage (E-mode-read)
+    code, text = run(["ls-tree", rev, "--", path])
+    if code != 0 or not isinstance(text, str):
+        return None
+    if not text.strip():
+        return ABSENT
+    lines = text.splitlines()
+    entry = _TREE_ENTRY_RE.match(lines[0]) if len(lines) == 1 else None
+    return entry.group(1) if entry else None
 
 
-def _section_qualifies(section):
-    """True when ``section`` (one file's diff from X to the head) is prose, or only blank and comment lines."""
+def _real_mode(mode):
+    """True for a mode string git printed: neither ``ABSENT`` nor None."""
+    return isinstance(mode, str)
+
+
+def _changed_lines(section):
+    """``(removed, added)``: the line numbers, at X and at the head, of every removed and added body line of
+    ``section``, read from its hunk headers; None when a hunk header cannot be read."""
+    removed, added, old, new = [], [], None, None
+    for line in section["text"].split("\n"):
+        hunk = _HUNK_NUMBERS_RE.match(line)
+        if hunk:
+            old, new = int(hunk.group(1)), int(hunk.group(2))
+            continue
+        if old is None or line.startswith(("--- ", "+++ ")):
+            continue
+        if line.startswith("-"):
+            removed.append(old)
+            old += 1
+        elif line.startswith("+"):
+            added.append(new)
+            new += 1
+        elif line.startswith(" "):
+            old, new = old + 1, new + 1
+    return removed, added
+
+
+def _insignificant_lines(text):
+    """The line numbers of ``text`` that Python's tokenizer reads as holding nothing but a comment or whitespace,
+    outside every string; None when ``text`` cannot be tokenized."""
+    significant = set()
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    open_starts = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            # axis: every line from an f-string's start row to its matching end row is significant, whatever tokens the tokenizer emits inside it (a blank line inside a debug f-string yields only NL), so an f-string edit never reads judgement — see bite-proof record i2496_wo_a_head_coverage (E-fstring)
+            if fstring_start is not None and tok.type == fstring_start:
+                open_starts.append(tok.start[0])
+            elif fstring_end is not None and tok.type == fstring_end and open_starts:
+                significant.update(range(open_starts.pop(), tok.end[0] + 1))
+            if tok.type in _LAYOUT_TOKENS:
+                continue
+            # a string, a name or any other token makes every line it spans significant, so a comment-like line
+            # inside a triple-quoted string is data
+            significant.update(range(tok.start[0], tok.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    if open_starts:
+        # an f-string that never closed cannot be classified
+        return None
+    return {n for n in range(1, text.count("\n") + 2) if n not in significant}
+
+
+def _file_text(run, rev, path):
+    code, text = run(["show", "%s:%s" % (rev, path)])
+    return text if code == 0 else None
+
+
+def _lexically_insignificant(run, x, head, section):
+    """True when every removed line of a Python ``section`` is a comment or blank line of the file at X, and every
+    added line one of the file at the head, by the tokenizer; a line it cannot classify is significant."""
+    numbers = _changed_lines(section)
+    if numbers is None:
+        return False
+    removed, added = numbers
+    for rev, lines in ((x, removed), (head, added)):
+        if not lines:
+            continue
+        text = _file_text(run, rev, section["file"])
+        quiet = _insignificant_lines(text) if text is not None else None
+        if quiet is None or not set(lines) <= quiet:
+            return False
+    return True
+
+
+def _section_qualifies(section, run=None, x=None, head=None):
+    """True when ``section`` (one file's diff from X to the head) is prose, or, for a Python file, only lines the
+    tokenizer reads as comments or blank lines outside every string."""
     if section["unreadable"] or section["binary"]:
         return False
     # A rename or a copy moves a file; whatever it says, the path is behaviour.
@@ -180,15 +270,16 @@ def _section_qualifies(section):
     path = section["file"]
     if path.lower().endswith(_PROSE_SUFFIXES):
         return True
-    marker = _marker_of(path)
-    if marker is None or not _section_headers(section):
+    # Only Python has a lexer here: a comment in any other language cannot be told from data, so it is review owed.
+    if not path.lower().endswith(".py") or not _section_headers(section) or run is None:
         return False
     for body in section["addedLines"] + section["removedLines"]:
         text = body.strip()
         # axis: a non-prose file qualifies only when every added and removed line is blank or a comment of its own language, so a changed assertion or code line never reads judgement — see bite-proof record i2496_wo_a_head_coverage (E-judge)
-        if text and not (text.startswith(marker) and not text.startswith(_DIRECTIVE_PREFIXES)):
+        if text and not (text.startswith("#") and not text.startswith(_DIRECTIVE_PREFIXES)):
             return False
-    return True
+    # axis: a comment-looking line counts as a comment only where the tokenizer reads it as one, so a line inside a string stays data — see bite-proof record i2496_wo_a_head_coverage (E-lex)
+    return _lexically_insignificant(run, x, head, section)
 
 
 def _qualification(run, x, head, files):
@@ -206,14 +297,14 @@ def _qualification(run, x, head, files):
     for path in files:
         mine = shown.get(path)
         # A changed file the diff does not show cannot be judged, so it never qualifies.
-        if not mine or not all(_section_qualifies(s) for s in mine):
+        if not mine or not all(_section_qualifies(s, run, x, head) for s in mine):
             bad.append(path)
             continue
         for section in mine:
             hunks.extend({"file": path, "header": header} for header in _section_headers(section))
     # a file the diff shows beyond the asked paths (a rename's other side) is read too
     for path, mine in shown.items():
-        if path not in files and not all(_section_qualifies(s) for s in mine):
+        if path not in files and not all(_section_qualifies(s, run, x, head) for s in mine):
             bad.append(path)
     if bad:
         return False, [], "not only prose or comment lines: %s" % ", ".join(sorted(set(bad))[:5])
@@ -282,9 +373,13 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
 
     # 5. the reconstruction proof
     remaining = []
+    modes = {path: (_mode(run, x, path), _mode(run, head, path)) for path in files}
     for path in files:
+        # axis: a file whose mode differs between X and the head is never reconstructed, since equal bytes are not an equal file — see bite-proof record i2496_wo_a_head_coverage (E-mode)
+        # a mode git could not read (None) and a file that is not in a tree (ABSENT) are no mode: two equal real modes only
+        same_mode = _real_mode(modes[path][0]) and _real_mode(modes[path][1]) and modes[path][0] == modes[path][1]
         # axis: a file is reconstructed only when a clean three-way merge of X, the fork and the base reproduces the head blob byte for byte, so a hand-resolved file stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
-        if returning_review.merge_reproduces_head(run, base, x, head, path):
+        if same_mode and returning_review.merge_reproduces_head(run, base, x, head, path):
             result["reconstructed"].append(path)
         else:
             remaining.append(path)
@@ -294,7 +389,12 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         entries = _copies_of(proof)
         # axis: a proof entry counts only when git re-validates it at the head; the entry's own word proves nothing — see bite-proof record i2496_wo_a_head_coverage (E-copy)
         valid = review_record.revalidated_copies(entries, os.fspath(repo_root), base, head) if entries else []
-        wanted = set(remaining)
+        # A copy proves bytes only: a copied file keeps its mode at X (two equal real modes), or is new (ABSENT at X,
+        # git exited 0 and listed nothing) and plain (100644) at the head. A mode git could not read (None) keeps the
+        # file changed.
+        wanted = {path for path in remaining
+                  if (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
+                  or (modes[path][0] is ABSENT and modes[path][1] == "100644")}
         for entry in valid:
             if entry["file"] in wanted and entry["file"] not in {c["file"] for c in result["copies"]}:
                 result["copies"].append({"file": entry["file"], "source": entry["source"], "sha256": entry["sha256"]})
