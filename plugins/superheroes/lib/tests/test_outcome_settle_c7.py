@@ -26,8 +26,6 @@ import definition_doc  # noqa: E402
 import finding_outcomes as FO  # noqa: E402
 import round_orders  # noqa: E402
 import session_contract as SC  # noqa: E402
-import test_bounded_pass_b1_2552 as B1  # noqa: E402
-import test_c1l4b_extra_audit as X  # noqa: E402
 import test_risk_areas as TRA  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 import verification  # noqa: E402
@@ -158,6 +156,9 @@ def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls
 
 def test_a_cap_round_with_every_fix_audited_and_an_important_open_is_handed_back_round_cap(tmp_path):
     # no bounded pass begins here (B1 does not apply), so the old round-cap settle still owns the row's reason
+    import test_bounded_pass_b1_2552 as B1
+    import test_c1l4b_extra_audit as X
+
     cap = 4
     d, cfg = X._start(tmp_path, cap)
     terminal, _trace = B1._run(d, cfg, X._respond(cap=cap, scoped={2: [X._finding("late")]}, fail_titles=("late",)))
