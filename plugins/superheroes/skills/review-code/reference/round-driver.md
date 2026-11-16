@@ -833,7 +833,9 @@ hand-back. The fields are described in [review-record.md](review-record.md).
 The [extra audit round](../../../rubric/glossary.md#extra-audit-round) is retired: nothing orders
 one. A cap round with unaudited fixes enters the bounded pass on its own (§ The bounded pass).
 
-**The verb.** `extra-audit` stays a driver verb so that an old order fails loudly. It refuses
+**The verb.** `extra-audit` stays a driver verb so that an old order fails loudly. The
+command line applies the upgrade gate first, as for every command (§ Transition — plugin versions under a live session): on a folder
+of an earlier version it answers `session-from-earlier-version`. Then the verb refuses
 `extra-audit-retired` at once, naming the bounded pass, before it takes the session lock or reads any
 state, receipt or order file. It posts nothing on the PR. Its one write is the journal row of the
 refusal, and only when the session folder exists.

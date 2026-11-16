@@ -1,8 +1,10 @@
 """The extra audit round is retired (issue 2553, layer 2 of 2497): nothing begins one, a session that holds one
 finishes it, and an old record that shows one still reads.
 
-The `extra-audit` verb refuses `extra-audit-retired` at once, naming the bounded pass: before the session lock,
-the upgrade gate and commit recovery, and before it reads any state, receipt or order file. It posts nothing. Its
+The library function `cmd_extra_audit` refuses `extra-audit-retired` at once, naming the bounded pass: before the
+session lock, any gate and commit recovery, and before it reads any state, receipt or order file. The CLI applies
+the shared upgrade gate first, as for every command: on a folder of an earlier version it refuses
+`session-from-earlier-version`, and on a current folder it reaches the function. The verb posts nothing. Its
 one write is the journal row of the refusal, and only when the session folder exists. A session whose state holds
 `extraAudit` (saved inside an ordered round) finishes it and its record says so; a session that holds none never
 writes `rounds.extraAudit`.
@@ -24,6 +26,7 @@ for _p in (_HERE, _LIB):
 import review_record as RR  # noqa: E402
 import test_c1l4b_extra_audit as X  # noqa: E402
 import test_review_record as TRR  # noqa: E402
+import test_session_pickup_and_upgrade_1721 as U  # noqa: E402
 
 RD = X.RD
 PR = X.PR
@@ -130,10 +133,9 @@ def test_a_a_session_folder_that_does_not_exist_returns_the_refusal_and_writes_n
 
 # --- (b) the same refusal through the CLI entry ------------------------------------------------------
 
-def test_b_the_cli_entry_refuses_extra_audit_retired_before_the_upgrade_gate(tmp_path, monkeypatch, capsys):
+def test_b_the_cli_entry_refuses_extra_audit_retired_on_a_current_session(tmp_path, capsys):
     d = X._capped(tmp_path)
     files, rows, raw = _snapshot(d), RD.read_journal(d), _journal(d)
-    monkeypatch.setattr(RD, "_upgrade_gate_unlocked", _boom)  # the gate reads state: this verb never reaches it
     rc = RD.main(["extra-audit", "--session-dir", d, "--order-file", str(tmp_path / "order.json"),
                   "--by", "advisor", "--pr", str(PR)])
     assert rc == 1
@@ -141,6 +143,17 @@ def test_b_the_cli_entry_refuses_extra_audit_retired_before_the_upgrade_gate(tmp
     assert out["ok"] is False and out["reason"] == RETIRED and "bounded pass" in out["detail"], out
     assert _snapshot(d) == files
     _assert_one_refusal_row(d, rows, raw)
+
+
+def test_b_the_cli_entry_refuses_an_earlier_version_folder_like_every_command(tmp_path, capsys):
+    session_dir = U._earlier_version_folder(tmp_path)
+    argv = U._required_argv("extra-audit", session_dir, str(tmp_path / "scratch"))
+    RD.build_parser().parse_args(argv)
+    before = U._snapshot(session_dir)
+    rc, out = U._main(capsys, argv)
+    assert rc != 0
+    assert out["reason"] == U.TOKEN, out
+    assert U._snapshot(session_dir, exclude=(U.MARKER,)) == before
 
 
 # --- (c) an old record that carries rounds.extraAudit still reads ------------------------------------

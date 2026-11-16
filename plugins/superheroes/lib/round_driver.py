@@ -18838,9 +18838,7 @@ def _repair_before_fresh_checks(session_dir):
 def _dispatch(args):
     # An unfinished session from an earlier plugin version is refused before any other check here
     # reads its saved state.
-    # The retired `extra-audit` verb skips the gate: it refuses `extra-audit-retired` before it reads any
-    # state, takes the lock or writes a marker, whatever the session's generation.
-    upgrade = None if args.cmd == EXTRA_AUDIT_CMD else _upgrade_gate_unlocked(args.session_dir, args.cmd)
+    upgrade = _upgrade_gate_unlocked(args.session_dir, args.cmd)
     if upgrade is not None:
         sys.stdout.write(json.dumps(upgrade) + "\n")
         return 1
