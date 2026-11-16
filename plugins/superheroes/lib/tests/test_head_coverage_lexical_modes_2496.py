@@ -192,6 +192,17 @@ def test_a_copy_proven_restore_of_a_reviewed_renames_source_does_not_block_a_com
     assert [c["file"] for c in got["copies"]] == [SHARED], got
 
 
+def test_a_move_after_review_into_a_reviewed_prose_path_still_reads_the_source_deletion(tmp_path):
+    # axis: every remaining file brings its rename sources in, so overwriting a reviewed prose file by a move still shows the code it deletes
+    repo = TR.Repo(tmp_path)
+    doc = "docs/shared.md"
+    base, reviewed, earlier = TR.returning(repo, first={"src/app.py": TR.numbered("app", 10), doc: "notes\n"})
+    repo.git("mv", "-f", SHARED, doc)
+    head = repo.commit("move the shared module over the reviewed notes")
+    got = HC.check(repo.root, base, earlier, head)
+    assert got["answer"] == "needs-review", got
+
+
 def test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement(tmp_path):
     repo = TR.Repo(tmp_path)
     base = repo.git("rev-parse", "main")

@@ -402,7 +402,8 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         # A copy proves bytes only: a copied file keeps its mode at X (two equal real modes), or is new (ABSENT at X,
         # git exited 0 and listed nothing) and plain (100644) at the head. A mode git could not read (None) keeps the
         # file changed.
-        wanted = {path for path in remaining if path not in moved and (
+        # A file that carries rename or copy sources is never dropped as a copy: its bytes say nothing of its source.
+        wanted = {path for path in remaining if path not in moved and not sources.get(path) and (
                   (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
                   or (modes[path][0] is ABSENT and modes[path][1] == "100644"))}
         for entry in valid:
@@ -424,9 +425,9 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         return result
 
     # 8. judgement or a review owed
-    # Only a move after the review brings its source paths in, and never a path a copy proof already settled: a rename
-    # the review read is history, and a copy proven at the head needs no second reading.
-    move_sources = set().union(*(sources.get(p, set()) for p in remaining if p in moved))
+    # Every remaining file brings its rename and copy source paths in, so a move into a path the review already held
+    # still shows its source's deletion; a path a copy proof settled is not read twice.
+    move_sources = set().union(*(sources.get(p, set()) for p in remaining))
     qualifies, hunks, reason = _qualification(run, x, head, remaining,
                                               sorted(move_sources - {c["file"] for c in result["copies"]}))
     commits = _authors(run, base, x, head)
