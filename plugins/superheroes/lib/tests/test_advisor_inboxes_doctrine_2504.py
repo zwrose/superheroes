@@ -328,21 +328,21 @@ def test_checkpoint_showrunner_list_carries_the_per_inbox_last_read_record():
 # --- configure --------------------------------------------------------------------------------
 
 
-def test_set_up_has_section_4_10_and_its_contents_line():
+def test_set_up_has_section_4_11_and_its_contents_line():
     lines = _lines(SET_UP)
     contents = lines[: lines.index("# configure — set-up path")]
-    assert "- §4.10 — Advisor issues — the collector and the inboxes" in contents, (
-        "set-up.md ## Contents has no §4.10 line")
-    at = contents.index("- §4.10 — Advisor issues — the collector and the inboxes")
-    assert contents[at - 1] == "- §4.9 — Size count exclusions — none by default", (
-        "the §4.10 Contents line is not right after §4.9's")
+    assert "- §4.11 — Advisor issues — the collector and the inboxes" in contents, (
+        "set-up.md ## Contents has no §4.11 line")
+    at = contents.index("- §4.11 — Advisor issues — the collector and the inboxes")
+    assert contents[at - 1] == "- §4.10 — Duplication skip trees — none by default", (
+        "the §4.11 Contents line is not right after §4.10's")
     heads = [line for line in lines if line.startswith("## ")]
-    heading = "## 4.10 — Advisor issues — the collector and the inboxes"
+    heading = "## 4.11 — Advisor issues — the collector and the inboxes"
     assert heading in heads, "set-up.md has no %r heading" % heading
-    assert heads.index(heading) == heads.index("## 4.9 — Size count exclusions — none by default") + 1, (
-        "§ 4.10 does not come right after § 4.9")
+    assert heads.index(heading) == heads.index("## 4.10 — Duplication skip trees — none by default") + 1, (
+        "§ 4.11 does not come right after § 4.10")
     text = _flat(_section(SET_UP, heading))
-    where = "set-up.md § 4.10"
+    where = "set-up.md § 4.11"
     _need(text, "collector", where)
     _need(text, "No inbox is a fine answer", where)
     _need(text, "set --item advisorIssues --cwd . <<'SUPERHEROES_ANSWER'", where)
