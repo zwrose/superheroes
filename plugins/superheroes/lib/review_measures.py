@@ -225,8 +225,8 @@ def _pr_cost(rs, k):
 
 def _hand_written_only(rs, k):
     """True when a PR left out of the `k` cost figure is left out only because it was hand-written: every in-window
-    session whose figure is unmeasured for `k` (by `_pr_cost`, which reads `_whole(sc, k)`, so each measure is judged on its own
-    (a partial session is unmeasured for tokens only)) has a latest record with no `sessionCost` key at all (the session writer
+    session whose figure is unmeasured for `k` (by `_pr_cost`, which reads `_whole(sc, k)`, so each measure is judged on its own)
+    has a latest record with no `sessionCost` key at all (the session writer
     writes one on every record). A `sessionCost` that is present but malformed or incomplete is incomplete, never hand-written."""
     unmeasured = [_latest(recs) for recs in _by_session(rs) if _pr_cost(recs, k) is None]
     # axis: a session counts hand-written only when its latest record carries no sessionCost key, and a PR only when every unmeasured session does — see bite-proof record i2515_hand_cost
@@ -425,7 +425,7 @@ def compute(inp, start, end, written_at=None):
             measured = [t for t in totals if t is not None]
             hands = [t is None and _hand_written_only(rs, k) for rs, t in zip(prs.values(), totals)]
             hand = sum(hands)
-            # axis: `partial` counts the left-out PRs holding a session whose cost is partial, never more than `count` — see bite-proof record i2514_partial_cost
+            # axis: `partial` counts the PRs under `count` holding a session whose cost is partial, never more than `count` — see bite-proof record i2514_partial_cost
             # axis: partial counts only left-out PRs under count, so a PR left out for k only by a hand-written session is never partial for k — see bite-proof record i2515_hand_cost
             out[k] = {"count": len(totals) - len(measured) - hand, "why": LEFT_OUT_WHY,
                       "partial": sum(any(_partial_session(_latest(recs)) for recs in _by_session(rs))
