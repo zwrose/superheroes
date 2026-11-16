@@ -161,3 +161,47 @@ quoted per element.
 - **Restore:** the inverse edit. **Restored line quoted:**
   `    if restorable and _is_bounded_audit_round(state):`
 - **Raw green:** `1 passed in 0.91s`
+
+## Review fix: two more elements (review session 1, round 1 of PR 2558)
+
+Made by the build session at the review loop's `apply-fixes` step, for the two Important findings the panel and the
+repository sweep raised. Each red and green is one run of one exact node id with
+`scripts/pinned-python -B -X pycache_prefix=/tmp/wt-bp-pyc -m pytest <node id> -q -p no:cacheprovider`.
+
+## E-ruling-empties
+
+- **Guarded element:** `round_driver.py` `_reconcile_fix_queue_after_rulings`, the branch
+  `elif status == "empty" and _in_bounded_fix_step(state) and not state.get("terminal"):` calling
+  `_settle_ruled_empty_bounded_fix`. **Axis:** a ruling that leaves B2's pending step no target clears the stale slice
+  and settles the pass, never a fix step still queued.
+- **Detector (expected red):** `plugins/superheroes/lib/tests/test_bounded_pass_b2_2554.py::test_t10_a_ruling_that_leaves_b2s_pending_step_no_target_settles_the_pass_and_clears_the_slice`
+- **Neutralization:** `False and ` inserted at the head of the branch condition, so the reconcile ignores an `empty`
+  status, as before the fix.
+- **Raw red:**
+  ```
+  >       assert state["terminal"] == "converged" and state["step"] == RD.P_TERMINAL, state.get("decisions")[-3:]
+  E       AssertionError: [{'detail': 'newsurf.py::openimportant@L1', 'kind': 'not-discharged', 'round': 3}, {'detail': "the bounded pass's audi... out-of-scope on newsurf.py::openimportant@L1 (belongs to the next milestone)', 'kind': 'ruling-recorded', 'round': 3}]
+  E       assert (None == 'converged')
+  1 failed in 3.69s
+  ```
+- **Restore:** the inverse edit. **Restored line quoted:**
+  `    elif status == "empty" and _in_bounded_fix_step(state) and not state.get("terminal"):`
+- **Raw green:** `1 passed in 3.63s`
+
+## E-restore-submits
+
+- **Guarded element:** `round_driver.py` `_bounded_mismatch`, the loop `for item in items:` /
+  `_sync_reviewer_test(state, item["findingKey"], item["content"])` after `bounded["restores"] = items`. **Axis:**
+  B2's batch carries the test role's version the fixer commits, so its report passes the live submission check.
+- **Detector (expected red):** `plugins/superheroes/lib/tests/test_bounded_pass_b2_2554.py::test_t6_b2s_fold_records_the_restore_once_and_runs_the_gate_before_its_audits`
+- **Neutralization:** the element absent (the red was taken on the code before the fix, with the rebuilt test in
+  place).
+- **Raw red:**
+  ```
+  E       AssertionError: fix-without-break-it-test:tests/test_charge.py::retry charges twice@L1:test-bytes-differ
+  E       assert ('fix-without-break-it-test:tests/test_charge.py::retry charges twice@L1:test-bytes-differ' is None)
+  1 failed in 3.17s
+  ```
+- **Restore:** the fix added. **Added lines quoted:** `    for item in items:` and
+  `        _sync_reviewer_test(state, item["findingKey"], item["content"])`
+- **Raw green:** `1 passed in 3.17s`

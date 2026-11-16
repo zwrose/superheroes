@@ -6776,6 +6776,12 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         # axis: the bounded queue policy runs after ruling expansion and fix-group closure, so a Minor or Nit pulled in only as a fix-group sibling is context, never a target — see bite-proof record i2554_bounded_pass_b2
         filtered = _apply_bounded_queue_policy(state, filtered)
         if not filtered:
+            if keep_step_start and _step_holds_work(state, config, session_dir):
+                # a ruling emptied B2's pending slice after the step committed work: that work still folds and is audited
+                _decision(state, "fix-batch-held",
+                          "a ruling emptied the bounded pass's fix batch after the step committed fixes or edited the "
+                          "PR body — the slice stays, so that work folds, verifies and is audited")
+                return "held"
             return "empty"  # no target is left: no fix step runs, the caller settles
         cap = max(cap, len(filtered))  # the pass runs one fix step: the batch is never sliced
     if not filtered and not offered_nonempty:
@@ -6921,6 +6927,9 @@ def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_d
         state.pop("_fixQueue", None)
         state.pop("_fixBatchIndex", None)
         _enter_post_fix(state, config, session_dir=session_dir)
+    elif status == "empty" and _in_bounded_fix_step(state) and not state.get("terminal"):
+        # axis: a ruling that leaves B2's pending step no target clears the stale slice and settles the pass, never a fix step still queued — see bite-proof record i2554_bounded_pass_b2 (E-ruling-empties)
+        _settle_ruled_empty_bounded_fix(state, config, session_dir=session_dir)
     _sync_pending_after_ruling_reconcile(state)
     return status
 
@@ -10790,6 +10799,9 @@ def _bounded_mismatch(state, ids, targets_by_id, results):
                                   "withheld." % fault)
         return False
     bounded["restores"] = items
+    # axis: B2's batch carries the test role's version the fixer commits, so its report passes the live submission check — see bite-proof record i2554_bounded_pass_b2 (E-restore-submits)
+    for item in items:
+        _sync_reviewer_test(state, item["findingKey"], item["content"])
     return True
 
 
@@ -10845,6 +10857,19 @@ def _queue_bounded_fix(state, config, rows, session_dir=None):
     _decision(state, "bounded-pass-settled",
               "the bounded pass has no target left for its fix step: B1's discharges stand and what is left settles "
               "by the terminal settle's normal rule")
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+
+
+def _settle_ruled_empty_bounded_fix(state, config, session_dir=None):
+    """A ruling left B2's pending fix step no target and the step holds no work: the stale slice is cleared and the pass
+    settles through the one chokepoint, as a B2 batch with no target does (`_queue_bounded_fix`)."""
+    for key in ("_fixBatch", "_fixQueue", "_fixBatchIndex"):
+        state.pop(key, None)
+    state["boundedPass"]["step"] = BOUNDED_STEP_DONE
+    state["boundedPass"]["leftForOwner"] = []
+    _decision(state, "bounded-pass-settled",
+              "a ruling left the bounded pass's fix step no target: what is left settles by the terminal settle's "
+              "normal rule")
     _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
 
 

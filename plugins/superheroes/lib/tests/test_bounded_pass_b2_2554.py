@@ -436,9 +436,19 @@ def test_t6_a_b1_mismatch_takes_no_restore_step_and_no_second_test_the_restore_r
 
 
 def test_t6_b2s_fold_records_the_restore_once_and_runs_the_gate_before_its_audits(tmp_path):
+    # axis: B2's report that commits a source repair beside the restored test passes the live submission check, so
+    # the restore the pass carries can be submitted at all — see bite-proof record i2554_bounded_pass_b2
+    # (E-restore-submits)
     w = _bounded_world(tmp_path, "audit", CAP + 1)
     w.audit()
-    w.restore()  # the one apply-fixes step commits the reviewer's test; its fold is the ordinary fix fold
+    assert w.state["step"] == RD.P_APPLY_FIXES and w.state.get("_fixStepHead"), w.state.get("step")
+    w.write("src/repair.py", "def repaired():\n    return True\n")
+    w.write(TR.TEST_PATH, TR.ROLE_TEST)
+    sha = TR._commit(w.root, "repair the fix and restore the test")
+    report = {"fixes": [{"finding": w.key, "commit": sha}]}
+    detail, commits = RD._apply_fixes_commit_fault(w.state, w.cfg, report)
+    assert detail is None and commits == [{"finding": w.key, "commit": sha}], detail
+    w.fold(RD.P_APPLY_FIXES, report)  # the one apply-fixes step; its fold is the ordinary fix fold
     state = w.state
     assert state["step"] == RD.P_VERIFY and state["_verifyThen"] == RD.VERIFY_THEN_BOUNDED
     assert state["round"] == CAP + 1 and "restores" not in state["boundedPass"]
@@ -644,6 +654,28 @@ def test_t10_a_failing_verify_gate_in_b2_halts_and_runs_no_audits(tmp_path):
     final = X._state(d)
     assert terminal["payload"]["verdict"] == "halted" and final["decisions"][-1]["kind"] == "verify-fail"
     assert (RD.P_AUDITS, CAP + 2) not in trace and final["boundedPass"]["step"] == "fix"
+
+
+def test_t10_a_ruling_that_leaves_b2s_pending_step_no_target_settles_the_pass_and_clears_the_slice(tmp_path):
+    # axis: a ruling that leaves B2's pending step no target clears the stale slice and settles the pass, never a fix
+    # step still queued — see bite-proof record i2554_bounded_pass_b2 (E-ruling-empties)
+    d, n, _trace = B1._session(tmp_path, _by_round(B1_OPEN),
+                               stop=lambda n: (n["action"], n["round"]) == (RD.P_APPLY_FIXES, CAP + 1))
+    assert (n["action"], n["round"]) == (RD.P_APPLY_FIXES, CAP + 1), n
+    targets = [RD._fix_batch_row_key(row) for row in n["payload"]["batch"]]
+    assert len(targets) == 1 and targets[0], n["payload"]["batch"]
+    path = X.TOC._write_rulings(tmp_path / "rulings.json", [
+        {"id": targets[0], "ruling": "out-of-scope", "reason": "belongs to the next milestone",
+         "followUp": X.TOC._follow_up()}])
+    out = RD.cmd_rule(d, path, "owner")
+    assert out.get("ok"), out
+    state = X._state(d)
+    assert state["terminal"] == "converged" and state["step"] == RD.P_TERMINAL, state.get("decisions")[-3:]
+    assert not state.get("_fixBatch") and "_fixQueue" not in state and not state.get("pending")
+    assert state["boundedPass"]["step"] == "done" and B1._kinds(state)[-2:] == ["bounded-pass-settled", "converged"]
+    assert "fix" not in state["rounds"][str(CAP + 1)], "no B2 fix step ran"
+    again = RD.cmd_next(d)
+    assert again["ok"] and again["action"] == RD.P_TERMINAL, again
 
 
 def test_t10_the_b1_only_pass_and_the_ordinary_session_are_unchanged(tmp_path):
