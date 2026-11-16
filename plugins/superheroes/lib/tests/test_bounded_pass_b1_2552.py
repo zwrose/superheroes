@@ -356,6 +356,43 @@ def test_a_saved_state_inside_a_real_bounded_pass_is_not_handed_back_on_load(tmp
     assert not X._state(d).get("terminal")
 
 
+# --- owner guidance no fixer received holds the pass open --------------------------------------------
+
+def _guided_bounded_pass(tmp_path, ruled):
+    """A session stopped at the bounded pass's audits; with `ruled`, a guidance ruling on the round-1 finding
+    (fixed and audited long before, so outside the pass's audit targets) is recorded before the audits, which
+    then all discharge. The terminal `next` answer and the final state."""
+    d = _at_bounded_audits(tmp_path)
+    targets = RD._fix_batch_keys(X._state(d))
+    assert X._RULED_KEY not in targets, targets
+    if ruled:
+        path = X.TOC._write_rulings(tmp_path / "rulings.json", [
+            {"id": X._RULED_KEY, "ruling": "guidance", "reason": "the owner wants it handled this way",
+             "guidance": "keep the public signature as it is"}])
+        out = RD.cmd_rule(d, path, "owner")
+        assert out.get("ok"), out
+    n, trace = _run(d, None, _respond())
+    assert [a for a, rnd in trace if rnd > CAP] == [RD.P_AUDITS, RD.P_TERMINAL], trace
+    return n, X._state(d)
+
+
+def test_a_guidance_ruling_no_fixer_received_hands_the_bounded_pass_back_round_cap(tmp_path):
+    # axis: owner guidance recorded but never sent to a fixer holds the bounded pass open, so it hands back
+    # round-cap instead of converging — see bite-proof record i2552_bounded_pass_b1
+    _n, final = _guided_bounded_pass(tmp_path, ruled=True)
+    assert final["terminal"] == "handed-back", final.get("certification")
+    last = final["decisions"][-1]
+    assert last["kind"] == "round-cap", last
+    assert "owner guidance recorded but never sent to a fixer" in last["detail"], last
+    assert final["certification"]["shape"] is None
+
+
+def test_the_same_bounded_pass_without_the_ruling_converges(tmp_path):
+    _n, final = _guided_bounded_pass(tmp_path, ruled=False)
+    assert final["terminal"] == "converged", final.get("certification")
+    assert final["certification"]["shape"].startswith("bounded-pass")
+
+
 # --- the state holding both post-cap rounds ----------------------------------------------------------
 
 BOTH = "the session holds both an ordered extra audit round and a bounded pass"
