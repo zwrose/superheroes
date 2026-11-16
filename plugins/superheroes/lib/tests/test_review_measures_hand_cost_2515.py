@@ -73,3 +73,28 @@ def test_a_measured_pr_stays_measured_with_the_same_figures():
     assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0,
                                             "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
     assert RM.problems(row) == []
+
+
+def _psc(tokens, minutes, runs=1, partial=1, without=0, by_seat=None):
+    """A record's `sessionCost` with partial runs, the shape `test_partial_cost_2514._psc` builds: never complete."""
+    return dict(_sc(tokens, minutes, runs=runs, without=without, by_seat=by_seat), runsPartial=partial, complete=False)
+
+
+def test_partial_and_hand_written_prs_read_together_and_partial_never_exceeds_count():
+    # axis: a PR holding a partial session is never hand-written (it counts under count and partial), a hand-only PR adds nothing to partial, and partial never exceeds count
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2515_hand_cost.md
+    records = [
+        _rec(1),                                                     # PR 1: one complete session, measured
+        _rec(2, sc=_psc(100, 1.5)),                                  # PR 2: one partial session
+        _rec(3, sc=None),                                            # PR 3: no sessionCost key, hand-written
+        _rec(4, "s1", sc=_psc(100, 1.5)),                            # PR 4: a partial session ...
+        _rec(4, "s2", at=LATER, sc=None),                            # ... and a later one with no sessionCost key
+    ]
+    want = {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 2,
+            "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
+    for k in ("tokens", "minutes"):
+        got = left_out(*records, k=k)
+        assert got == want, k
+        assert got["partial"] <= got["count"], k
+    row = RM.compute(_full(records=records, ciRuns=CI), FROM, UNTIL)
+    assert RM.problems(row) == []
