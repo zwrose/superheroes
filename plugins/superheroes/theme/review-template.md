@@ -434,19 +434,24 @@ result; publish each listed path in `files`. A picture it could not copy shows a
 
 ### A changed PR
 
-A sheet republished for a new commit carries `previousCommit` and shows a heading and note saying the PR changed. An item's id
+A sheet built from records takes the PR's head commit and its CI from the input's `headNow` (the head and its CI as the vet read them at build time), never from a record, and the builder refuses a sheet without it. A sheet republished for a new commit carries `previousCommit` and shows a heading and note saying the PR changed. An item's id
 stays the same while its finding and its shown content do, so answers to unchanged items are kept. The
 verdict starts over, because its digest is new. That is a material republish.
 
 ### A carried PR
 
-When the PR moved but the move is not material (a bring-current from the base branch with no conflict,
-say), the advisor gives the builder `carriedForward` in its input: the earlier sheet's path (`fromSheet`),
-each covered PR's new head (`heads`), the `date`, what `moved`, and `whyNotMaterial`. The built sheet then
-carries `previousCommit` (the earlier sheet's commit) and `prSheet.carriedForward`, whose `sheets` lists
-the digest of the earlier sheet and then the digests that one carried, newest first. The sheet shows a
-dated Carried forward box in place of the changed box, and the answers to unchanged items are kept as for
+When the PR moved and the vet's head-coverage check covers the move, the advisor gives the builder
+`carriedForward` in its input: the earlier sheet's path (`fromSheet`), each covered PR's new head
+(`heads`, equal to its `headNow` commit), the `date`, what `moved`, and `whyNotMaterial`. The built sheet
+then carries `previousCommit` (the earlier sheet's commit) and `prSheet.carriedForward`, whose `sheets`
+lists the digest of the earlier sheet and then the digests that one carried, newest first. A carried
+sheet shows neither a carried box nor the changed box, and the answers to unchanged items are kept as for
 any republish.
+
+When the check does not cover the move, `pr_sheet.py hold` writes the published sheet again with
+`prSheet.held` true and no cards. The page shows one notice and no controls, no verdict is read for it,
+and `pr_state` reads the PR as `being-fixed`. When the PR is READY again the advisor republishes an
+ordinary sheet with `previousCommit`.
 
 Its verdict is read through that chain, by one rule that the page and the index's row both follow: take the
 first digest, from the sheet's own and then `sheets` in order, under which the store holds any verdict

@@ -85,8 +85,8 @@ its advisor vet.
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
 Land its fix as the disclosed integration commit on the last open PR, or as the disclosed
 follow-up PR once the last lane has merged. Either way the merge rides a saved "Merge" verdict on
-its current sheet together with "done" (duty 6). A moved head keeps the word when the fix is not
-material (duty 6 and `owner-decisions.md` say how it is judged and republished), and a new
+its current sheet together with "done" (duty 6). A moved head keeps the word when the head-coverage
+check covers it (duty 6 and `owner-decisions.md` say how the sheet is republished), and a new
 follow-up PR gets its own sheet and asks through it. Report it in the thread like any merge.
 
 **The post-merge-only red.** A test green on the identical tree pre-merge can go
@@ -116,8 +116,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    saved "Merge" verdict: the whole stack, in order (the showrunner charter's **The word** in duty
    6). There is no prefix word, and no word narrows a stack. A layer linked onto the stack **after**
    its sheet was published is **outside** the word, and its arrival changes the stack, so the sheet
-   is replaced by an unsigned one. This is not a head move: a head move is judged by the
-   material-consequence line, while a newly linked layer is always outside the word.
+   is replaced by an unsigned one. This is not a head move: a head move is judged by the head-coverage
+   check, while a newly linked layer is always outside the word.
 
 3. **Immediately before the irreversible command, re-read remote membership** and compare **the
    sheet's list**, the whole stack, to the remote entries. Mismatch — a different order, a missing
@@ -205,9 +205,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 
    (g) **Re-pin and merge.** Re-pin each layer's receipt with the `repin` line `prove` printed
    (old head, new head, equal tree hash). Wait for CI green on every new head, selected by workflow
-   name plus head sha. Republish the stack's sheet carrying its verdict forward
-   (`carriedForward.fromSheet`, `heads` the new heads): a tree-proven straightening is not a
-   material move. Then **re-read membership again** (item 3's re-read, repeated after the push). The
+   name plus head sha. Run the head-coverage check and `outcome` for every layer on its new head
+   (item 6 says how a move is read and the sheet republished). Then **re-read membership again** (item 3's re-read, repeated after the push). The
    straightening moved every head, so the merge's `--sha` and the sheet comparison take the new
    heads from this second re-read. Then merge with item 5's command: `gh stack merge`, since `gh pr
    merge` refuses a stacked pull request, or `stack_merge.py merge` in a cloud session, which
@@ -286,39 +285,31 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    A bring-current is a **mechanical operation**. Each moved head takes a fresh remote-head check, CI
    on the new sha, and a receipt re-pinned to that sha **and to the digest of the pull request's
    diff** — `skills/showrunner/reference/vet-receipt.md` spine field 1 owns the digest and the command
-   that takes it. **Equal digest.** Re-pin the sha in place with a dated line, let CI run on the new
-   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff --remerge-diff
-   <base-before>..<head-before> <base-after>..<head-after>` to name the changed commits, where
-   **base-before** and **base-after** are the tip of the layer below before and after the
-   bring-current and **head-before** and **head-after** are the layer's head before and after. A
-   changed hunk takes the **mechanical non-semantic** path — CI and a disclosure
-   line, no reviewer — only when the change is mechanically non-semantic: whitespace, pure
-   formatting, a comment, or a line re-wrap that leaves the rule unchanged. A changed hunk takes this
-   file's existing union-fix floor — [Union fixes ride the last *open* PR,
-   disclosed](#union-fixes-ride-the-last-open-pr-disclosed) plus micro's review floor of one
-   cross-vendor reviewer, whose reading the review record shows — and not a new loop whenever it changes
-   **behavior-bearing content**: product code; a test's assertions or fixtures' expected values; or any
-   prose that states a rule a session or a gate follows. When it is **not clear** which side a hunk
-   falls on, it takes the reviewer floor.
+   that takes it.
 
-   Every bring-current, conflict-free or not, is judged by the material-consequence line before the
-   word is carried: a clean textual merge can still change the approved feature's behavior, for
-   instance when a lower layer changes a shared default an upper layer relies on without touching
-   that layer's diff, and the digest and review checks above do not establish that the owner
-   approved that consequence. Only when the judgment finds no material consequence is the stack's
-   single sheet republished carrying its verdict forward, with `carriedForward.fromSheet` naming its
-   previous revision and `heads` giving the new head of every PR the sheet covers, and the stack's
-   word stands. A move that is material, or in doubt, is republished unsigned, and doubt counts as
-   material.
+   **Every moved head is read by the head-coverage check**, conflict-free or not, with the base the
+   layer below's head. A layer is judged on its own diff and never waits on the layer below. Run
+   `lib/head_coverage.py check` and then `outcome` as the final-commit row of
+   `skills/showrunner/reference/vet-receipt.md` § The review record checks says, with `--sheet live`
+   and `--sheet-commit` the commit the published sheet describes. The outcome's `sheet` action decides
+   what happens to the sheet:
+
+   - `republish-carried`: republish the stack's single sheet with `carriedForward.fromSheet` naming its
+     previous revision and `heads` giving the new head of every PR the sheet covers. The answers and
+     the verdict carry, the sheet shows no note, and the stack's word stands.
+   - `take-down`: take the sheet down with `lib/pr_sheet.py hold --sheet <published sheet.json> --out
+     <file>` and publish that file. The word covers nothing while the sheet is held, and the PR goes
+     back for a returning-round review of the files the check lists.
+   - `republish-unsigned`: the sheet is held and the outcome is `READY` again. Republish an ordinary
+     sheet with `previousCommit` (the held sheet's commit): it shows "This PR changed", keeps the
+     answers to unchanged items, and asks for the verdict again.
+
+   A layer whose action is `take-down` takes down the stack's sheet.
 
    GitHub's cascading rebase (the server-side **Rebase stack** action for a lane; `gh stack rebase`
    + `gh stack push` only for a local tracked stack an operator owns end to end) is the disclosed
    alternative when a merge cannot resolve the conflict; it rewrites every commit of every affected
-   layer, so every affected layer's head moves. What each moved head then owes is decided by the
-   content pin: recompute the digest, and an **equal digest** re-pins the sha with a dated line and
-   lets CI run on the new head with nothing re-reviewed, while an **unequal digest or
-   `digest-unavailable`** takes the branch the pin defines
-   (`skills/showrunner/reference/vet-receipt.md` spine field 1). Never a hand-rebase or force-push of
+   layer, so every affected layer's head moves. Each moved head is read by the check above. Never a hand-rebase or force-push of
    a layer under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md`
    § *Anti-patterns*). Item 4's merge-time straightening is not that path: it runs after the
    vet, in the advisor's own clone, and is tree-proven.
@@ -352,13 +343,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    removed layer's new base and head. GitHub retargets a removed layer to the stack's base and
    rebases it, so its head moves.
 
-   (2) **Identity check, for every removed layer.** Recompute the pull request's diff digest
-   (`skills/showrunner/reference/vet-receipt.md` spine field 1). **Equal digest** → the layer is
-   unchanged; go on. **Unequal, or `digest-unavailable`** → run `git range-diff --remerge-diff
-   <base-before>..<head-before> <base-after>..<head-after>` and grade each changed hunk as item 6
-   grades a bring-current: a mechanically non-semantic hunk takes CI and a disclosure line, and a
-   behaviour-bearing or unclear hunk takes the reviewer floor. A layer GitHub left conflicting goes
-   back to its builder for a bring-current merge (item 6) and then takes this identity check.
+   (2) **Coverage check, for every removed layer.** Run the head-coverage check and `outcome` on its
+   new head, with its new base's tip as `--base`, as item 6 says. A layer GitHub left conflicting goes
+   back to its builder for a bring-current merge (item 6) and then takes this check.
    That merge puts a merge commit back into the layer, and the base still has its queue, so the
    remaining layers go through item 4 (a) to (f) again, as a whole, before step 3;
    the heads that straightening proves are the ones steps 3 to 7 use.
@@ -367,9 +354,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 
    (4) **Re-pin** each moved layer's receipt to its new head with a dated line.
 
-   (5) **Carry the sheet forward.** Republish the stack's sheet with `carriedForward.fromSheet` and
-   `heads` the new heads when the identity check found no material consequence; otherwise republish
-   it unsigned (item 6's material-consequence line).
+   (5) **Act on the sheet.** Carry it, take it down, or republish it unsigned, as the `outcome`'s
+   `sheet` action says (item 6).
 
    (6) **Re-read membership** with item 3's invocation, compared this way, since the stack is now
    part merged: the members and their order still equal the sheet's list; the layers step 1 found

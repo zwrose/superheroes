@@ -39,6 +39,8 @@ reviewer ran. Those win over your account. A reviewer run counts as run by code 
 run record covers the final commit. A run only you report is marked "reported by the session", and so is
 every reviewer's findings coverage: the code holds no reviewer's findings, only the account and its raw files.
 
+The record certifies the session's own final commit, `finalCommit.sha`. `finalCommit.source` is `GitHub PR` when the PR head equals that commit, and `reported by the session; the PR head had moved past it` when the head had moved past it, in which case the record also carries the head it read as `headAtWrite`. It is `reported by the session` only when the PR could not be read, and the record then says so in what is left ("the final commit could not be read from the PR"). A reviewer row that only the session reports counts as run only when `finalCommit.source` is `GitHub PR`; otherwise it reads not run, and only an engine record can show that reviewer read the commit. The lane basis reads the certified commit's own changed files. Whether the commit covers the PR's head is the vet's check (`lib/head_coverage.py`), not the record's.
+
 The record's `ci` field holds `state`, `sha`, `source`, `workflow` and `read`: the state (`green`, `pending`, `red` or `none`), the commit it was read on, where it was read from, the declared CI workflow, and one line saying how the state was reached. `green` comes only from the project's declared CI workflow (configuration item 16, `ciWorkflow`, set through configure): its newest run per event on the final commit decides. With no workflow declared, green needs at least one GitHub Actions run on the final commit that succeeded and no run on that commit still unfinished; only runs of the final commit itself count. A project whose CI does not run on GitHub Actions never reads `green`, whether or not a workflow is named: its records read `none` once its checks finish clean, and `red` or `pending` while a check fails or runs, because green needs a GitHub Actions run. A declaration that cannot be read, or a declared workflow with no run on the commit, reads `none` and is named in what is left. Any failing check, status or workflow run reads `red`.
 
 The record's CI reading is shown on the merge sheet and is no part of the certificate: `whatIsMissing` holds no CI line, whatever the state. The vet and the merge read CI on the head themselves ([the vet receipt](../../showrunner/reference/vet-receipt.md)).
@@ -153,7 +155,7 @@ What comes from the session:
 - `reviewers`: one row per recorded review seat, with the commit that seat cited as the one it covered. A superseded attempt is left out and the highest attempt of a slot counts. A seat recorded missing is a reviewer that did not run, unless a later round ran the same seat. A seat the seat map marks same-family carries `notIndependent`. A session driven by hand `submit` journals no seat, so its reviewers are read from each panel round's seat status: a seat that ran is a reviewer that ran, a seat marked missing is one that did not (unless a later round ran it), and each reads "reported by the session" with no run directory. Its reviewers' raw outputs were not stored, so the account carries no raw findings files and its `checked` list says so.
 - `runDir`: a directory in `runDirs` is bound to the one seat whose recorded runner nonce equals the nonce in that directory's engine record. A directory that matches no seat or several, or cannot be read, is not used. A seat with no run directory reads "reported by the session".
 - `makers`: the extras' makers, plus the build session's family (source `build session's fixes`), since the build session is a maker of every fix it applies.
-- `finalCommit`: the fix-fold head when the session holds one, else the session's head.
+- `finalCommit`: the fix-fold head when the session holds one, else the session's head. The record certifies it.
 - `findings` and outcomes, from the disposition ledger and the live findings; `rawFindingsFiles`, each panel, seams-check and scoped-finder seat's findings payload, posted without the runner's telemetry.
 - `refused`: every finding a reviewer raised that the loop did not take in (the round's compile drops), each with its round, in round order.
 - `commandRefusals`: every refused or denied command recorded in a review round, each entry tagged with its round. The build session applies the fixes itself and no fix step reports refusals, so the part is empty for fixes. It is shown on the record, and in its summary's "Refusals met" line, only when there is at least one entry; `refused` lists findings the loop did not take in.
@@ -216,13 +218,12 @@ Refusals, before anything is posted:
 
 The record says reviewed only when all four hold: every finding in the account has an outcome and a
 reason, except as the next group says; no planned review is missing and a planned reviewer ran; no raw
-output file is unread; and the final commit was read from the PR. A reviewed record means the change is
+output file is unread; and the PR could be read for the final commit. A reviewed record means the change is
 low-risk to merge: every reviewer ran on this commit, the loop finished, and no Important or worse
 finding is open without a decision; the record shows it as: every planned review ran, and at least one planned reviewer's run covers the final commit; a reviewer listed for an earlier commit counts only for that commit. CI is no part of the certificate: the vet and the merge read it on the
 head themselves.
 At least one planned reviewer's run must cover the final commit. A reviewer listed for an earlier
-commit counts as run only for that commit, and the record shows which commit it covered; a head that
-moves after the last review round still reads not reviewed. A session whose final commit differs from the PR's final commit also reads not reviewed, because its outcomes belong to the other commit.
+commit counts as run only for that commit, and the record shows which commit it covered.
 Anything short of that is listed in what is left, except a listed finding (below), which adds no line.
 
 **Which findings are listed and which wait.** The record reads each finding by its severity, its `inRiskArea` stamp and its outcome:
