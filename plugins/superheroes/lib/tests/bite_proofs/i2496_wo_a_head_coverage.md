@@ -550,3 +550,21 @@ E       assert 'needs-review' == 'proven'
 1 failed, 18 deselected in 2.36s
 ```
 Restored by the inverse Edit; green is the full run of the six order files, `221 passed` (see the order's receipts).
+
+---
+
+## Added at the third review session, round 1: E-hunks (2026-11-16, typed and run by the build session)
+
+**guard:** `_qualification`, the loop over sections the diff shows beyond the asked paths now lists each qualifying section's hunks (`hunks.extend(...)`, commit 7d9ca83f; test made to reach the rename branch in 8d74a0aa), and `_check` adds those paths to `files` on a judgement.
+
+**neutralization:** the `hunks.extend(...)` line replaced by `pass`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k rests_on_a_source_path -q -p no:cacheprovider`
+```
+E       assert ('docs/guide.md' in [])
+1 failed, 19 deselected in 0.42s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `20 passed in 2.20s`.
+
+**Disclosure:** the first version of the test (commit 7d9ca83f) did not reach this branch: a one-line README moved over another file is not paired as a rename by git, so the source was an ordinary changed file and the neutralized run passed. The test was rebuilt with a 20-line prose source (8d74a0aa) before this red was recorded.
