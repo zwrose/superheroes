@@ -10881,12 +10881,16 @@ def _begin_stall_bounded_pass(state, config, breaker, session_dir=None):
 def _audit_failures(state, row):
     """Every failed audit of the finding `row` in the round records, oldest first: `{round, ruling, reasonKind, reason}`."""
     failed = []
+
+    def line_less(ident):  # an id minus its trailing `@L<digits>`: an audit at an earlier line is the same finding
+        return re.sub(r"@L\d+$", "", ident) if isinstance(ident, str) and ident else None
+
+    mine = line_less(row.get("id"))
     for rkey in sorted(state.get("rounds") or {}, key=_round_number):
         entries = state["rounds"][rkey].get("audits") if isinstance(state["rounds"][rkey], dict) else None
         for audit in entries if isinstance(entries, list) else []:
             if (isinstance(audit, dict) and audit.get("ruling") not in audits._CLEARS
-                    and (audit.get("id") == row.get("id")
-                         or circuit_breaker.audit_target_aliases(audit) & circuit_breaker.audit_target_aliases(row))):
+                    and mine is not None and line_less(audit.get("id")) == mine):
                 failed.append({"round": _round_number(rkey), "ruling": audit.get("ruling"),
                                "reasonKind": audit.get(audits.AUDIT_REASON_KIND_FIELD), "reason": audit.get("reason")})
     return failed

@@ -73,12 +73,15 @@ def _reviewer(findings):
     return reviewer
 
 
-def _failing_fix_seams(findings):
-    """Every fix fails its audit: the PLAUSIBLE blockers are fixed, never discharged."""
+def _failing_fix_seams(findings, batches=None):
+    """Every fix fails its audit: the PLAUSIBLE blockers are fixed, never discharged. `batches`, when given, collects
+    each batch the fixer receives."""
     counter = {"n": 0}
 
     def fix_step(batch, rnd, payload):
         counter["n"] += 1
+        if batches is not None:
+            batches.append([dict(row) for row in batch])
         return {"fixes": [], "headDiff": TRD._headf(counter["n"]), "changedSubjects": ["Code"]}
 
     def plausible(clusters, rnd):
@@ -125,29 +128,40 @@ def test_t1_a_loop_through_a_tradeoff_blocker_and_an_audit_stall_never_leaves_th
     assert state["terminal"] == "handed-back"
     kinds = _kinds(state)
     assert "owner-choice-held" in kinds and "self-recovery" in kinds, kinds  # both paths were walked
-    assert kinds[-1] == "fix-keeps-failing", kinds
+    assert kinds[-1] == "owner-choice-open", kinds  # the stall's bounded pass ran, and the held choice is still open
+    assert "bounded-pass-begun" in kinds and kinds.index("bounded-pass-begun") > kinds.index("self-recovery"), kinds
     assert RD.P_APPLY_FIXES in seen and RD.P_AUDITS in seen
     assert [a for a in seen if not _is_allowed(a)] == []
 
 
 # --- T2 / E1: a stall after the recovery attempt hands back ------------------------------------
 
-def test_t2_a_fix_that_keeps_failing_gets_one_recovery_then_is_handed_back(monkeypatch):
-    # axis: a stall with selfRecovered already true ends handed-back, never held or stalled
+def test_t2_a_fix_that_keeps_failing_gets_one_recovery_then_the_bounded_pass(monkeypatch):
+    # axis: a stall with selfRecovered already true gets one bounded pass, never a second recovery, held or stalled
     seen, fixer_orders = _spy_actions(monkeypatch)
+    batches = []
     _result, state = TRD._run_loop_capturing_state(
-        _failing_fix_seams([_BUG]), _cfg_scoped_finder_seated(maxRounds=20))
-    assert state["terminal"] == "handed-back"
+        _failing_fix_seams([_BUG], batches), _cfg_scoped_finder_seated(maxRounds=20))
+    assert state["terminal"] == "converged"
     assert state["terminal"] not in ("held", "stalled")
-    assert state["decisions"][-1]["kind"] == "fix-keeps-failing"
-    assert _kinds(state).count("self-recovery") == 1
+    kinds = _kinds(state)
+    assert kinds.count("self-recovery") == 1 and "fix-keeps-failing" not in kinds
+    assert kinds[kinds.index("self-recovery") + 1:].count("bounded-pass-begun") == 1, kinds
+    assert state["boundedPass"]["trigger"] == "fix-keeps-failing"
     assert state["selfRecovered"] is True
     assert 0 in fixer_orders and fixer_orders[-1] == 1, fixer_orders  # a fixer order followed the recovery
+    assert fixer_orders.count(1) == 2, fixer_orders  # the recovery's batch, then the pass's one more
+    stuck_rows = [row for row in batches[-1] if RD._finding_identity_key(row) == _BUG_KEY]
+    assert len(stuck_rows) == 1 and stuck_rows[0]["auditFailures"], batches[-1]
     assert [a for a in seen if a.startswith("present-")] == []
     assert [a for a in seen if not _is_allowed(a)] == []
-    assert state["certification"]["shape"] is None and state["certification"]["reason"]
+    assert state["certification"]["shape"].startswith("bounded-pass"), state["certification"]  # `-degraded` here
     ledger = _ledger(state)
     assert ledger and all(row.get("disposition") for row in ledger.values()), ledger  # every finding has an outcome
+    last_round = max(state["rounds"], key=int)
+    last_ruling = state["rounds"][last_round]["audits"][-1]["ruling"]
+    assert ledger[_BUG_KEY]["disposition"] == "left-for-owner"
+    assert ledger[_BUG_KEY]["boundedPassEvidence"]["audit"]["ruling"] == last_ruling, ledger[_BUG_KEY]
     assert state.get("settleSkipped") is None
 
 
@@ -336,13 +350,14 @@ def _stopped_at_cap(tmp_path, terminal, decisions):
     return RS.account_from_session(s.save(), TRRS.extras())["rounds"]["stoppedAtCap"]
 
 
-def test_t6_the_hand_backs_of_t2_and_t3_did_not_stop_at_the_cap(tmp_path):
-    # axis: stoppedAtCap reads the hand-back's own cause — a "cap" terminal state alone is not a stop at the cap
+def test_t6_the_stall_pass_and_the_held_choice_did_not_stop_at_the_cap(tmp_path):
+    # axis: stoppedAtCap reads the session's own ending — a "cap" terminal state alone is not a stop at the cap
     _r, stalled = TRD._run_loop_capturing_state(
         _failing_fix_seams([_BUG]), _cfg_scoped_finder_seated(maxRounds=20))
     _r, choice = TRD._run_loop_capturing_state(
         TRD._seams(reviewer=_reviewer([_CHOICE])), TRD._cfg_cert())
-    assert stalled["decisions"][-1]["kind"] == "fix-keeps-failing"
+    assert stalled["decisions"][-1]["kind"] == "converged"
+    assert stalled["boundedPass"]["trigger"] == "fix-keeps-failing"
     assert choice["decisions"][-1]["kind"] == "owner-choice-open"
     assert _stopped_at_cap(tmp_path / "stalled", stalled["terminal"], stalled["decisions"]) is False
     assert _stopped_at_cap(tmp_path / "choice", choice["terminal"], choice["decisions"]) is False

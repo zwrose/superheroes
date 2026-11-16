@@ -250,6 +250,19 @@ def test_t4_a_pass_that_finds_a_fix_record_in_round_r_is_a_fault_of_the_pass(tmp
     assert not [row for row in trace if row[0] == RD.P_APPLY_FIXES and row[1] == final["round"]]
 
 
+def test_t4_the_stuck_findings_failed_audits_of_two_rounds_the_second_at_another_line_are_all_in_its_row_oldest_first():
+    state = RD.new_state(TRD._cfg(maxRounds=STALL_CAP))
+    state["rounds"] = {
+        "3": {"audits": [{"id": "a.py::late@L10", "ruling": "not-discharged", "reasonKind": "wrong", "reason": "first"},
+                         {"id": "a.py::other@L10", "ruling": "not-discharged", "reasonKind": "wrong", "reason": "x"}]},
+        "2": {"audits": [{"id": "a.py::late@L12", "ruling": "discharged", "reason": "cleared"}]},
+        "4": {"audits": [{"id": "a.py::late@L14", "ruling": "not-discharged", "reasonKind": "wrong", "reason": "second"}]},
+    }
+    failures = RD._audit_failures(state, {"id": "a.py::late@L14", "title": "late"})
+    assert [(f["round"], f["reason"]) for f in failures] == [(3, "first"), (4, "second")], failures
+    assert RD._audit_failures(state, {"title": "no id"}) == []
+
+
 def test_t4_a_stall_in_the_cap_round_keeps_the_round_cap_hand_back_with_no_recovery_and_no_pass():
     state = RD.new_state(TRD._cfg(maxRounds=CAP))
     state["round"] = CAP
