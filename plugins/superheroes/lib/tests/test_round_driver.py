@@ -6289,9 +6289,18 @@ def _rearm_forever_seams():
     return seams
 
 
-def test_clean_rearm_forever_halts_at_round_cap(tmp_path):
+def _bounded_pass_off(monkeypatch):
+    """The cap hand-back as the release before the bounded pass made it: for the tests that pin the boundary
+    itself, a cap round whose fixer changed the head is handed back `round-cap`, not given a pass."""
+    monkeypatch.setattr(RD, "_begin_bounded_pass",
+                        lambda state, config, trigger: RD._cap_blocks(
+                            state, config, state["round"] + 1, "post-verify-advance"))
+
+
+def test_clean_rearm_forever_halts_at_round_cap(tmp_path, monkeypatch):
     """DoD headline: clean audits + fresh blocker every review round hands back at the cap."""
     # axis: the ROUND BOUNDARY — a round above the cap never begins (not: the cap round's findings)
+    _bounded_pass_off(monkeypatch)
     cap = 4
     seams = _rearm_forever_seams()
     result = RD.run_loop(seams, _cfg_cert(maxRounds=cap))
@@ -6302,9 +6311,10 @@ def test_clean_rearm_forever_halts_at_round_cap(tmp_path):
     assert cap in leg_rnds["verify"]
 
 
-def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path):
+def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path, monkeypatch):
     """A library-path cap below the default binds: no round past it begins."""
     # axis: the ROUND BOUNDARY — rounds reached N and round N+1 not begun are separate facts
+    _bounded_pass_off(monkeypatch)
     seams = _rearm_forever_seams()
     result = RD.run_loop(seams, _cfg_cert(maxRounds=3))
     assert result["verdict"] == "handed-back"
@@ -6555,12 +6565,12 @@ def _round_counter_mutation_sites():
 
 def test_round_counter_mutation_sites_census():
     """state['round'] is written only by _advance_round on the advance path and by
-    _begin_extra_audit_round for the one extra audit round."""
-    # axis: only the two writers, the advance path and the extra audit round, may mutate state['round'] — dict literals in new_state are construction
+    _begin_post_cap_round for the one post-cap round (the ordered extra audit round or the bounded pass)."""
+    # axis: only the two writers, the advance path and the post-cap round, may mutate state['round'] — dict literals in new_state are construction
     sites = _round_counter_mutation_sites()
     assert len(sites) >= 1, "expected at least one state['round'] mutation site"
     writers = {func for func, _lineno in sites}
-    expected = {"_advance_round", "_begin_extra_audit_round"}
+    expected = {"_advance_round", "_begin_post_cap_round"}
     extra = writers - expected
     missing = expected - writers
     assert writers == expected, (

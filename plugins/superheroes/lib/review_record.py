@@ -78,6 +78,8 @@ PARTS_SCHEMA = "review-record-parts/1"
 EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
 _RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
+# What began a bounded pass: the round cap kept with fixes no audit had checked, or a fix that kept failing its audit
+BOUNDED_PASS_TRIGGERS = ("round-cap", "fix-keeps-failing")
 # Why a reviewer run with a runner nonce has no bound run folder (`unboundRuns`): `not-in-extras` — no listed folder names
 # the nonce and every listed folder read and named a run of this session; `unmatched` — two listed folders claim the nonce,
 # or no folder names it while some listed folder could not be read or named no nonce of this session's runs.
@@ -1061,6 +1063,13 @@ def _validate(a):
         extra = rounds["extraAudit"]
         # axis: the extra audit round is said with a reason and nothing else — see bite-proof record c1l1_wo_a_record_seam
         chk(isinstance(extra, dict) and set(extra) == {"why"} and _nb(extra["why"]), "rounds.extraAudit")
+    if "boundedPass" in rounds:
+        bounded = rounds["boundedPass"]
+        # axis: the bounded pass is said with its trigger and its rounds and nothing else — see bite-proof record i2552_bounded_pass_b1
+        chk(isinstance(bounded, dict) and set(bounded) == {"trigger", "rounds"}
+            and bounded["trigger"] in BOUNDED_PASS_TRIGGERS
+            and isinstance(bounded["rounds"], list) and bool(bounded["rounds"])
+            and all(isinstance(n, int) and not isinstance(n, bool) for n in bounded["rounds"]), "rounds.boundedPass")
     if "rerunChecks" in a:
         fault = _items_fault(a["rerunChecks"], _rerun_fault)
         # axis: a re-run check holds the first failure and the one re-run, two runs, each with a coherent status — see bite-proof record c1l1_wo_a_record_seam
@@ -2855,6 +2864,15 @@ def _extra_audit_line(rounds, compact):
             f"rounds: {why}.")
 
 
+def _bounded_pass_line(rounds):
+    bounded = rounds.get("boundedPass") if isinstance(rounds, dict) else None
+    if not isinstance(bounded, dict):
+        return None
+    cap = rounds.get("cap")
+    return (f"Bounded pass: the cap round's fixes were audited in round {', '.join(str(n) for n in bounded.get('rounds') or [])}, "
+            f"which is not counted in the {f'{cap} ' if cap is not None else ''}rounds.")
+
+
 # the not-run reason break_it.py (REASON_TRANSIT_REDACTED) stamps on a test whose text carries a transit redaction placeholder; spelled here because this module does not import break_it
 _TRANSIT_REDACTED_REASON = "transit-redacted"
 
@@ -3164,6 +3182,7 @@ def _summary(r, level):
         who = [roles_line, *_reviewer_bullets(r)]
     rounds_line = _rounds_line(r.get("rounds"))
     extra_audit_line = _extra_audit_line(r.get("rounds"), compact)
+    bounded_pass_line = _bounded_pass_line(r.get("rounds"))
     rerun_line = _rerun_line(r.get("rerunChecks"), compact)
     findings_lines = _findings_lines(r.get("findings"), compact)
     outside_lines = _outside_lines(r.get("outsideThisPR"), compact)
@@ -3195,6 +3214,7 @@ def _summary(r, level):
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         *([rounds_line] if rounds_line else []),
         *([extra_audit_line] if extra_audit_line else []),
+        *([bounded_pass_line] if bounded_pass_line else []),
         *([rerun_line] if rerun_line else []),
         *([_refused_line(refused, compact)] if refused else []),
         *([refusals_line] if refusals_line else []),

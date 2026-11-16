@@ -463,9 +463,13 @@ The reviewer that, in every round after the first, checks each fix the build ses
 
 The reviewer that, in every round after the first, looks for new problems only in the code the fixes touched, never in the rest of the change. It is given the fixes' own diff and nothing else of the change, and a copy proven identical to its source is left out of it. What it raises is graded by the [verifier](#verifier) like a first-round finding. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md).
 
+### Bounded pass
+
+The review loop's one round past the 4-round cap, entered on its own when the cap round queued a fix batch and applied work (reported fixes, fix commits, a changed PR-body fix or a head diff that changed in the cap round). It audits only those fixes, runs no panel and no new search, and ends converged `bounded-pass` or handed back. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-bounded-pass).
+
 ### Extra audit round
 
-The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
+The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. A cap with unaudited fixes enters the [bounded pass](#bounded-pass) instead, so the order applies only to a session already handed back that way. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
 
 ### Slice
 

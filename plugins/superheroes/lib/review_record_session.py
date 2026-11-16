@@ -77,7 +77,7 @@ UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an earlier version wrote
 _HANDED_BACK = "handed-back"
-_HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
+_HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open", "bounded-pass-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED)
 # the source names the driver gives an outside hit raised outside the panel, read from their one home in
 # session_contract (the driver reads the same); a panel seat's hit is named by the seat itself
@@ -1726,12 +1726,21 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     extra = state.get("extraAudit")
+    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
+    bounded_rounds = bounded.get("rounds") if bounded and isinstance(bounded.get("rounds"), list) else []
+    # a converged bounded pass kept the cap: its trigger was the round cap
+    capped = capped or bool(abandoned is None and state["terminal"] == "converged" and bounded
+                            and bounded.get("trigger") == "round-cap")
     # the copies the proof still covers in the head diff the reviewers were last given: none whose section changed
     proven_copies = countable_lines.still_proven(
         state.get("provenCopies") or [], state.get("headDiff") or state.get("reviewedDiff"))
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
-    counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
+    # axis: every round the bounded pass lists is labelled, never counted, and a round both labels name is left out once — see bite-proof record i2552_bounded_pass_b1
+    post_cap = {str(n) for n in bounded_rounds if _int(n)}
+    if isinstance(extra, dict):
+        post_cap.add(str(extra.get("round")))
+    counted = len(rounds) - len(post_cap & set(rounds))
     uncertified = None
     # axis: a session that ended on any terminal but converged carries the terminal and the driver's reason, so its record never reads reviewed — see bite-proof record i2395_uncertified_record
     if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:
@@ -1749,7 +1758,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             "rounds": {"count": counted, "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {}),
-                       **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
+                       **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {}),
+                       **({"boundedPass": {"trigger": bounded.get("trigger"), "rounds": list(bounded_rounds)}}
+                          if bounded else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
             **({"sliceRecoveries": _stamped_recoveries(state, meta)} if "sliceRecoveries" in state else {}),
