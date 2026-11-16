@@ -282,10 +282,12 @@ def _section_qualifies(section, run=None, x=None, head=None):
     return _lexically_insignificant(run, x, head, section)
 
 
-def _qualification(run, x, head, files):
+def _qualification(run, x, head, files, sources=()):
     """``(qualifies, hunks, why text)`` for ``files`` read as ``git diff X head``: every file must be shown by git and
-    every section of it must qualify."""
-    code, text = run(["diff", *returning_review._DIFF_ARGS, x, head, "--", *files])
+    every section of it must qualify. ``sources`` are the rename and copy source paths of ``files``, read with them
+    so that git shows a move as a move."""
+    # axis: a rename's source path is part of the diff the check reads, so a move is never shown as an added file — see bite-proof record i2496_wo_a_head_coverage (E-rename)
+    code, text = run(["diff", *returning_review._DIFF_ARGS, x, head, "--", *files, *[s for s in sources if s not in files]])
     if code != 0:
         return False, [], "git could not produce the diff from the certified commit to the head"
     sections = countable_lines.parse_sections(text)
@@ -369,12 +371,20 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     if changed is None:
         return _needs_review(result, WHY_DIFF_UNREADABLE,
                              "git could not produce the diff of the certified commit or of the head against the base")
-    files = changed[0]
+    files, sources = changed
 
     # 5. the reconstruction proof
     remaining = []
     modes = {path: (_mode(run, x, path), _mode(run, head, path)) for path in files}
+    # A file the change renames or copies from another path, and that X does not hold yet (or whose mode at X git
+    # could not read), was moved after the review: it is never reconstructed or proven by a copy, and its source paths
+    # are read with it.
+    moved = {path for path in files if sources.get(path) and not _real_mode(modes[path][0])}
     for path in files:
+        # axis: a renamed or copied file is never reconstructed and never dropped as a copy, since its path is behaviour — see bite-proof record i2496_wo_a_head_coverage (E-rename)
+        if path in moved:
+            remaining.append(path)
+            continue
         # axis: a file whose mode differs between X and the head is never reconstructed, since equal bytes are not an equal file — see bite-proof record i2496_wo_a_head_coverage (E-mode)
         # a mode git could not read (None) and a file that is not in a tree (ABSENT) are no mode: two equal real modes only
         same_mode = _real_mode(modes[path][0]) and _real_mode(modes[path][1]) and modes[path][0] == modes[path][1]
@@ -392,9 +402,9 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         # A copy proves bytes only: a copied file keeps its mode at X (two equal real modes), or is new (ABSENT at X,
         # git exited 0 and listed nothing) and plain (100644) at the head. A mode git could not read (None) keeps the
         # file changed.
-        wanted = {path for path in remaining
-                  if (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
-                  or (modes[path][0] is ABSENT and modes[path][1] == "100644")}
+        wanted = {path for path in remaining if path not in moved and (
+                  (_real_mode(modes[path][0]) and modes[path][0] == modes[path][1])
+                  or (modes[path][0] is ABSENT and modes[path][1] == "100644"))}
         for entry in valid:
             if entry["file"] in wanted and entry["file"] not in {c["file"] for c in result["copies"]}:
                 result["copies"].append({"file": entry["file"], "source": entry["source"], "sha256": entry["sha256"]})
@@ -414,7 +424,8 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         return result
 
     # 8. judgement or a review owed
-    qualifies, hunks, reason = _qualification(run, x, head, remaining)
+    qualifies, hunks, reason = _qualification(run, x, head, remaining,
+                                              sorted(set().union(*(sources.get(p, set()) for p in remaining))))
     commits = _authors(run, base, x, head)
     builder = builder_author.strip().lower() if isinstance(builder_author, str) and builder_author.strip() \
         else _author_email(run, x)

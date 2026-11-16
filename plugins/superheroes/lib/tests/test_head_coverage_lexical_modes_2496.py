@@ -7,9 +7,11 @@ L1  a comment-looking line inside a Python triple-quoted string is data: changin
 L2  a real Python comment change still reads judgement;
 L3  a comment in a language with no lexer here (YAML) reads needs-review;
 M3  a mode read git failed is not an absent file: a copy proof never drops a file whose mode could not be read;
-L4  every line inside an f-string, debug or not, is significant: a blank line added inside one reads needs-review.
+L4  every line inside an f-string, debug or not, is significant: a blank line added inside one reads needs-review;
+R1  a rename after review, even to a prose name, reads needs-review; a rename the review already read does not block
+    a later prose edit.
 
-Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex, E-mode-read, E-fstring)
+Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex, E-mode-read, E-fstring, E-rename)
 """
 import hashlib
 import os
@@ -158,3 +160,29 @@ def test_a_yaml_comment_change_reads_needs_review(tmp_path):
     repo.commit("reword the yaml note")
     got = HC.check(repo.root, base, earlier, repo.git("rev-parse", "HEAD"))
     assert got["answer"] == "needs-review" and got["files"] == [ci], got
+
+
+@pytest.mark.parametrize("dest", ["shared.md", "docs/shared.txt"])
+def test_a_rename_after_review_to_a_prose_name_reads_needs_review(tmp_path, dest):
+    # axis: a renamed file is never reconstructed, copy-proven or read as an added prose file — see bite-proof record i2496_wo_a_head_coverage (E-rename)
+    repo = TR.Repo(tmp_path)
+    base, reviewed, earlier = TR.returning(repo)
+    os.makedirs(os.path.join(repo.root, os.path.dirname(dest) or "."), exist_ok=True)
+    repo.git("mv", SHARED, dest)
+    head = repo.commit("move the shared module to a prose name")
+    got = HC.check(repo.root, base, earlier, head)
+    assert got["answer"] == "needs-review" and dest in got["files"] and got["reconstructed"] == [], got
+
+
+def test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement(tmp_path):
+    repo = TR.Repo(tmp_path)
+    base = repo.git("rev-parse", "main")
+    os.makedirs(os.path.join(repo.root, "docs"), exist_ok=True)
+    repo.git("mv", "README.md", "docs/README.md")
+    repo.write("src/app.py", TR.numbered("app", 10))
+    reviewed = repo.commit("first leg, with a move the review reads")
+    earlier = TR.earlier_record(reviewed)
+    repo.write("docs/README.md", "readme\nmore\n")
+    head = repo.commit("docs")
+    got = HC.check(repo.root, base, earlier, head)
+    assert got["answer"] == "judgement" and got["files"] == ["docs/README.md"], got
