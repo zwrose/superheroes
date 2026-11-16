@@ -76,7 +76,8 @@ def _leftovers(record):
     out = []
     for name in left:
         # axis: a leftForOwner entry is matched to a finding that waits for the owner, by the record's one predicate; a listed finding is never asked for, a no-outcome risk-area Minor is — see bite-proof record i2493_wo1_record (E-accept)
-        held = [f for f in findings if review_record.waits_for_owner(f, findings) and review_record._name(f) == name]
+        # axis: a stored entry may name a no-outcome Minor or Nit repeat another card now holds (an earlier record listed it as waiting); it stays readable and asked for — see bite-proof record i2531_cards (e7)
+        held = [f for f in findings if review_record.card_shaped(f) and review_record._name(f) == name]
         # axis: a leftForOwner entry that is not a non-empty string, or names no left-for-owner finding, is unreadable
         if not (isinstance(name, str) and name.strip() and held):
             raise Unreadable("leftForOwner entry %r names no finding left for the owner" % (name,))

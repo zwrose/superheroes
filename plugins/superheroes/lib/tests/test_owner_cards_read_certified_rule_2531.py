@@ -130,6 +130,20 @@ def test_the_carry_rule_admits_a_no_outcome_minor_card_another_card_holds():
     assert rr.carry_refusal(prior, sha, "/r", "b" * 40, "c" * 40, [], decide) == "an earlier finding is still open"
 
 
+def test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check():
+    import leftover_accepting as la
+
+    holder = dict(_f("k1"), title="Slow retry")
+    again = dict(_repeat(_f("k2", outcome=None), "k1"), title="Slow retry again")
+    # an earlier writer listed both as waiting; the repeat is held now, but the stored list still names it
+    rec = {"ok": True, "findings": [holder, again], "leftForOwner": ["k1", "k2"]}
+    # break-it: matching a stored entry only to a waiting finding raises Unreadable here, so handback is refused
+    assert la.missing(rec, "") == [{"id": "k1", "title": "Slow retry"}, {"id": "k2", "title": "Slow retry again"}]
+    listed = dict(again, inRiskArea=False)
+    with pytest.raises(la.Unreadable):
+        la.missing({"ok": True, "findings": [holder, listed], "leftForOwner": ["k1", "k2"]}, "")
+
+
 def test_the_merge_sheet_builds_with_a_no_outcome_minor_card_another_card_holds_and_shows_one_card():
     from test_pr_sheet import WORDS, build
     from test_pr_sheet_fixed_above_2332 import pr_input, record
