@@ -345,3 +345,32 @@ def test_render_report_card_benched_and_below_floor():
     assert "dup is benched" in md
     assert "still gathering evidence" in md
     assert "hotspot is active" not in md
+
+
+def _card_entry(**extra):
+    entry = {
+        "adjudicated": 11, "for": 11, "against": 0, "actionability": 1.0, "sweeps": 3,
+        "benched": False,
+        "reason": "hotspot is active: 100% of its 11 adjudicated findings were useful, "
+                  "at or above the 90% bar.",
+    }
+    entry.update(extra)
+    return entry
+
+
+def test_render_report_card_shows_the_deferred_by_policy_count():
+    bundle = _sample_bundle()
+    bundle["reportCard"] = {"hotspot": _card_entry(deferred=8)}
+    md = gr.render(bundle, [], {"byId": {}})
+    assert ("- hotspot: 11 for / 0 against (100% actionability, sweeps=3), "
+            "8 deferred by policy") in md
+
+
+def test_render_report_card_line_is_unchanged_without_deferrals():
+    old_line = "- hotspot: 11 for / 0 against (100% actionability, sweeps=3)\n"
+    for extra in ({}, {"deferred": 0}):
+        bundle = _sample_bundle()
+        bundle["reportCard"] = {"hotspot": _card_entry(**extra)}
+        md = gr.render(bundle, [], {"byId": {}})
+        assert old_line in md
+        assert "deferred by policy" not in md

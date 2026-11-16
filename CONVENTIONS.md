@@ -177,7 +177,8 @@ pushes, edits code, or files issues.**
 
 The dispositions ledger record shape is defined in `guardian_ledger.LEDGER_RECORD_FIELDS`.
 The report card grades each lens from adjudicated outcomes (authoritative home:
-`guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals tracked each sweep (authoritative home:
+`guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`); a record flagged `deferredByPolicy`
+(`guardian_ledger.DEFERRED_BY_POLICY`) counts neither way and is shown as its own count. Vitals tracked each sweep (authoritative home:
 `guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
 `guardian_vitals.DRIFT_THRESHOLDS`).
 
