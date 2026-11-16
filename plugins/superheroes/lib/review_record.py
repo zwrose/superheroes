@@ -1054,11 +1054,16 @@ def _validate(a):
     if "sessionCost" in a:
         c, num = a["sessionCost"], lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0  # noqa: E731
         cnt = lambda v: _is_int(v) and v >= 0  # noqa: E731
-        chk(isinstance(c, dict) and set(c) == {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}, "sessionCost")
+        base_keys = {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}
+        chk(isinstance(c, dict) and set(c) in (base_keys, base_keys | {"runsPartial"}), "sessionCost")
         chk(cnt(c["tokens"]) and cnt(c["runs"]) and cnt(c["runsWithoutFigure"]) and num(c["minutes"]), "sessionCost")
         chk(c["runsWithoutFigure"] <= c["runs"], "sessionCost.runsWithoutFigure")
+        # axis: `runsPartial`, when written, is an int of one or more that with the runs lacking a figure fits the runs — see bite-proof record i2514_partial_cost
+        chk("runsPartial" not in c or (_is_int(c["runsPartial"]) and c["runsPartial"] >= 1
+                                      and c["runsWithoutFigure"] + c["runsPartial"] <= c["runs"]), "sessionCost.runsPartial")
         # axis: complete is true exactly when every run had a figure — see bite-proof record i2307_session_cost
-        chk(c["complete"] is (c["runsWithoutFigure"] == 0), "sessionCost.complete")
+        # axis: complete is also false when any run is partial — see bite-proof record i2514_partial_cost
+        chk(c["complete"] is (c["runsWithoutFigure"] == 0 and c.get("runsPartial", 0) == 0), "sessionCost.complete")
         seats = c["bySeat"]
         chk(isinstance(seats, dict) and all(_nb(k) and isinstance(v, dict) and set(v) == {"tokens", "minutes", "runs"}
                                            and cnt(v["tokens"]) and cnt(v["runs"]) and num(v["minutes"])
