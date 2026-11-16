@@ -569,8 +569,9 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     findings = prior.get("findings")
     # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
     # axis: the one exception is a no-outcome finding the record lists or holds as a card (a Minor or Nit), never an Important, Critical or unknown severity — see bite-proof record i2493_wo1_record (E-carry)
+    # axis: a no-outcome Minor or Nit card another card holds is admitted like the card that holds it — see bite-proof record i2531_cards (e5)
     if not (isinstance(findings, list) and all(
-            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or waits_for_owner(f, findings))
+            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or card_shaped(f))
             for f in findings)):
         return "an earlier finding is still open"
     try:
@@ -1054,11 +1055,16 @@ def _validate(a):
     if "sessionCost" in a:
         c, num = a["sessionCost"], lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0  # noqa: E731
         cnt = lambda v: _is_int(v) and v >= 0  # noqa: E731
-        chk(isinstance(c, dict) and set(c) == {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}, "sessionCost")
+        base_keys = {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}
+        chk(isinstance(c, dict) and set(c) in (base_keys, base_keys | {"runsPartial"}), "sessionCost")
         chk(cnt(c["tokens"]) and cnt(c["runs"]) and cnt(c["runsWithoutFigure"]) and num(c["minutes"]), "sessionCost")
         chk(c["runsWithoutFigure"] <= c["runs"], "sessionCost.runsWithoutFigure")
+        # axis: `runsPartial`, when written, is an int of one or more that with the runs lacking a figure fits the runs — see bite-proof record i2514_partial_cost
+        chk("runsPartial" not in c or (_is_int(c["runsPartial"]) and c["runsPartial"] >= 1
+                                      and c["runsWithoutFigure"] + c["runsPartial"] <= c["runs"]), "sessionCost.runsPartial")
         # axis: complete is true exactly when every run had a figure — see bite-proof record i2307_session_cost
-        chk(c["complete"] is (c["runsWithoutFigure"] == 0), "sessionCost.complete")
+        # axis: complete is also false when any run is partial — see bite-proof record i2514_partial_cost
+        chk(c["complete"] is (c["runsWithoutFigure"] == 0 and c.get("runsPartial", 0) == 0), "sessionCost.complete")
         seats = c["bySeat"]
         chk(isinstance(seats, dict) and all(_nb(k) and isinstance(v, dict) and set(v) == {"tokens", "minutes", "runs"}
                                            and cnt(v["tokens"]) and cnt(v["runs"]) and num(v["minutes"])
@@ -1662,26 +1668,33 @@ def listed_for_merge(f):
             and (f.get("outcome") == _LEFT_FOR_OWNER or f.get("outcome") not in rfs.OUTCOMES))
 
 
+def card_shaped(f):
+    """True when `f` would hold an owner card were no other finding to hold it: not listed for the merge verdict, and
+    left for the owner or a Minor or Nit with no outcome. `waits_for_owner` and `repeat_held_elsewhere` both read it."""
+    return (isinstance(f, dict) and not listed_for_merge(f)
+            and (f.get("outcome") == _LEFT_FOR_OWNER
+                 or (f.get("outcome") not in rfs.OUTCOMES and f.get("severity") in LISTED_SEVERITIES)))
+
+
 def waits_for_owner(f, findings):
     """True when `f` holds an owner card in the record: it is not listed for the merge verdict, no other finding of the
     record holds its card (`repeat_held_elsewhere`), and it is left for the owner, or is a Minor or Nit with no outcome
     (a no-outcome Minor or Nit in a risk area, or of unknown risk, is a card; an Important, Critical or unknown
     severity with no outcome is a missing outcome, not a card). The one reader of that rule."""
-    return (isinstance(f, dict) and not listed_for_merge(f) and not repeat_held_elsewhere(f, findings)
-            and (f.get("outcome") == _LEFT_FOR_OWNER
-                 or (f.get("outcome") not in rfs.OUTCOMES and f.get("severity") in LISTED_SEVERITIES)))
+    return card_shaped(f) and not repeat_held_elsewhere(f, findings)
 
 
 def repeat_held_elsewhere(f, findings):
-    """True when `f` is left for the owner and repeats another left-for-owner finding of the same record, which holds
-    the owner's one card. The one reader of that rule: the leftover line, the leftForOwner list and the sheet's card
-    all ask it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no
-    owner decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
+    """True when `f` would hold a card (`card_shaped`: left for the owner, or a no-outcome Minor or Nit card) and
+    repeats another card-shaped finding of the same record, which holds the owner's one card. The one reader of that
+    rule: the leftover line, the leftForOwner list, the sheet's card and the gardening pass's owner-card count all ask
+    it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no owner
+    decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
     # axis: a listed earlier finding holds no card, so a waiting repeat of it keeps its own — see bite-proof record i2493_wo1_record (E-repeat)
-    left = {_key(g): g for g in findings
-            if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER and not listed_for_merge(g)}
+    # axis: a no-outcome Minor or Nit card holds, and is held, like a left-for-owner card — see bite-proof record i2531_cards
+    left = {_key(g): g for g in findings if card_shaped(g)}
     own, held = _key(f), _repeat_key(f)
-    if f.get("outcome") != _LEFT_FOR_OWNER or held is None or held == own or held not in left:
+    if not card_shaped(f) or held is None or held == own or held not in left:
         return False
     seen = set()
     while held is not None and held not in seen:  # a ring of repeats holds nothing: each keeps its card

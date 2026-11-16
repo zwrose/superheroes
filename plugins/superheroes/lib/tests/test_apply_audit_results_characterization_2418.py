@@ -141,7 +141,12 @@ def _build_scenarios():
     s.append(_scenario("S19_unnamed_change_seq_not_an_int", [_target("t1")],
                        [_result("t1", unnamedChange=UNNAMED, unnamedChangeAllowedBySeq="1")]))
     s.append(_scenario("S20_claim_fault", [_target("t1")], [_result("t1", unnamedChangeFixes=[""])]))
-    s.append(_scenario("S21_discharged_unnamed_change_refused", [_claim_target("t1")],
+    # #2495: an unallowed, unattributed unnamed change on a target with no forbidding decision is a
+    # scope-only hold (it clears with a scope note); only a target whose own decision forbids it is refused.
+    s.append(_scenario("S21_discharged_unnamed_change_scope_held", [_claim_target("t1")],
+                       [_result("t1", unnamedChange=UNNAMED)]))
+    s.append(_scenario("S21b_discharged_unnamed_change_forbidden_refused",
+                       [_claim_target("t1", ownerRuling={"ruling": "guidance", "allowsChange": False})],
                        [_result("t1", unnamedChange=UNNAMED)]))
     s.append(_scenario("S22_discharged_attributed", [_claim_target("t1")],
                        [_result("t1", unnamedChange=" %s " % UNNAMED, unnamedChangeFixes=["m"],
@@ -151,7 +156,11 @@ def _build_scenarios():
                        [_result("t1", unnamedChange=UNNAMED, evidence="ran the suite")],
                        carry_fields=["marker"], change_allowed_ids=["t1"]))
     s.append(_scenario("S24_discharged_with_no_reason", [_target("t1")], [_result("t1", reason="   ")]))
-    s.append(_scenario("S25_new_issue_unnamed_change_refused", [_claim_target("t1")],
+    s.append(_scenario("S25_new_issue_unnamed_change_scope_held", [_claim_target("t1")],
+                       [_result("t1", ruling="discharged-but-new-issue", unnamedChange=UNNAMED,
+                                newIssues=[_issue("fresh")])]))
+    s.append(_scenario("S25b_new_issue_unnamed_change_forbidden_refused",
+                       [_claim_target("t1", ownerRuling={"ruling": "guidance", "allowsChange": False})],
                        [_result("t1", ruling="discharged-but-new-issue", unnamedChange=UNNAMED,
                                 newIssues=[_issue("fresh")])]))
     s.append(_scenario("S26_new_issue_attributed", [_claim_target("t1")],

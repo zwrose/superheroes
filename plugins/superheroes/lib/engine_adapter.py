@@ -1148,16 +1148,22 @@ def _codex_last_usage(stdout):
     return parsed_any, last_usage
 
 
-def codex_usage_tokens(stdout):
+def codex_usage_tokens(stdout, *, explicit=False):
     """Token total of the last turn.completed event that carries a dict usage, summed over _CODEX_TOKEN_PARTS; int or None.
 
     A part that is absent or None counts 0; any other part must be an int that is not a bool and is >= 0, else None.
-    None (never 0) also when no turn.completed carries a dict usage, or stdout is not a non-empty string. Never raises."""
+    None (never 0) also when no turn.completed carries a dict usage, or stdout is not a non-empty string. With
+    `explicit=True` it is also None when the last usage carries no token part whose value is an int (an empty usage, or
+    only absent or None parts): nothing was measured, so no figure. An explicit 0 part is still a measured figure.
+    Never raises."""
     try:
         if not isinstance(stdout, str) or not stdout:
             return None
         _, last_usage = _codex_last_usage(stdout)
         if last_usage is None:
+            return None
+        # axis: with explicit=True a usage carrying no int token part is no figure, never a measured zero — see bite-proof record i2514_partial_cost
+        if explicit and not any(isinstance(last_usage.get(part), int) for part in _CODEX_TOKEN_PARTS):
             return None
         total = 0
         for part in _CODEX_TOKEN_PARTS:
