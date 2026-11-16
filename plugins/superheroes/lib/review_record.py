@@ -563,8 +563,9 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     findings = prior.get("findings")
     # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
     # axis: the one exception is a no-outcome finding the record lists or holds as a card (a Minor or Nit), never an Important, Critical or unknown severity — see bite-proof record i2493_wo1_record (E-carry)
+    # axis: a no-outcome Minor or Nit card another card holds is admitted like the card that holds it — see bite-proof record i2531_cards (e5)
     if not (isinstance(findings, list) and all(
-            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or waits_for_owner(f, findings))
+            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or card_shaped(f))
             for f in findings)):
         return "an earlier finding is still open"
     try:
@@ -1648,7 +1649,7 @@ def listed_for_merge(f):
             and (f.get("outcome") == _LEFT_FOR_OWNER or f.get("outcome") not in rfs.OUTCOMES))
 
 
-def _card_shaped(f):
+def card_shaped(f):
     """True when `f` would hold an owner card were no other finding to hold it: not listed for the merge verdict, and
     left for the owner or a Minor or Nit with no outcome. `waits_for_owner` and `repeat_held_elsewhere` both read it."""
     return (isinstance(f, dict) and not listed_for_merge(f)
@@ -1661,20 +1662,20 @@ def waits_for_owner(f, findings):
     record holds its card (`repeat_held_elsewhere`), and it is left for the owner, or is a Minor or Nit with no outcome
     (a no-outcome Minor or Nit in a risk area, or of unknown risk, is a card; an Important, Critical or unknown
     severity with no outcome is a missing outcome, not a card). The one reader of that rule."""
-    return _card_shaped(f) and not repeat_held_elsewhere(f, findings)
+    return card_shaped(f) and not repeat_held_elsewhere(f, findings)
 
 
 def repeat_held_elsewhere(f, findings):
-    """True when `f` would hold a card (`_card_shaped`: left for the owner, or a no-outcome Minor or Nit card) and
+    """True when `f` would hold a card (`card_shaped`: left for the owner, or a no-outcome Minor or Nit card) and
     repeats another card-shaped finding of the same record, which holds the owner's one card. The one reader of that
     rule: the leftover line, the leftForOwner list, the sheet's card and the gardening pass's owner-card count all ask
     it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no owner
     decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
     # axis: a listed earlier finding holds no card, so a waiting repeat of it keeps its own — see bite-proof record i2493_wo1_record (E-repeat)
     # axis: a no-outcome Minor or Nit card holds, and is held, like a left-for-owner card — see bite-proof record i2531_cards
-    left = {_key(g): g for g in findings if _card_shaped(g)}
+    left = {_key(g): g for g in findings if card_shaped(g)}
     own, held = _key(f), _repeat_key(f)
-    if not _card_shaped(f) or held is None or held == own or held not in left:
+    if not card_shaped(f) or held is None or held == own or held not in left:
         return False
     seen = set()
     while held is not None and held not in seen:  # a ring of repeats holds nothing: each keeps its card

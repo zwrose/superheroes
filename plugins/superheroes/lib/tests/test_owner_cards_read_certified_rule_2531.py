@@ -112,3 +112,32 @@ def test_a_listed_minor_leaves_a_reviewed_record_clean():
 
 def test_raised_by_constant_is_gone():
     assert not hasattr(RM, "RAISED_BY")
+
+
+# --- the readers that admit a no-outcome finding (review round 1, finding v0) -------------------------------------------
+
+def test_the_carry_rule_admits_a_no_outcome_minor_card_another_card_holds():
+    def decide(*args, **kwargs):
+        return {"read": rr.returning_review.READ_CHANGED, "changedFiles": [], "why": []}
+
+    sha = "a" * 40
+    holder, again = _f("k1"), _repeat(_f("k2", outcome=None), "k1")
+    prior = {"finalCommit": {"sha": sha}, "findings": [holder, again],
+             "reviewers": [{"name": "r", "ran": rr.RAN_ENGINE_RECORD, "coversFinalCommit": True}]}
+    # break-it: admitting a no-outcome finding only when it waits refuses this held repeat as "still open"
+    assert rr.carry_refusal(prior, sha, "/r", "b" * 40, "c" * 40, [], decide) is None
+    prior["findings"] = [holder, dict(again, severity="Important")]
+    assert rr.carry_refusal(prior, sha, "/r", "b" * 40, "c" * 40, [], decide) == "an earlier finding is still open"
+
+
+def test_the_merge_sheet_builds_with_a_no_outcome_minor_card_another_card_holds_and_shows_one_card():
+    from test_pr_sheet import WORDS, build
+    from test_pr_sheet_fixed_above_2332 import pr_input, record
+    from test_pr_sheet_listed_2493 import ENTRY, minor
+
+    holder = minor("H1", True)
+    again = {**minor("H2", True, outcome=None, reason=None), "repeatOf": {"findingKey": holder["findingKey"]}}
+    # break-it: admitting a null outcome only on a waiting finding refuses this held repeat, and the sheet does not build
+    sheet = build([record(10, [holder, again])], pr_input(leftovers={holder["findingKey"]: ENTRY}))
+    cards = [c for c in sheet["cards"] if c["callKind"].startswith(WORDS["leftoverKind"])]
+    assert [c["question"] for c in cards] == ["Title of H1"]
