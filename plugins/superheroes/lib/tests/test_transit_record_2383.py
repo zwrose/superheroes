@@ -277,20 +277,6 @@ def test_6e_a_real_write_through_the_read_back_reports_matched_when_the_store_is
         assert out["ok"] and out["transit"] == expected, out
 
 
-# --- 7: the extra-audit reservation passes its transit through ---
-
-def test_7_reserve_extra_audit_passes_the_create_results_transit_through():
-    # axis: the reservation's transit; dropped, or a missing one read as matched
-    seen = {"transit": "changed", "changeCount": 1, "changes": []}
-    out = rr.reserve_extra_audit(7, "o/r", "s1", "why", {"create_comment": lambda pr, repo, body: {
-        "id": 9, "url": "http://c/9", "transit": seen}})
-    assert out == {"ok": True, "url": "http://c/9", "id": 9, "transit": seen}
-    bare = rr.reserve_extra_audit(7, "o/r", "s1", "why", {"create_comment": lambda pr, repo, body: {
-        "id": 9, "url": "http://c/9"}})
-    assert bare["transit"] == {"transit": "not-checked", "why": "no read-back was made"}
-    assert rr.reserve_extra_audit(7, "o/r", "s1", "why", {"create_comment": lambda *a: None})["ok"] is False
-
-
 # --- 8: vet_slot compares its read-back through the one comparison ---
 
 BANG_SLOT = "**Verdict: NOT-READY** · abc\n\nNew owner half ![a](u) here.\n"

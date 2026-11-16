@@ -469,7 +469,7 @@ The review loop's one round past the 4-round cap, entered on its own when the ca
 
 ### Extra audit round
 
-The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. A cap with unaudited fixes enters the [bounded pass](#bounded-pass) instead, so the order applies only to a session already handed back that way. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
+Retired: no order begins one, and the [bounded pass](#bounded-pass) replaces it. A session whose state holds one finishes it: the round audits only the fixes the cap round applied, runs no panel and no new search, and the [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
 
 ### Slice
 

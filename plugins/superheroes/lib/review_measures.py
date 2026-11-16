@@ -86,6 +86,7 @@ _SCHEMA_MEASURES = {"review-loop-measures/1": MEASURES_V1, SCHEMA: MEASURES}  # 
 WATCHDOG_ENDS_SINCE = (0, 48, 0)  # the first release whose records list silence-watchdog ends
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 ROW_KEYS =("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
+# `extra-audit-round` is a spelling read from receipts; no new receipt writes it
 CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
 COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
 COSTLY_BASES = ("monthly", "sample")
