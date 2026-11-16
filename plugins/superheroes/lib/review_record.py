@@ -57,6 +57,7 @@ import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
 import review_diff_bytes  # noqa: E402
+import risk_areas  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_seats  # noqa: E402
 import round_phases  # noqa: E402
@@ -77,6 +78,10 @@ PARTS_SCHEMA = "review-record-parts/1"
 EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
 _RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
+# Why a reviewer run with a runner nonce has no bound run folder (`unboundRuns`): `not-in-extras` — no listed folder names
+# the nonce and every listed folder read and named a run of this session; `unmatched` — two listed folders claim the nonce,
+# or no folder names it while some listed folder could not be read or named no nonce of this session's runs.
+UNBOUND_RUN_CASES = ("not-in-extras", "unmatched")
 CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
@@ -496,6 +501,33 @@ def _withheld_paths(repo_root, head_sha, paths):
     return sanitized_view.withheld_review_paths(repo_root, head_sha, paths)
 
 
+def _finding_risk(repo_root, file):
+    """Whether a finding's file lies in a declared risk area, as the one risk-area reader (`risk_areas.touched`) reads
+    it: True when an area covers the file; False when risk areas are declared and none covers it, or the project's
+    core.md declares none (no `riskAreas` key or an empty list); None when it cannot be told (no repository root,
+    no usable file path, a calibration file that cannot be found, an unreadable or malformed store, any fault).
+    Only the exact False lets a Minor or Nit be listed for the merge verdict.
+    A core.md with no risk areas has no declared risk area to be in (the lane floor reads that as unclear: that is
+    its question, `risk_areas.touched` still answers not-set, and only this reader maps it)."""
+    try:
+        if not repo_root or not isinstance(file, str) or not file.strip():
+            return None
+        if risk_areas.normalize_change_path(file) is None:
+            return None
+        got = risk_areas.touched(repo_root, [file])
+        if got["riskAreas"] == "not-set":
+            # "core-md-absent" is the detail `core_md.read_risk_areas` gives when no core.md is found
+            # axis: a calibration file that cannot be found reads unknown, so the finding stays a card, never "declares none" — see bite-proof record i2493_wo1_record (E-absent)
+            if got.get("detail") == "core-md-absent":
+                return None
+            return False if got["reason"] in (risk_areas.REASON_MISSING, risk_areas.REASON_EMPTY) else None
+        if got["unmatchable"]:
+            return None
+        return bool(got["touched"])
+    except Exception:  # noqa: BLE001 — fail closed: a risk that cannot be read is unknown, so the finding stays a card
+        return None
+
+
 def _readers(overrides):
     cloud = cloud_pass._is_cloud(os.environ)
     return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
@@ -505,6 +537,7 @@ def _readers(overrides):
             "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
             "owner_ruling_comment": _owner_ruling_comment, "returning_decide": returning_review.decide,
+            "finding_risk": _finding_risk,
             **(overrides or {})}
 
 
@@ -533,7 +566,10 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
         return "the earlier record's final commit is not the last reviewed commit"
     findings = prior.get("findings")
     # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
-    if not (isinstance(findings, list) and all(isinstance(f, dict) and f.get("outcome") is not None for f in findings)):
+    # axis: the one exception is a no-outcome finding the record lists or holds as a card (a Minor or Nit), never an Important, Critical or unknown severity — see bite-proof record i2493_wo1_record (E-carry)
+    if not (isinstance(findings, list) and all(
+            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or waits_for_owner(f, findings))
+            for f in findings)):
         return "an earlier finding is still open"
     try:
         # axis: the carry check hands the decider the writer's CI reader, as a keyword and only when it has one — see bite-proof record c1l11d_wo_c_fold
@@ -1035,6 +1071,14 @@ def _validate(a):
             and _is_int(e["attempt"]) and e["attempt"] >= 1
             and isinstance(e["silentSeconds"], (int, float)) and not isinstance(e["silentSeconds"], bool)
             and math.isfinite(e["silentSeconds"]) and e["silentSeconds"] >= 0 for e in ends), "silenceWatchdogEnds")
+    if "unboundRuns" in a:
+        unbound = a["unboundRuns"]
+        # axis: an unbound run names its seat, its nonce and one of the two case tokens, exactly those keys — see bite-proof record i2516_unbound_runs
+        chk(isinstance(unbound, list) and all(
+            isinstance(e, dict) and set(e) == {"seat", "nonce", "case"} and ne(e["seat"]) and ne(e["nonce"]) and bool(e["seat"].strip())
+            and bool(e["nonce"].strip())
+            # axis: the case is one of UNBOUND_RUN_CASES, never another word — see bite-proof record i2516_unbound_runs
+            and e["case"] in UNBOUND_RUN_CASES for e in unbound), "unboundRuns")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -1601,12 +1645,39 @@ def _repeat_key(f):
     return _key({"findingKey": key}) if isinstance(key, str) and key.strip() else None
 
 
+LISTED_SEVERITIES = ("Minor", "Nit")
+
+
+def listed_for_merge(f):
+    """True when `f` is listed in the record for the merge verdict and withholds nothing: a Minor or Nit that the
+    writer read as outside every declared risk area (`inRiskArea` exactly False; an absent or null stamp, as an earlier
+    record holds, is not listed) and that is left for the owner or has no outcome. One of the two predicates every
+    reader of "does this finding wait" asks (with `waits_for_owner`): the record, its leftForOwner list, its
+    awaits-owner test, the carry rule and the leftover-accepting check."""
+    # axis: only a Minor or Nit is listed; an Important, Critical or unknown severity left for the owner always waits — see bite-proof record i2493_wo1_record (E-sev)
+    # axis: a finding is listed only when its risk reading is exactly False; an unknown reading or a risk area keeps the card — see bite-proof record i2493_wo1_record (E-risk, E-riskTrue)
+    return (isinstance(f, dict) and f.get("severity") in LISTED_SEVERITIES and f.get("inRiskArea") is False
+            and (f.get("outcome") == _LEFT_FOR_OWNER or f.get("outcome") not in rfs.OUTCOMES))
+
+
+def waits_for_owner(f, findings):
+    """True when `f` holds an owner card in the record: it is not listed for the merge verdict, no other finding of the
+    record holds its card (`repeat_held_elsewhere`), and it is left for the owner, or is a Minor or Nit with no outcome
+    (a no-outcome Minor or Nit in a risk area, or of unknown risk, is a card; an Important, Critical or unknown
+    severity with no outcome is a missing outcome, not a card). The one reader of that rule."""
+    return (isinstance(f, dict) and not listed_for_merge(f) and not repeat_held_elsewhere(f, findings)
+            and (f.get("outcome") == _LEFT_FOR_OWNER
+                 or (f.get("outcome") not in rfs.OUTCOMES and f.get("severity") in LISTED_SEVERITIES)))
+
+
 def repeat_held_elsewhere(f, findings):
     """True when `f` is left for the owner and repeats another left-for-owner finding of the same record, which holds
     the owner's one card. The one reader of that rule: the leftover line, the leftForOwner list and the sheet's card
     all ask it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no
-    owner decision goes missing."""
-    left = {_key(g): g for g in findings if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER}
+    owner decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
+    # axis: a listed earlier finding holds no card, so a waiting repeat of it keeps its own — see bite-proof record i2493_wo1_record (E-repeat)
+    left = {_key(g): g for g in findings
+            if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER and not listed_for_merge(g)}
     own, held = _key(f), _repeat_key(f)
     if f.get("outcome") != _LEFT_FOR_OWNER or held is None or held == own or held not in left:
         return False
@@ -1638,12 +1709,22 @@ def unfinished(status):
 def _finding_lines(findings):
     lines = []
     for f in findings:
+        # a finding listed for the merge verdict withholds nothing, a no-outcome Minor or Nit outside every risk area included (#2494)
+        if listed_for_merge(f):
+            continue
         if f.get("outcome") not in rfs.OUTCOMES:
-            lines.append(f"finding {_name(f)} has no outcome")
+            if f.get("severity") in LISTED_SEVERITIES:
+                # axis: a no-outcome Minor or Nit in a risk area, or of unknown risk, is a card and adds the leftover line, never "has no outcome" — see bite-proof record i2493_wo1_record (E-noout-minor)
+                if waits_for_owner(f, findings):
+                    lines.append(leftover_line(f))
+            else:
+                # axis: a no-outcome Important, Critical or unknown severity keeps its "has no outcome" line, so it withholds — see bite-proof record i2493_wo1_record (E-noout-important)
+                lines.append(f"finding {_name(f)} has no outcome")
         elif not f.get("reason"):
-            lines.append(f"finding {_name(f)} has no reason")
+            if not (f.get("severity") in LISTED_SEVERITIES and f.get("inRiskArea") is False):
+                lines.append(f"finding {_name(f)} has no reason")
         # axis: a kept left-for-owner repeat adds no leftover line; the earlier finding holds the owner's card — see bite-proof record c1l8_wo_b_record_repeats
-        elif f["outcome"] == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings):
+        elif waits_for_owner(f, findings):
             lines.append(leftover_line(f))
     return lines
 
@@ -1675,16 +1756,11 @@ def uncertified_line(u):
 
 
 def _status(rec, unread=(), finding_lines=()):
-    fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
+    fc, lines = rec["finalCommit"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
     if fc["source"] != "GitHub PR":
         lines.append("the final commit could not be read from the PR")
-    if ci["source"] == "unavailable":
-        lines.append("CI could not be read")
-    elif ci["state"] != "green":
-        lines.append(f"CI is {ci['state']} on {s7(ci['sha'])}" + (f" ({ci['read']})" if ci.get("read") else ""))
-    elif ci["sha"] != fc["sha"]:
-        lines.append(f"CI was read on {s7(ci['sha'])}, not on the final commit {s7(fc['sha'])}")
+    # axis: CI is no part of the certificate; a red, pending or unread CI withholds nothing here, and the record keeps its `ci` reading for the merge sheet — see bite-proof record i2493_wo1_record (E-noci)
     lines += finding_lines
     lines += _lane_lines(rec)
     # axis: no named maker is not-reviewed, since independence cannot be shown — see bite-proof record wo_a_1796_reading-independence
@@ -1717,8 +1793,7 @@ def _owner_only(rec, missing_lines):
     """True when the record reads not-reviewed, is not parked, and every missing line is a leftover line: with its leftovers it reads awaits-owner exactly when the same record without them reads reviewed."""
     if rec["status"] != NOT_REVIEWED or rec["parked"]:
         return False
-    leftovers = {leftover_line(f) for f in rec["findings"]
-                 if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, rec["findings"])}
+    leftovers = {leftover_line(f) for f in rec["findings"] if waits_for_owner(f, rec["findings"])}
     # axis: a record is awaits-owner only when every missing line is a leftover finding
     if not missing_lines or not all(m in leftovers for m in missing_lines):
         return False
@@ -1734,10 +1809,18 @@ def _ruling_hits(findings, key):
 def _apply_owner_rulings(findings, raw, entries):
     """Set the owner-ruling citation as decidedBy on each ruling or left-for-owner finding an entry names.
     `raw` is the account's findings as given (an entry may key by the raw findingKey the stamping replaced);
-    `findings` is the same list after the stamping. Every other outcome is left exactly as it is."""
+    `findings` is the same list after the stamping. A Minor or Nit with no outcome is an owner card like a
+    left-for-owner finding, so an entry naming one makes it left-for-owner first; the write-time re-check then
+    settles it as the ruling. Every other outcome is left exactly as it is."""
     out = list(findings)
     for e in entries:
         (j,) = _ruling_hits(raw, e["key"])
+        # axis: an owner ruling on a no-outcome Minor or Nit card is not dropped; the card reads left-for-owner and the re-check rules it — see bite-proof record i2493_wo1_record (E-ruling-card)
+        if out[j].get("outcome") not in rfs.OUTCOMES and out[j].get("severity") in LISTED_SEVERITIES:
+            reason = out[j].get("reason")
+            out[j] = dict(out[j], outcome=_LEFT_FOR_OWNER,
+                          reason=reason if isinstance(reason, str) and reason.strip()
+                          else "no outcome when the review loop ended; the owner ruled on its card")
         if out[j].get("outcome") in (_RULING, _LEFT_FOR_OWNER):
             # axis: an entry sets the citation on the finding it names, and on no other outcome — see bite-proof record wo_a_1958_owner_ruling
             out[j] = dict(out[j], decidedBy={"kind": finding_outcomes.OWNER_RULING, "ref": {"url": e["url"], "words": e["words"]}})
@@ -2066,7 +2149,9 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     # axis: a kept repeat follows its earlier finding only after the carried re-check has settled it, so a carried fix reaches the repeat — see bite-proof record i2438_repeat_follows
     findings = _follow_repeats(findings, a["carriedChecks"], sources)
     findings = _drop_stale_open_marker(findings)
-    findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
+    # axis: every finding is stamped with the writer's own reading of its file's risk; an account's inRiskArea is overwritten, never trusted — see bite-proof record i2493_wo1_record (E-stamp)
+    findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome")),
+                     inRiskArea=rd["finding_risk"](a.get("repoRoot"), f.get("file"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
@@ -2106,10 +2191,14 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         # axis: a codex seat the watchdog ended is named in the record whenever the account lists an end — see bite-proof record i2375_c_watchdog_ends
         **({"silenceWatchdogEnds": [dict(e, seat=_shown_seat(e["seat"])) for e in a["silenceWatchdogEnds"]]}
            if a.get("silenceWatchdogEnds") else {}),
+        # axis: a reviewer run with a nonce and no bound run folder is named in the record whenever the account lists one — see bite-proof record i2516_unbound_runs
+        **({"unboundRuns": [dict(e, seat=_shown_seat(e["seat"]), nonce="[REDACTED NONCE]" if _seat_hidden(e["nonce"]) else e["nonce"])
+                            for e in a["unboundRuns"]]} if a.get("unboundRuns") else {}),
         "unreadFiles": unread, "rawOutputs": [],
         # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
-        "leftForOwner": [_name(f) for f in findings
-                         if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings)],
+        "leftForOwner": [_name(f) for f in findings if waits_for_owner(f, findings)],
+        # axis: a Minor or Nit outside every declared risk area is named here and withholds nothing; the merge verdict accepts it — see bite-proof record i2493_wo1_record
+        "listedForMerge": [_name(f) for f in findings if listed_for_merge(f)],
         "missingReviews": missing,
         "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
@@ -2117,7 +2206,7 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
                  "tokens": sum(toks) if toks else None, "source": "engine records",
                  "notCounted": [v["name"] for v in reviewers if v["ran"] != "engine-record"]},
         "sessionDisagreements": dis,
-        "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}", *carried_lines] + a["checked"],
+        "checked": [*carried_lines] + a["checked"],
         "previousRecord": None,
         "earlierRecordsNotChecked": [],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -2837,6 +2926,18 @@ def _watchdog_line(ends, level):
         f"{e['seat']} attempt {e['attempt']} after {e['silentSeconds']} s silent" for e in ends) + "."
 
 
+def _unbound_line(runs, level):
+    """The summary line for the reviewer runs that carry a nonce no single run folder claims; None when the record carries
+    none. Level 0 names each run; the compact levels give their count, and the record's JSON keeps the list."""
+    if not (isinstance(runs, list) and runs):
+        return None
+    if level >= 1:
+        # axis: the compact levels give the count only, so the line stays bounded however many runs there are — see bite-proof record i2516_unbound_runs
+        return f"Unbound runs: {_plural(len(runs), 'run', 'runs')} {LISTED}."
+    # axis: level 0 names every run (seat, nonce, case) in list order — see bite-proof record i2516_unbound_runs
+    return "Unbound runs: " + "; ".join(f"{e['seat']} nonce {e['nonce']} ({e['case']})" for e in runs) + "."
+
+
 def _test_lens_line(r):
     """The one `Test lens:` line. A record with no usable `testLens` part reads unmeasured."""
     part = r.get("testLens")
@@ -2879,7 +2980,7 @@ def _summary(r, level):
     """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
     which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
     into one count. The record's JSON always holds the full lists."""
-    lane, ci, compact = r["lane"], r["ci"], level >= 1
+    lane, compact = r["lane"], level >= 1
     left = r["leftForOwner"]
     waits = []
     if left:
@@ -2892,14 +2993,22 @@ def _summary(r, level):
     wider_lines = [f"Round {w['round']} looked wider than the last fixes: {w['why']}"
                    for w in wider or [] if isinstance(w, dict)]
     waits_text = ("Waiting for the owner: " + "; ".join(waits) + ".") if waits else "Nothing waits for the owner."
-    checked = list(r["checked"][:2])
+    listed = r.get("listedForMerge")
+    listed_line = None
+    if listed:
+        listed_line = (f"Listed for the merge verdict: {_plural(len(listed), 'finding', 'findings')} {LISTED}." if compact
+                       else "Listed for the merge verdict (Minor or Nit, outside every declared risk area): "
+                       + ", ".join(listed) + ".")
+    # the first line's Checked: text is the reviewers line alone; a record written before CI left the certificate holds a
+    # CI entry ahead of it, which is not shown
+    checked = [c for c in r["checked"][:2] if not c.startswith("CI on ")][:1]
     missing = r["whatIsMissing"]
     if compact:
         ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run" and "carried" not in v)
         carried = sum(1 for v in r["reviewers"] if "carried" in v)
         ran_text = f"{_plural(ran, 'reviewer', 'reviewers')} {LISTED}" if ran or not carried else "none in this round"
         kept_text = f"; {_plural(carried, 'reviewer', 'reviewers')} carried from the earlier review {LISTED}" if carried else ""
-        checked = checked[:1] + ([f"Reviewers that ran: {ran_text}{kept_text}"] if len(checked) > 1 else [])
+        checked = [f"Reviewers that ran: {ran_text}{kept_text}"] if checked else []
         left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
     else:
         left_text = "; ".join(missing) or "nothing"
@@ -2935,12 +3044,14 @@ def _summary(r, level):
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
+    unbound_line = _unbound_line(r.get("unboundRuns"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
     lines = [
         first_line,
         waits_text,
+        *([listed_line] if listed_line else []),
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
         floor_line,
@@ -2948,8 +3059,8 @@ def _summary(r, level):
         # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
         *([transit_line] if transit_line else []),
         *([watchdog_line] if watchdog_line else []),
+        *([unbound_line] if unbound_line else []),
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
-        f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
         *([extra_audit_line] if extra_audit_line else []),
         *([rerun_line] if rerun_line else []),
@@ -2990,7 +3101,7 @@ def _summary(r, level):
             checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
     checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
                              if l is not floor_line and l is not withheld_line and l is not refusals_line
-                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+                             and l is not transit_line and l is not watchdog_line and l is not unbound_line and l not in wider_lines and all(l is not q for q in quoted_lines))
     _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 

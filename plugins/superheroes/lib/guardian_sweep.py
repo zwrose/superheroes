@@ -1199,7 +1199,8 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
 
 
 _LEDGER_DECISION_STATES = ("filed", "accepted", "declined", "triaged-out")
-_LEDGER_DECISION_KEYS = ("disposition", "issue", "reason", "reraiseWhen")
+_LEDGER_DECISION_KEYS = ("disposition", "issue", "reason", "reraiseWhen",
+                         guardian_ledger.DEFERRED_BY_POLICY)
 
 
 def _nonempty_str(val):
@@ -1226,6 +1227,17 @@ def _ledger_decision_errors(did, verdict, ledger):
         errors.append("%s: ledger filed requires a non-empty issue" % did)
     elif state in ("accepted", "declined") and not _nonempty_str(ledger.get("reason")):
         errors.append("%s: ledger %s requires a non-empty reason" % (did, state))
+    if guardian_ledger.DEFERRED_BY_POLICY in ledger:
+        deferred = ledger[guardian_ledger.DEFERRED_BY_POLICY]
+        # Axis: type (a bool, never null/0/1/"true") and disposition (true only on a
+        # deferrable state) are separate refusals, each mirrored from validate_record.
+        if not isinstance(deferred, bool):
+            errors.append("%s: ledger.%s must be a boolean"
+                          % (did, guardian_ledger.DEFERRED_BY_POLICY))
+        elif deferred and state not in guardian_ledger.DEFERRABLE_STATES:
+            errors.append("%s: ledger.%s true requires disposition %s"
+                          % (did, guardian_ledger.DEFERRED_BY_POLICY,
+                             "|".join(guardian_ledger.DEFERRABLE_STATES)))
     return errors
 
 
@@ -1321,6 +1333,7 @@ def _decisions_from_dispositions(dispositions):
                 "issue": ledger.get("issue"),
                 "reason": ledger.get("reason"),
                 "reraiseWhen": ledger.get("reraiseWhen"),
+                "deferredByPolicy": ledger.get("deferredByPolicy"),
             })
         elif d.get("verdict") == "rejected":
             reason = d.get("reason")
@@ -1330,6 +1343,7 @@ def _decisions_from_dispositions(dispositions):
                 "issue": None,
                 "reason": reason if isinstance(reason, str) and reason.strip() else None,
                 "reraiseWhen": None,
+                "deferredByPolicy": None,
             })
     return decisions
 
@@ -1373,9 +1387,33 @@ def _redecide_settled(record, decision, candidate):
         return None, None
     proposed = copy.deepcopy(record)
     proposed["metricAtDisposition"] = _resettled_metric(candidate, record)
-    for key in ("reason", "reraiseWhen"):
+    for key in ("reason", "reraiseWhen", guardian_ledger.DEFERRED_BY_POLICY):
         if decision.get(key) is not None:
             proposed[key] = decision[key]
+    proposed["date"] = guardian_ledger._today()
+    ok, reasons = guardian_ledger.validate_record(proposed)
+    if not ok:
+        return None, "; ".join(reasons)
+    return proposed, None
+
+
+def _deferral_changed(record, decision):
+    """Does a same-disposition decision carry a deferredByPolicy that differs from the record's?
+
+    An absent decision flag (None) never changes anything; an absent record flag reads as
+    False, so an explicit `false` on a flagless record is equal and a no-op."""
+    want = decision.get(guardian_ledger.DEFERRED_BY_POLICY)
+    return want is not None and want != bool(record.get(guardian_ledger.DEFERRED_BY_POLICY))
+
+
+def _redefer(record, decision):
+    """Flip only the deferredByPolicy flag of a same-disposition record → (record, reason).
+
+    The record is updated in place on a deep copy: the flag and `date` change,
+    `adjudicatedIn` stays write-once. `(None, why)` when the updated record is not valid
+    (e.g. `true` on a disposition that cannot be deferred)."""
+    proposed = copy.deepcopy(record)
+    proposed[guardian_ledger.DEFERRED_BY_POLICY] = decision[guardian_ledger.DEFERRED_BY_POLICY]
     proposed["date"] = guardian_ledger._today()
     ok, reasons = guardian_ledger.validate_record(proposed)
     if not ok:
@@ -1393,7 +1431,9 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
     target; surfaced/reopened → target when `ALLOWED_TRANSITIONS` allows it. A decision
     already at its target is a no-op (idempotent re-run) — except an accepted/declined
     record whose candidate materially worsened, which is re-settled in place at the new
-    metric (`_redecide_settled`). A decision with no legal path, or whose chain `advance`
+    metric (`_redecide_settled`), and a same-disposition decision whose `deferredByPolicy`
+    differs from the record's, which flips that flag in place (`_redefer`). A decision with
+    no legal path, or whose chain `advance`
     refuses part-way, is skipped and reported — the working copy is dropped, so a
     half-advanced record is never written."""
     new_records = list(records or [])
@@ -1413,16 +1453,22 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
         rid = existing["id"] if existing is not None else decided_id
         from_state = existing.get("disposition") if existing is not None else None
         if from_state == target:
+            proposed, why = None, None
             if target in guardian_ledger.WONT_FIX_STATES:
                 proposed, why = _redecide_settled(
                     existing, dec, cand_by_id.get(decided_id))
-                if why:
-                    skipped.append({"id": rid, "from": from_state, "to": target,
-                                    "reason": "re-decision refused: %s" % why})
-                elif proposed is not None:
-                    new_records = [proposed if r is existing else r for r in new_records]
-                    applied.append({"id": rid, "from": from_state, "to": target,
-                                    "redecided": True})
+            # Axis: a same-disposition decision whose deferredByPolicy differs from the
+            # record's updates the record in place (once — a worsened trade that already
+            # re-settled above carried the new flag with it, so it is not flipped twice).
+            if proposed is None and why is None and _deferral_changed(existing, dec):
+                proposed, why = _redefer(existing, dec)
+            if why:
+                skipped.append({"id": rid, "from": from_state, "to": target,
+                                "reason": "re-decision refused: %s" % why})
+            elif proposed is not None:
+                new_records = [proposed if r is existing else r for r in new_records]
+                applied.append({"id": rid, "from": from_state, "to": target,
+                                "redecided": True})
             continue
         if existing is None:
             chain = ["candidate", "surfaced", target]
@@ -1445,7 +1491,7 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
             continue
         fields = {"sweepId": sweep_id,
                   "metricAtDisposition": _metric_at_disposition(cand_by_id.get(decided_id))}
-        for key in ("issue", "reason", "reraiseWhen"):
+        for key in ("issue", "reason", "reraiseWhen", guardian_ledger.DEFERRED_BY_POLICY):
             fields[key] = dec.get(key)
         working = new_records
         failure = None

@@ -1,3 +1,10 @@
+## Contents
+
+- Where the fence lives
+- Worked example
+- Keys
+- Load-bearing behaviours
+
 # Guardian calibration (`guardian-config`)
 
 The guardian hero layer (`guardian.md`) holds a single machine-readable fence that tunes sweep
@@ -69,7 +76,7 @@ positively set).
 | `vitals` / `collectVitals` | Bool; **either** key set to `false` disables vitals collection | `true` (collection on) | `guardian_sweep.read_config` → `vitalsEnabled` |
 | `verifyBudgetSeconds` / `vitalsBudgetSeconds` | Positive number; when both are present, **`verifyBudgetSeconds` wins** | `_DEFAULT_VERIFY_BUDGET_SECONDS` (300) | Shared verify/vitals time budget for the sweep (`guardian_sweep.read_config`, consumed during collect/finalize) |
 | `firstBaselineValidateMax` | Non-negative int | `_DEFAULT_FIRST_BASELINE_VALIDATE_MAX` (10) | Caps first-baseline candidates routed through validation (`guardian_sweep.read_config`, used during collect) |
-| `reportCard` | Object `{"actionabilityBar": float, "minAdjudicated": int, "minSweeps": int}`; a **non-object** value degrades the **whole** config. `actionabilityBar` must be a finite number in `(0, 1]` (bool, NaN, and non-numeric values rejected); `minAdjudicated` and `minSweeps` must be positive non-bool ints (`guardian_ledger._resolve_thresholds`) | `guardian_ledger.REPORT_CARD_DEFAULTS` = `{"actionabilityBar": 0.90, "minAdjudicated": 10, "minSweeps": 3}` | Parsed at `guardian_sweep.read_config`; thresholds and benching in `guardian_ledger.report_card` / `_resolve_thresholds` |
+| `reportCard` | Object `{"actionabilityBar": float, "minAdjudicated": int, "minSweeps": int}`; a **non-object** value degrades the **whole** config. `actionabilityBar` must be a finite number in `(0, 1]` (bool, NaN, and non-numeric values rejected); `minAdjudicated` and `minSweeps` must be positive non-bool ints (`guardian_ledger._resolve_thresholds`). Findings deferred by policy are outside the ratio and outside `minAdjudicated` (see "Deferred by policy is outside the ratio" below) | `guardian_ledger.REPORT_CARD_DEFAULTS` = `{"actionabilityBar": 0.90, "minAdjudicated": 10, "minSweeps": 3}` | Parsed at `guardian_sweep.read_config`; thresholds and benching in `guardian_ledger.report_card` / `_resolve_thresholds` |
 
 **Read from outside `guardian.md`.** The duplication lens also reads configuration item 20,
 `duplicationSkip` (set in configure's set-up § 4.10 or tune § 2): path globs, matched from the
@@ -88,6 +95,19 @@ value that is present but not an object also yields `configStatus: "degraded"` b
 owner cadence is resolved (other keys parsed earlier in the block still apply). That status
 revokes benching authority for the sweep even when individual override keys look fine — defaults
 must not become a silent mute button after a config typo.
+
+**Deferred by policy is outside the ratio.** A finding is *deferred by policy* when it is real and
+the project has decided, under its own stated policy, not to act on it now. It is recorded by
+`deferredByPolicy: true` on an `accepted`, `declined` or `triaged-out` ledger record, or by the
+triage `ledger` object's `deferredByPolicy` (`guardian_ledger.DEFERRED_BY_POLICY`). Such a finding
+moves neither the top (`for`) nor the bottom (`for + against`) of its lens's usefulness ratio, so
+it neither benches a lens nor props one up. It does **not** count toward `minAdjudicated` or
+`minSweeps` either, and it neither adds a sweep to the lens's sweep count nor makes that count
+unknown. That is the safe direction: deferrals cannot give a lens enough evidence to bench on.
+The report card shows the count per lens as `deferred by policy`. Timing: the ledger's report card
+is recomputed when the advisor commits triage (`commit-ledger`), while the sweep report's card is
+the one computed at collect, so a deferral decided in this triage shows in the sweep report from
+the next sweep.
 
 **Vitals off.** Setting `vitals: false` **or** `collectVitals: false` disables vitals collection;
 if both keys appear with different values, **either** being `false` wins (collection off).

@@ -2442,7 +2442,7 @@ BODY_COSTLY_HARMLESS_ONLY = FIXTURES / "body-costly-harmless-only.md"
 COSTLY_LINE = "The verify gate did not run on the final head, so the last commit's tests are unverified until CI runs."
 HARMLESS_LINE = "The order rode a prompt file, not inline"
 CANON_ID = "2026-10-22-abcdefgh-1"
-NOT_ONE_OF = "must be an object with exactly one of item, fold with line, leftover or canon"
+NOT_ONE_OF = "must be an object with exactly one of item, fold with line, leftover, listed or canon"
 
 
 def run_main(capsys, *argv):
@@ -2538,7 +2538,7 @@ def test_a_bullet_left_out_of_the_accounting_is_refused_naming_it_and_nothing_is
     (problem,) = said["problems"]
     assert left_out in problem and "A line past 2,000 characters" in problem
     assert problem.startswith(f"PR #2075's acceptance {left_out} (\"")
-    assert problem.endswith(f'is not accounted for: give accounting "{left_out}" one of item, fold with line, leftover, or canon')
+    assert problem.endswith(f'is not accounted for: give accounting "{left_out}" one of item, fold with line, leftover, listed, or canon')
 
 
 def test_a_bullet_whose_value_names_two_targets_is_refused_as_accounted_for_more_than_once():
@@ -2547,7 +2547,7 @@ def test_a_bullet_whose_value_names_two_targets_is_refused_as_accounted_for_more
     twice = set_accounting(BULLETS_2075[5], {"fold": "accepting", "line": 2, "canon": CANON_ID})
     (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, twice)
     assert problem.startswith(f'accounting "{BULLETS_2075[5]}" (PR #2075: "') and "A line past 2,000 characters" in problem
-    assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover or canon")
+    assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover, listed or canon")
 
 
 def test_an_input_that_repeats_an_accounting_key_is_refused_through_main(tmp_path, capsys):
@@ -2568,7 +2568,7 @@ def test_two_targets_of_any_kind_are_refused_as_more_than_once():
     # Axis: E3: item with leftover, and item with fold, are each refused with the more-than-once text.
     for value in ({"item": "no-retry", "leftover": "caps/test-too-small"}, {"item": "no-retry", "fold": "accepting", "line": 1}):
         (problem,) = refused_with_bodies(CASE_2075, BODIES_2075, set_accounting(BULLETS_2075[3], value))
-        assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover or canon"), value
+        assert problem.endswith("is accounted for more than once: give exactly one of item, fold, leftover, listed or canon"), value
 
 
 # Bites on: an unindented HTML comment that ends a list leaving the list's content column set, so a later root fence is read as a list-item fence and ends early.

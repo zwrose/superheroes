@@ -4011,3 +4011,162 @@ def test_validate_dispositions_accepts_well_formed_ledger_decisions():
         ok, errors = gsw.validate_dispositions(
             bundle, [_disposition("validated", ledger)])
         assert ok is True, errors
+
+
+# --- deferredByPolicy in the triage decision ---------------------------------
+
+
+@pytest.mark.parametrize("flag", ["true", 1, 0, None, [], {}],
+                         ids=["string", "one", "zero", "null", "list", "dict"])
+def test_validate_dispositions_refuses_a_non_bool_deferred_flag(flag):
+    bundle = {"surfaced": [{"id": "fixture:normal"}]}
+    disp = _disposition("rejected", {"disposition": "declined", "reason": "r",
+                                     "deferredByPolicy": flag})
+    ok, errors = gsw.validate_dispositions(bundle, [disp])
+    assert ok is False
+    assert any("deferredByPolicy must be a boolean" in e for e in errors), errors
+
+
+def test_validate_dispositions_refuses_a_true_deferred_flag_on_filed():
+    ledger = {"disposition": "filed", "issue": "#1", "deferredByPolicy": True}
+    bundle = {"surfaced": [{"id": "fixture:normal"}]}
+    ok, errors = gsw.validate_dispositions(bundle, [_disposition("validated", ledger)])
+    assert ok is False
+    assert any("deferredByPolicy true requires disposition accepted|declined|triaged-out" in e
+               for e in errors), errors
+
+
+def test_validate_dispositions_accepts_the_deferred_flag_where_it_belongs():
+    bundle = {"surfaced": [{"id": "fixture:normal"}]}
+    for ledger in (
+        {"disposition": "declined", "reason": "r", "deferredByPolicy": True},
+        {"disposition": "accepted", "reason": "r", "deferredByPolicy": True},
+        {"disposition": "triaged-out", "deferredByPolicy": True},
+        {"disposition": "declined", "reason": "r", "deferredByPolicy": False},
+        {"disposition": "filed", "issue": "#1", "deferredByPolicy": False},
+    ):
+        ok, errors = gsw.validate_dispositions(
+            bundle, [_disposition("validated", ledger)])
+        assert ok is True, (ledger, errors)
+
+
+def test_decisions_carry_the_deferred_flag_and_the_rejected_default_carries_none():
+    explicit = _disposition("rejected", {"disposition": "declined", "reason": "r",
+                                         "deferredByPolicy": True})
+    default = _disposition("rejected", reason="noise", sid="fixture:other")
+    plain = _disposition("rejected", {"disposition": "declined", "reason": "r"},
+                         sid="fixture:plain")
+    by_id = {d["id"]: d for d in gsw._decisions_from_dispositions([explicit, default, plain])}
+    assert by_id["fixture:normal"]["deferredByPolicy"] is True
+    assert by_id["fixture:other"]["deferredByPolicy"] is None
+    assert by_id["fixture:plain"]["deferredByPolicy"] is None
+
+
+def test_commit_ledger_writes_the_deferred_flag_and_the_card_shows_the_count(tmp_path):
+    import guardian_ledger as gled
+
+    repo, root = _seeded_repo(tmp_path)
+    _bundle, res = _decide(repo, root, _drift_lens(), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "not now, by policy",
+                     "deferredByPolicy": True})])
+    assert res["decisions"] == [{"id": "fixture:normal", "from": None, "to": "declined"}]
+    assert _record(repo, root)["deferredByPolicy"] is True
+    card = gled.report_card(gs.read_ledger(repo, root)["records"])["fixture"]
+    assert (card["adjudicated"], card["deferred"], card["sweeps"]) == (0, 1, 0)
+    text = open(gs.ledger_path(repo, root), encoding="utf-8").read()
+    assert "| fixture | 0 | 0 | 0 | 1 | n/a | 0 | ungraded |" in text
+
+
+def test_commit_ledger_without_the_flag_leaves_the_record_flagless(tmp_path):
+    repo, root = _seeded_repo(tmp_path)
+    _decide(repo, root, _drift_lens(), [_disposition(
+        "rejected", {"disposition": "declined", "reason": "known trade"})])
+    assert "deferredByPolicy" not in _record(repo, root)
+
+
+@pytest.mark.parametrize("disposition", ["declined", "accepted", "triaged-out"])
+def test_apply_decisions_same_disposition_flag_change_updates_in_place(disposition):
+    """A re-decision that only flips deferredByPolicy updates the record, once."""
+    before = _settled(disposition, 3)
+    on = [{"id": "fixture:normal", "disposition": disposition, "issue": None,
+           "reason": None, "reraiseWhen": None, "deferredByPolicy": True}]
+    cand = [{"id": "fixture:normal", "metric": 3}]
+
+    records, applied, skipped = gsw._apply_decisions([before], on, cand, "s1")
+    assert skipped == []
+    assert applied == [{"id": "fixture:normal", "from": disposition, "to": disposition,
+                        "redecided": True}]
+    (rec,) = records
+    assert rec["deferredByPolicy"] is True
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["metricAtDisposition"] == {"metric": 3}
+    assert rec["date"] != "2026-07-01"
+    assert before.get("deferredByPolicy") is None, "the input record is not mutated"
+
+    again, applied2, skipped2 = gsw._apply_decisions(records, on, cand, "s2")
+    assert again == records
+    assert applied2 == [] and skipped2 == []
+
+    off = [dict(on[0], deferredByPolicy=False)]
+    cleared, applied3, skipped3 = gsw._apply_decisions(records, off, cand, "s3")
+    assert skipped3 == []
+    assert applied3 == [{"id": "fixture:normal", "from": disposition, "to": disposition,
+                         "redecided": True}]
+    assert cleared[0]["deferredByPolicy"] is False
+    assert cleared[0]["adjudicatedIn"] == "s0"
+
+
+def test_apply_decisions_explicit_false_on_a_flagless_record_is_a_no_op():
+    before = _settled("declined", 3)
+    off = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+            "reason": None, "reraiseWhen": None, "deferredByPolicy": False}]
+    records, applied, skipped = gsw._apply_decisions(
+        [before], off, [{"id": "fixture:normal", "metric": 3}], "s1")
+    assert records == [before]
+    assert applied == [] and skipped == []
+
+
+def test_apply_decisions_worsened_trade_with_a_changed_flag_resettles_once():
+    before = _settled("declined", 1)
+    on = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+           "reason": "still fine", "reraiseWhen": None, "deferredByPolicy": True}]
+    records, applied, skipped = gsw._apply_decisions(
+        [before], on, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert skipped == []
+    assert applied == [{"id": "fixture:normal", "from": "declined", "to": "declined",
+                        "redecided": True}]
+    (rec,) = records
+    assert rec["deferredByPolicy"] is True
+    assert rec["metricAtDisposition"] == {"metric": 2}
+    assert rec["reason"] == "still fine"
+    assert rec["adjudicatedIn"] == "s0"
+
+
+def test_apply_decisions_refused_flag_change_is_skipped_and_leaves_the_record():
+    before = _settled("declined", 3, reason=None)  # a hand-written record with no why
+    on = [{"id": "fixture:normal", "disposition": "declined", "issue": None,
+           "reason": None, "reraiseWhen": None, "deferredByPolicy": True}]
+    records, applied, skipped = gsw._apply_decisions(
+        [before], on, [{"id": "fixture:normal", "metric": 3}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert [(s["id"], s["from"], s["to"]) for s in skipped] == [
+        ("fixture:normal", "declined", "declined")]
+    assert "re-decision refused" in skipped[0]["reason"]
+
+
+def test_commit_ledger_redecision_flag_change_persists(tmp_path):
+    # The trade worsened (1 -> 5), so it resurfaces and the re-decision reaches the record.
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1)])
+    disp = [_disposition("rejected", {"disposition": "declined", "reason": "known trade",
+                                      "deferredByPolicy": True})]
+    bundle = gsw.collect(repo, lenses=[_drift_lens(metric=5)], root=root)
+    assert [s["id"] for s in bundle["surfaced"]] == ["fixture:normal"]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    res = gsw.commit_ledger(repo, bundle, disp, root=root)
+    assert res["ok"] is True, res
+    assert res["decisionsSkipped"] == []
+    rec = _record(repo, root)
+    assert rec["deferredByPolicy"] is True
+    assert rec["metricAtDisposition"] == {"metric": 5}
+    assert rec["adjudicatedIn"] == "s0"

@@ -399,6 +399,12 @@
           "type": "array",
           "items": {"$ref": "#/$defs/entry"}
         },
+        "listed": {
+          "description": "The Minor and Nit findings the review record lists for the merge verdict: outside every declared risk area, they are no cards and merging accepts them. Present only when there is at least one.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/entry"}
+        },
         "decidedForYou": {
           "description": "The left-for-owner findings the advisor re-graded as craft at vet, each with the ground of that call and a reason. They are not cards; the owner can take one back, and a taken-back one returns as a card on the next sheet. Present only when there is at least one.",
           "type": "array",
