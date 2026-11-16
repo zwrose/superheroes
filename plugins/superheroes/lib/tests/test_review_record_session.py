@@ -177,13 +177,15 @@ def test_a_fix_round_session_reads_reviewed(tmp_path):
     assert [v["commit"] for v in rec["reviewers"]] == [EARLIER, EARLIER, HEAD]
 
 
-def test_the_same_session_with_the_head_moved_reads_not_reviewed(tmp_path):
+def test_the_same_session_with_the_head_moved_still_reads_reviewed_on_its_own_commit(tmp_path):
     session, runs, body = fix_session(tmp_path)
     fake = Fake(head=THIRD, runs=runs)
     out = send(tmp_path, session, fake, ci="green", **body)
-    # bites on: a review that covered an earlier commit counting for a head that moved after it
-    assert out["ok"] and out["status"] == "not-reviewed", out
-    assert any("covers the final commit" in line for line in out["whatIsMissing"])
+    # bites on: the record certifying the PR head it reads from GitHub rather than the commit its session reviewed (issue 2496)
+    assert out["ok"] and out["status"] == "reviewed", out
+    assert out["whatIsMissing"] == []
+    rec = rr.read(7, readers=fake.readers())
+    assert rec["finalCommit"] == {"sha": HEAD, "source": rr.HEAD_MOVED_SOURCE} and rec["headAtWrite"] == THIRD
 
 
 @pytest.mark.parametrize("go_ahead", [

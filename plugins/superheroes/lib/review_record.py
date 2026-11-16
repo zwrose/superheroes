@@ -85,6 +85,14 @@ FORBIDDEN_CLAIMS = ("no bugs", "bug-free", "bug free")
 MAX_BODY_CHARS = 65000
 GITHUB_MAX_CHARS = 65536
 SESSION = "reported by the session"
+# The record certifies the commit its session reviewed (the account's finalCommit); the final commit's source says
+# whether GitHub confirmed that commit as the PR head at write time (issue 2496).
+FINAL_COMMIT_CONFIRMED = "GitHub PR"
+HEAD_MOVED_SOURCE = "reported by the session; the PR head had moved past it"
+# The note on a session-only reviewer row whose final commit GitHub did not confirm as the PR head.
+BR1_NOTE = ("the PR head moved past the session's final commit, so only an engine record can show a reviewer "
+            "read it")
+LANE_BASIS_GIT_SOURCE = "lane rule over the certified commit's changed files (git)"
 # The reviewer ran-state vocabulary, its one home: the sheet builder validates against RAN_STATES; the sheet
 # schema holds no copy of it (a test pins that).
 RAN_ENGINE_RECORD = "engine-record"
@@ -190,6 +198,31 @@ def _is_ancestor(repo_root, commit, head):
     except (OSError, subprocess.SubprocessError):
         return None
     return {0: True, 1: False}.get(r.returncode)
+
+
+def commit_paths(repo_root, base, sha):
+    """Every path the commit `sha` changes against the session's pinned review base `base`, read from git, as a
+    list (a renamed file's previous path included, as `changed_paths` does); None on any failure: no repository
+    root, a base or commit that is not a full sha, a failed git call, or a line this reader cannot read whole
+    (a git-quoted path, a malformed row). Never a partial list."""
+    if not (isinstance(repo_root, str) and repo_root and os.path.isdir(repo_root)) \
+            or not _full_sha(base) or not _full_sha(sha):
+        return None
+    out = _run(["git", "-C", repo_root, "diff", "--name-status", "-M", "--no-color", f"{base}...{sha}"])
+    if out is None:
+        return None
+    paths = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        # a rename or copy row names two paths (the source and the destination), any other row one
+        want = 3 if parts[0][:1] in ("R", "C") else 2
+        # axis: a row that cannot be read whole, a git-quoted path included, makes the whole list unavailable, never a shorter one — see bite-proof record i2496_wo_b_record_commit (E-paths)
+        if len(parts) != want or not all(p and not p.startswith('"') for p in parts[1:]):
+            return None
+        paths.extend(parts[1:])
+    return paths
 
 
 def _gh_json(*args):
@@ -531,7 +564,7 @@ def _readers(overrides):
             "lane_marker": _lane_marker, "engine_run": _engine_run, "watchdog_ends": _watchdog_ends, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
-            "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
+            "changed_paths": changed_paths, "commit_paths": commit_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
             "owner_ruling_comment": _owner_ruling_comment, "returning_decide": returning_review.decide,
             "finding_risk": _finding_risk,
             **(overrides or {})}
@@ -1283,39 +1316,47 @@ def _bound_basis(basis):
     return out
 
 
-def _lane_basis(a, rd, lane_value, final_sha):
-    """The risk floor for the PR's changed files, from lane_call.call, with the record's own lane as the
-    proposal. An account that names no repository, files that cannot be read, or a PR head that moved
-    from the recorded final commit while they were read, give the floor full,
-    marked unavailable, never a basis from the ambient project or from a partial list."""
-    repo_root = a.get("repoRoot")
+def _lane_basis(a, rd, lane_value, fc):
+    """(the risk floor for the certified commit's changed files, the path list it used or None), the floor from
+    lane_call.call with the record's own lane as the proposal.
+
+    The PR's changed files describe the head GitHub serves, so they are used only when the head read before the
+    files (the final commit's source is GitHub PR) and the head read after both equal the certified commit.
+    Otherwise (the head moved past it, or could not be re-read) the certified commit's own changed paths are read
+    from git against the session's pinned review base. An account that names no repository, files or git paths
+    that cannot be read, or no usable list, give the floor full, marked unavailable, never a basis from the
+    ambient project, from another commit's files or from a partial list. The one list the basis used is the
+    list the withheld-path reader gets."""
+    repo_root, final_sha = a.get("repoRoot"), fc["sha"]
     # axis: an account that names no repository reads nothing, so no other project's store is read — see bite-proof record wo_c_1795_lane-basis
     if not repo_root:
         return dict(lane_call.unavailable(
             lane_call.WHY_NOT_SET + " the account names no repository, so its risk areas were not read",
-            proposed=lane_value), source="unavailable")
-    paths = rd["changed_paths"](a["pr"], a["repo"])
-    # axis: a file list read after the PR head moved is not the recorded commit's change, so it is unavailable, never evaluated against that commit — see bite-proof record wo_a_1795_lane-call
-    after = rd["pr_meta"](a["pr"], a["repo"])
-    head = after.get("head") if isinstance(after, dict) else None
-    moved = isinstance(head, str) and head != final_sha
-    if isinstance(paths, list) and not head:
-        return dict(lane_call.unavailable(
-            lane_call.WHY_NO_PATHS + " the PR head could not be re-read while its changed files were read",
-            proposed=lane_value), source="unavailable")
-    if isinstance(paths, list) and moved:
-        return dict(lane_call.unavailable(
-            lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read",
-            proposed=lane_value), source="unavailable", headMoved=True)
-    if isinstance(paths, list):
-        return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
-                    source="lane rule over the PR's changed files")
-    out = dict(lane_call.unavailable(
-        lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
-        source="unavailable")
-    if moved:
-        out["headMoved"] = True
-    return out
+            proposed=lane_value), source="unavailable"), None
+    moved = fc["source"] == HEAD_MOVED_SOURCE
+    if fc["source"] == FINAL_COMMIT_CONFIRMED:
+        paths = rd["changed_paths"](a["pr"], a["repo"])
+        after = rd["pr_meta"](a["pr"], a["repo"])
+        head = after.get("head") if isinstance(after, dict) else None
+        stable = isinstance(head, str) and head == final_sha
+        # axis: the PR's changed files are the lane basis only when the head read before and after them equals the certified commit; a list read against any other head is never evaluated as the certified commit's change — see bite-proof record i2496_wo_b_record_commit (E-paths)
+        if stable and isinstance(paths, list):
+            return dict(_bound_basis(lane_call.call(repo_root, paths, proposed=lane_value)),
+                        source="lane rule over the PR's changed files"), paths
+        if stable:
+            return dict(lane_call.unavailable(
+                lane_call.WHY_NO_PATHS + " the PR's changed files could not be read", proposed=lane_value),
+                source="unavailable"), None
+        moved = isinstance(head, str)
+    # axis: the path list of a head that is not the certified commit is read from git for the certified commit itself, with the session's pinned base, and a failed read is unavailable, never a partial list — see bite-proof record i2496_wo_b_record_commit (E-paths)
+    got = rd["commit_paths"](repo_root, a.get("carryBase"), final_sha)
+    if isinstance(got, list):
+        return dict(_bound_basis(lane_call.call(repo_root, got, proposed=lane_value)),
+                    source=LANE_BASIS_GIT_SOURCE), got
+    why = "the PR head moved while its changed files were read" if moved \
+        else "the PR head could not be re-read while its changed files were read"
+    return dict(lane_call.unavailable(lane_call.WHY_NO_PATHS + " " + why, proposed=lane_value),
+                source="unavailable"), None
 
 
 def _canonical_model(vendor, model):
@@ -1397,7 +1438,9 @@ def _valid_calibration(value):
 
 
 def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset(),
-              carry=None):
+              carry=None, head_confirmed=False):
+    """One reviewer row. `head` is the certified commit (the session's final commit); `head_confirmed` is True only
+    when GitHub confirmed it as the PR head, the one case a row only the session reports can count (issue 2496)."""
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     carried_calibration = None
     out["family"] = _family(r["vendor"], r["model"])
@@ -1449,7 +1492,12 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             if r["ran"]:
                 dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     elif r["ran"] and (named or (reported_commit and reported_commit == head)):
-        out["ran"] = "reported-by-session"
+        # axis: a row only the session reports counts only when GitHub confirmed the final commit as the PR head; on a moved or unread head only an engine record can show a reviewer read it — see bite-proof record i2496_wo_b_record_commit (E-session-row)
+        if head_confirmed:
+            out["ran"] = "reported-by-session"
+        else:
+            out.update(ran="not-run", runNote=BR1_NOTE)
+            dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
     elif r["ran"]:
         note = (f"the session reported a review of {_short(reported_commit)}, not the final commit {_short(head)}"
                 if reported_commit else "the session did not say which commit it reviewed")
@@ -1725,10 +1773,6 @@ def _lane_lines(rec):
         lines = [f"the lane ({lane}) is below the risk floor ({basis['floor']}); the Risk floor line gives why"]
     else:
         lines = []
-    # axis: a head read and found moved from the recorded final commit is not-reviewed, whatever the lane — see bite-proof record wo_g_1795_head-moved
-    if basis.get("headMoved"):
-        # fixed prose: no data enters
-        lines.append("the PR head moved while the record was written; this record does not cover the new head")
     return lines
 
 
@@ -1746,7 +1790,8 @@ def uncertified_line(u):
 def _status(rec, unread=(), finding_lines=()):
     fc, lines = rec["finalCommit"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
-    if fc["source"] != "GitHub PR":
+    # axis: a final commit the PR could not be read for is not-reviewed; a head that moved past the certified commit adds no line here (the vet's shared check decides coverage of the head) — see bite-proof record i2496_wo_b_record_commit (E-source)
+    if fc["source"] == SESSION:
         lines.append("the final commit could not be read from the PR")
     # axis: CI is no part of the certificate; a red, pending or unread CI withholds nothing here, and the record keeps its `ci` reading for the merge sheet — see bite-proof record i2493_wo1_record (E-noci)
     lines += finding_lines
@@ -1755,8 +1800,6 @@ def _status(rec, unread=(), finding_lines=()):
     if not rec["makers"]:
         # fixed prose: no data enters
         lines.append("no maker is named, so independence cannot be shown")
-    lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
-              for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
         # axis: an abandoned session's missing review names its reason in the abandoned wording; any other reads as before — see bite-proof record i2436_abandoned_missing
         said = ABANDONED_MISSING_LINE.format(name=m["name"], reason=m["reason"]) if isinstance(m.get("reason"), str) \
@@ -1765,6 +1808,7 @@ def _status(rec, unread=(), finding_lines=()):
     ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run"]
     if not ran:
         lines.append("no planned reviewer ran")
+    # axis: a record none of whose planned reviewers ran on the commit it certifies reads not-reviewed with this one line, the head it never certified aside — see bite-proof record i2496_wo_b_record_commit (E-only-line)
     elif not any(v["coversFinalCommit"] for v in ran):
         lines.append(f"no planned reviewer's run covers the final commit {s7(fc['sha'])}")
     # axis: an abandoned session's record never reads reviewed — see bite-proof record wo_b_2137_abandoned_record
@@ -2051,21 +2095,18 @@ def _follow_repeats(findings, checks, sources=None):
 
 def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
-    read_paths, seen = rd["changed_paths"], {}
-
-    def cached_paths(pr, repo):
-        # The PR's changed files are read once per write, so the lane basis and the withheld list agree.
-        if (pr, repo) not in seen:
-            seen[(pr, repo)] = read_paths(pr, repo)
-        return seen[(pr, repo)]
-
-    rd = dict(rd, changed_paths=cached_paths)
     meta = rd["pr_meta"](a["pr"], a["repo"])
-    fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
+    head_read = meta.get("head") if isinstance(meta, dict) else None
+    head_read = head_read if isinstance(head_read, str) and head_read else None
+    # The record certifies the commit its session reviewed. The source says whether GitHub confirmed that commit as
+    # the PR head just now; a head that moved past it is kept beside it, and adds no open line.
+    # axis: the final commit is the session's own, with a source of GitHub PR when the head read equals it, the moved-head source (and the head beside it) when the head read differs, and the session's when the head could not be read — see bite-proof record i2496_wo_b_record_commit (E-source)
+    fc = {"sha": a["finalCommit"],
+          "source": SESSION if head_read is None
+          else FINAL_COMMIT_CONFIRMED if head_read == a["finalCommit"] else HEAD_MOVED_SOURCE}
     ci, lane = _ci(rd, a["repo"], fc["sha"], a.get("repoRoot")), _lane(a, rd, meta)
     _refuse_lane_over_round_cap(lane["value"], a["rounds"])
     for fact, session, code, from_code in (("lane", a["lane"], lane["value"], lane["source"] != SESSION),
-                                           ("finalCommit", a["finalCommit"], fc["sha"], bool(meta)),
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
         if from_code and session is not None and session != code:
             dis.append({"fact": fact, "session": session, "code": code})
@@ -2080,7 +2121,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
                            rd["returning_decide"],
                            lambda sha: _ci(rd, a["repo"], sha, a.get("repoRoot"))["state"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
-                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)
+                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry,
+                           fc["source"] == FINAL_COMMIT_CONFIRMED)
                  for r in a["reviewers"]]
     notes, missing, held = [], [], {}
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
@@ -2155,12 +2197,14 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         carried_lines = [reviewers_line, a["carriedReview"]["why"]]
     else:
         carried_lines = ["Reviewers that ran: " + (", ".join(ran_names) or "none")]
-    # An account that names no repository reads no changed files, so the list is unknown.
-    paths = rd["changed_paths"](a["pr"], a["repo"]) if a.get("repoRoot") else None
+    # The one path list the lane basis used is the list the withheld paths are read for: an account that names no
+    # repository, or a list that could not be read for the certified commit, leaves it unknown.
+    basis, paths = _lane_basis(a, rd, lane["value"], fc)
     withheld = rd["withheld_paths"](a.get("repoRoot"), fc["sha"], paths) if isinstance(paths, list) else None
     rec = {
         "schema": RECORD_SCHEMA, "pr": a["pr"], "sessionId": a["sessionId"], "lane": lane, "makers": a["makers"],
-        "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
+        "laneBasis": basis, "finalCommit": fc,
+        **({"headAtWrite": head_read} if fc["source"] == HEAD_MOVED_SOURCE else {}),
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
         # the entry is the driver's own text only when the session writer stamped it: it handed the same dict to `write`
