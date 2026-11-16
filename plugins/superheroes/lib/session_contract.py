@@ -58,6 +58,7 @@ __all__ = (
     "MEMBER_RESULTS_FIELD",
     "member_ruled_fixed",
     "OPEN_AT_LOOP_END_FIELD",
+    "BOUNDED_PASS_EVIDENCE_FIELD",
     "open_at_loop_end",
     "has_disposition_family",
     "disposition_family_snapshot",
@@ -404,9 +405,11 @@ def disposition_ledger_owner_classification(state):
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 OPEN_AT_LOOP_END_FIELD = "openAtLoopEnd"  # set only on a `left-for-owner` settle that was still open when its loop ended
 MEMBER_RESULTS_FIELD = "memberResults"  # on a representative's row: the fix audit's answer for each finding merged into it
+BOUNDED_PASS_EVIDENCE_FIELD = "boundedPassEvidence"  # on a `left-for-owner` row the bounded pass settled: its fix commit and last audit, or that its final audit raised it
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "placeResults", MEMBER_RESULTS_FIELD, "refutedReason",
-    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, OPEN_AT_LOOP_END_FIELD, "settledReason", "decidedBy",
+    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, OPEN_AT_LOOP_END_FIELD, BOUNDED_PASS_EVIDENCE_FIELD,
+    "settledReason", "decidedBy",
 )
 
 

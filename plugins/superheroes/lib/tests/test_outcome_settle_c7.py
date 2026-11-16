@@ -32,6 +32,9 @@ import verification  # noqa: E402
 
 RD = TRD.RD  # run_loop runs on test_round_driver's own load of the module
 
+# the reason the driver writes for a finding the bounded pass's one fix step and audit round left open
+BOUNDED_PASS_REASON = "still open after the bounded pass's one fix step and audit round"
+
 CANON_ID = "2026-01-02-abcd1234-1"
 OTHER_ID = "2026-01-02-abcd1234-2"
 CANON_TEXT = canon.entry_line(CANON_ID, "2026-01-02", "standing", "a ruling",
@@ -144,11 +147,27 @@ def _capped_seams():
 
 def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls):
     result, state = TRD._run_loop_capturing_state(_capped_seams(), TRD._cfg_cert(maxRounds=1))
-    assert state["terminal"] == "handed-back"
+    assert state["terminal"] == "converged"  # the cap round's unaudited fix gets the bounded pass
     row = _row(state, "Bug")
     assert row["disposition"] == "left-for-owner"
-    assert "round cap" in row["settledReason"]
+    assert row["settledReason"] == BOUNDED_PASS_REASON
     assert sources_calls == []
+
+
+def test_a_cap_round_with_every_fix_audited_and_an_important_open_is_handed_back_round_cap(tmp_path):
+    # no bounded pass begins here (B1 does not apply), so the old round-cap settle still owns the row's reason
+    import test_bounded_pass_b1_2552 as B1
+    import test_c1l4b_extra_audit as X
+
+    cap = 4
+    d, cfg = X._start(tmp_path, cap)
+    terminal, _trace = B1._run(d, cfg, X._respond(cap=cap, scoped={2: [X._finding("late")]}, fail_titles=("late",)))
+    final = X._state(d)
+    assert terminal["payload"]["verdict"] == "handed-back" and final["decisions"][-1]["kind"] == "round-cap"
+    assert "boundedPass" not in final and "fix" not in final["rounds"][str(cap)]
+    rows = X._rows(final, "late")
+    assert len(rows) == 1 and rows[0]["disposition"] == "left-for-owner", rows
+    assert "round cap" in rows[0]["settledReason"], rows[0]
 
 
 def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
@@ -194,8 +213,8 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
     second = _row(state, "Second bug", 2)
     assert second["disposition"] != "fixed", (second, state["rounds"])
     assert second["disposition"] == "left-for-owner", second
-    assert "round cap" in second["settledReason"]
-    assert state["terminal"] == "handed-back"
+    assert second["settledReason"] == BOUNDED_PASS_REASON
+    assert state["terminal"] == "converged"
 
 
 # --- T3 / T10: rulings that cite a decision ---------------------------------------------------

@@ -350,7 +350,8 @@ note left empty.
 - An item with a real choice offers its options and **Something else**.
 - A leftover shows, in order, its kind, its title, **Why it's yours**, **What happened**, **If left**,
   its options each with this leftover's consequence, the recommendation, the answer buttons and the note
-  box. The advisor writes the spine in its `leftovers` input (`skills/showrunner/reference/owner-decisions.md`
+  box. A leftover the bounded pass settled shows **What the loop tried** after **What happened**,
+  read from the record finding's `boundedPassEvidence` alone. The advisor writes the spine in its `leftovers` input (`skills/showrunner/reference/owner-decisions.md`
   § The per-item spine): `why`, `context`, an optional `ifLeft` when the reviewer's text is no longer
   true, `options` as the three leftover options (Keep it, Fix in a follow-up, Fix before merge) with
   their consequences for this finding, or `"none"` when nothing is left to decide, and a recommendation

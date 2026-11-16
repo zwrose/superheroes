@@ -465,7 +465,7 @@ The reviewer that, in every round after the first, looks for new problems only i
 
 ### Bounded pass
 
-The review loop's one round past the 4-round cap, entered on its own when the cap round queued a fix batch and applied work (reported fixes, fix commits, a changed PR-body fix or a head diff that changed in the cap round). It audits only those fixes, runs no panel and no new search, and ends converged `bounded-pass` or handed back. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-bounded-pass).
+The review loop's own finish, begun on its own by one of two triggers: the cap round's applied work (reported fixes, fix commits, a changed PR-body fix or a head diff that changed in the cap round), or a fix that keeps failing its audit after its one self-recovery, below the cap. It has at most one fix step and, after it, audit rounds: for the cap trigger, one audit of the cap round's unaudited fixes, then the one fix step and its audit; for the stall trigger, the one fix step for the stuck finding and its audit. It runs no panel and no new search. It ends converged `bounded-pass`, with each finding it could not clear left for the owner as a card that says what the loop tried; handed back for a held owner choice (`owner-choice-open`); or handed back for a fault of its own (`bounded-pass-open`). The [review record](#review-record) labels it and does not count the rounds it runs past the cap in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-bounded-pass).
 
 ### Extra audit round
 

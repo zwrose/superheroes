@@ -1563,6 +1563,7 @@ def _fix_batch_cap(config):
 
 VERIFY_THEN_CAP = "cap"
 VERIFY_THEN_POST_AUDITS = "post-audits"
+VERIFY_THEN_BOUNDED = "bounded-audits"  # the bounded pass's gate: its audit round follows
 DELTA_BASELINE_ABSENT = "delta-baseline-absent"
 HEAD_DIFF_MISMATCH_CAUSE = "head-diff-mismatch"
 HEAD_DIFF_UNVERIFIABLE_CAUSE = "head-diff-unverifiable"
@@ -6771,6 +6772,18 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         _sibling_ledger, _sibling_fault = _disposition_ledger_by_key(state)
         if _sibling_fault is None:
             _attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)
+    if _in_bounded_fix_step(state):
+        # axis: the bounded queue policy runs after ruling expansion and fix-group closure, so a Minor or Nit pulled in only as a fix-group sibling is context, never a target — see bite-proof record i2554_bounded_pass_b2
+        filtered = _apply_bounded_queue_policy(state, filtered)
+        if not filtered:
+            if keep_step_start and _step_holds_work(state, config, session_dir):
+                # a ruling emptied B2's pending slice after the step committed work: that work still folds and is audited
+                _decision(state, "fix-batch-held",
+                          "a ruling emptied the bounded pass's fix batch after the step committed fixes or edited the "
+                          "PR body — the slice stays, so that work folds, verifies and is audited")
+                return "held"
+            return "empty"  # no target is left: no fix step runs, the caller settles
+        cap = max(cap, len(filtered))  # the pass runs one fix step: the batch is never sliced
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
@@ -6914,6 +6927,9 @@ def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_d
         state.pop("_fixQueue", None)
         state.pop("_fixBatchIndex", None)
         _enter_post_fix(state, config, session_dir=session_dir)
+    elif status == "empty" and _in_bounded_fix_step(state) and not state.get("terminal"):
+        # axis: a ruling that leaves B2's pending step no target clears the stale slice and settles the pass, never a fix step still queued — see bite-proof record i2554_bounded_pass_b2 (E-ruling-empties)
+        _settle_ruled_empty_bounded_fix(state, config, session_dir=session_dir)
     _sync_pending_after_ruling_reconcile(state)
     return status
 
@@ -8438,6 +8454,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None, s
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config, session_dir=session_dir)
         return
+    if then == VERIFY_THEN_BOUNDED:
+        _begin_bounded_audit_round(state, config)
+        return
     # VERIFY_THEN_CAP, and the legacy position (a gate pending with no flag): the round advance is
     # here — past the cap it hands back `round-cap`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
@@ -8447,7 +8466,14 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None, s
 
 
 def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
-    """After the round's last fix-batch slice folds: advance or run the gate at the cap."""
+    """After the round's last fix-batch slice folds: advance or run the gate at the cap. The bounded
+    pass's one fix step runs the gate and then its own audit round, never `_advance_round`."""
+    # axis: the bounded pass's fix leg never advances the round or schedules a finder: its gate runs, then its own round writer begins the audits — see bite-proof record i2554_bounded_pass_b2
+    if _in_bounded_fix_step(state):
+        _record_bounded_restores(state)
+        state["_verifyThen"] = VERIFY_THEN_BOUNDED
+        state["step"] = P_VERIFY
+        return
     next_round = state["round"] + 1
     if next_round > _round_cap(config):
         # The round at the cap completes — fix AND gate — before the boundary refuses the next
@@ -10001,7 +10027,11 @@ def _fold_audits(state, config, artifact, session_dir=None):
         _decision(state, "spawned-audit-not-discharged", aid)
     # axis: the audit fold enters the restore before any continuation or halt can run — see bite-proof record c1l10b_wo2_test_restore
     restorable = [tid for tid in mismatch_ids if tid not in rider_ids]
-    if restorable:
+    # axis: a mismatch in the bounded pass takes no restore-only step or second test of its own: B1's restores ride B2's one fix step, and B2's own mismatch hands the PR back — see bite-proof records i2554_bounded_pass_b2
+    if restorable and _is_bounded_audit_round(state):
+        if not _bounded_mismatch(state, restorable, targets_by_id, results):
+            return
+    elif restorable:
         _begin_test_restore(state, config, restorable, targets_by_id, results)
         return
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
@@ -10018,7 +10048,11 @@ def _after_audits(state, config, session_dir=None):
         if _is_extra_audit_round(state) and _is_bounded_audit_round(state):
             _hand_back_post_cap(state, BOTH_POST_CAP_DETAIL)
         elif _is_bounded_audit_round(state):
-            _settle_bounded_audit(state, config, session_dir=session_dir)
+            # axis: the pass's second audit round settles on its own settle, which settles its leftovers before the kept check — see bite-proof record i2554_bounded_pass_b2
+            if state["boundedPass"].get("step") == BOUNDED_STEP_FINAL_AUDIT:
+                _settle_bounded_fix(state, config, session_dir=session_dir)
+            else:
+                _settle_bounded_audit(state, config, session_dir=session_dir)
         else:
             _settle_extra_audit(state, config, session_dir=session_dir)
         return
@@ -10355,7 +10389,11 @@ def _round_above_cap(state, config):
         return False
     # axis: a loaded state sits one past its cap only while the extra audit round it was ordered, or the bounded pass's round, is the round it holds — see bite-proof record c1l4b_wo_a
     # axis: the bounded pass's round is excepted too, and a state holding both rounds is not — see bite-proof record i2552_bounded_pass_b1
-    return not (rnd == cap + 1 and _is_extra_audit_round(state) != _is_bounded_audit_round(state))
+    extra, bounded = _is_extra_audit_round(state), _is_bounded_audit_round(state)
+    if rnd == cap + 1:
+        return not (extra != bounded)
+    # the pass's second audit round (`cap + 2`, after a `round-cap` trigger's `cap + 1`) is listed in `boundedPass.rounds`
+    return not (rnd == cap + 2 and bounded and not extra and state["boundedPass"].get("trigger") == "round-cap")
 
 
 def _cap_blocks_loaded(state, config):
@@ -10369,7 +10407,7 @@ def _cap_blocks_loaded(state, config):
         return False
     cap = _round_cap(config)
     rnd = state["round"]
-    if rnd == cap + 1 and _is_extra_audit_round(state) and _is_bounded_audit_round(state):
+    if rnd in (cap + 1, cap + 2) and _is_extra_audit_round(state) and _is_bounded_audit_round(state):
         _hand_back_post_cap(state, BOTH_POST_CAP_DETAIL)
         return True
     detail = (
@@ -10435,8 +10473,7 @@ def _hand_back_post_cap(state, detail):
     """A post-cap audit round's own fault: the PR is handed back open (`bounded-pass-open` for a
     bounded round, `extra-audit-open` for an ordered extra round), the cap kept."""
     if _is_bounded_audit_round(state):
-        state["boundedPass"]["step"] = "done"
-        _hand_back(state, "bounded-pass-open", detail, cap=True)
+        _bounded_hand_back(state, detail)
         return
     _hand_back(state, "extra-audit-open", detail, cap=True)
 
@@ -10444,15 +10481,18 @@ def _hand_back_post_cap(state, detail):
 BOTH_POST_CAP_DETAIL = "the session holds both an ordered extra audit round and a bounded pass"
 
 
-def _begin_post_cap_round(state, config):
+def _begin_post_cap_round(state, config, next_round=None):
     """The one post-cap writer of `state["round"]`: it begins round `cap + 1` for the ordered extra
     round and for the bounded pass, which have put `extraAudit` or `boundedPass` in the state first.
+    The bounded pass's second audit round (B2's) names its own `next_round`: `cap + 2`, or `r + 1`
+    for a `fix-keeps-failing` trigger at round `r`.
 
     `_advance_round` refuses every round past the cap. The round audits the cap round's fix batch and
     nothing else: it enters the audit derivation a delta round uses, with no post-audit verify, and an
     unknown surface or a lane that would need a panel hands the PR back open
     (`_hand_back_unknown_fix_surface`, `_reevaluate_lane_dimensions`)."""
-    next_round = _round_cap(config) + 1
+    if next_round is None:
+        next_round = _round_cap(config) + 1
     state["round"] = next_round
     state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
@@ -10611,9 +10651,10 @@ def _settle_bounded_audit(state, config, session_dir=None):
     Reads what `_settle_extra_audit` reads: the open audit ids, the auditors' new issues (those cited
     outside the PR go to the "Outside this PR" list first and never hold the pass open), the owner
     rulings no fixer received. An in-PR new issue holds the pass open unless its severity is Minor or
-    Nit; those stay for the terminal settle. Findings left open hand back `round-cap`; a fault of the
-    pass itself (an unreadable outcome, a new-issue entry that is not a record) hands back
-    `bounded-pass-open`. Nothing open ends on the one convergence chokepoint."""
+    Nit; those stay for the terminal settle. Findings left open begin B2, the pass's one fix step
+    (`_begin_bounded_fix`); a fault of the pass itself (an unreadable outcome, a new-issue entry that
+    is not a record) hands back `bounded-pass-open`. Nothing open ends on the one convergence
+    chokepoint."""
     state["boundedPass"]["step"] = "done"
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
     open_ids = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
@@ -10635,7 +10676,6 @@ def _settle_bounded_audit(state, config, session_dir=None):
         open_parts.append("new issue(s) raised: %s" % "; ".join(str(ni.get("title")) for ni in held))
     if pending:
         open_parts.append("owner guidance recorded but never sent to a fixer: %s" % "; ".join(pending))
-    cap = _round_cap(config)
     if fault_parts:
         _hand_back(state, "bounded-pass-open",
                    "The bounded pass could not settle (%s). The PR is handed back with its findings "
@@ -10643,13 +10683,348 @@ def _settle_bounded_audit(state, config, session_dir=None):
                    cap=True)
         return
     if open_parts:
-        _hand_back(state, "round-cap",
-                   "Round cap %s reached: the bounded pass audited the cap round's fixes and left "
-                   "them open (%s). The PR is handed back with its findings still open; "
-                   "certification is withheld." % (cap, "; ".join(open_parts)), cap=True)
+        # axis: what B1 leaves open begins the pass's one fix step, never the round-cap hand-back — see bite-proof record i2554_bounded_pass_b2
+        _begin_bounded_fix(state, config, open_ids, held, session_dir=session_dir)
         return
     _decision(state, "bounded-pass-settled",
               "the bounded pass audited the cap round's fixes and every one discharged")
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+
+
+# ---- the bounded pass's B2: one fix step and one more audit round -------------------------------
+
+BOUNDED_STEP_FIX = "fix"
+BOUNDED_STEP_FINAL_AUDIT = "final-audit"
+BOUNDED_STEP_DONE = "done"
+
+
+def _in_bounded_fix_step(state):
+    """True while the session sits in the bounded pass's one fix step (B2's `apply-fixes` leg)."""
+    bounded = state.get("boundedPass")
+    return isinstance(bounded, dict) and bounded.get("step") == BOUNDED_STEP_FIX
+
+
+def _bounded_hand_back(state, detail):
+    """A fault of the pass itself, wherever it is found: `bounded-pass-open`, the pass done. A pass begun by a
+    `fix-keeps-failing` stall never reached the round cap, and says so."""
+    bounded = state["boundedPass"]
+    bounded["step"] = BOUNDED_STEP_DONE
+    _hand_back(state, "bounded-pass-open", detail, cap=bounded.get("trigger") != "fix-keeps-failing")
+
+
+def _bounded_stays_target(state, row, ledger_by_key, effective):
+    """The bounded queue policy for one row: a target unless its severity is exactly Minor or Nit (an `Important`,
+    `Critical`, missing or unknown severity stays a target). A Minor or Nit stays a target when an owner fix or
+    guidance ruling names it, when it is the stall's stuck finding, or when its B1 audit found a test mismatch."""
+    if not isinstance(row, dict) or _holds_bounded_pass_open(row):
+        return True
+    return _bounded_named(state, row, ledger_by_key, effective)
+
+
+def _bounded_named(state, row, ledger_by_key, effective):
+    key = _finding_identity_key(row)
+    bounded = state["boundedPass"]
+    if key in (bounded.get("stuck") or []) or key in {i.get("findingKey") for i in bounded.get("restores") or []
+                                                      if isinstance(i, dict)}:
+        return True
+    decision = _row_decision(state, effective, ledger_by_key, key) if key else None
+    return isinstance(decision, dict) and decision.get("ruling") in _OWNER_FIX_RULINGS
+
+
+def _apply_bounded_queue_policy(state, rows):
+    """The batch's rows after the bounded queue policy. A row that is none of a target is removed and recorded on
+    the pass as `contextOnly` (`{findingKey, title}`, shown to the fixer in the guidance file) and by a decision."""
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    effective = _live_ruling_by_key(state)
+    kept, context = [], []
+    for row in rows:
+        (kept if _bounded_stays_target(state, row, ledger_by_key, effective) else context).append(row)
+    held = state["boundedPass"].setdefault("contextOnly", [])
+    kept_keys = {k for k in (_finding_identity_key(row) for row in kept) if k}
+    # axis: a finding now kept as a target is no longer context, so the fixer is never told not to fix what its batch asks it to fix
+    held[:] = [c for c in held if not isinstance(c, dict) or c.get("findingKey") not in kept_keys]
+    for row in context:
+        key = _finding_identity_key(row)
+        if key not in {c.get("findingKey") for c in held}:
+            held.append({"findingKey": key, "title": row.get("title")})
+            _decision(state, "fix-batch-excluded",
+                      "bounded queue policy: %s (%s) is a Minor or Nit pulled in only as a fix-group sibling, so it "
+                      "rides as context for the fixer and no audit targets it" % (key, row.get("title")))
+    return kept
+
+
+def _bounded_context_block(state):
+    """The guidance text naming the findings the fix step shows as context only, or None."""
+    held = state["boundedPass"].get("contextOnly") if _in_bounded_fix_step(state) else None
+    held = [c for c in held if isinstance(c, dict)] if isinstance(held, list) else []
+    if not held:
+        return None
+    return ("Context only, not to be fixed or audited in this step (Minor or Nit findings of a fix group the batch "
+            "closes over): " + "; ".join("%s (%s)" % (c.get("title"), c.get("findingKey")) for c in held))
+
+
+def _bounded_restore_payload(state):
+    """The test restores the pass's one fix step carries beside its batch (B1's mismatches), or []."""
+    if not _in_bounded_fix_step(state):
+        return []
+    return [{"findingKey": i["findingKey"], "path": i["path"], "content": i["content"], "sha256": i["sha256"]}
+            for i in state["boundedPass"].get("restores") or [] if isinstance(i, dict)]
+
+
+def _record_bounded_restores(state):
+    """The fix step folded: record the restores it carried as `_fold_test_restore` records its own, once."""
+    items = state["boundedPass"].pop("restores", None)
+    head = (state["rounds"].get(str(state["round"])) or {}).get("fixFoldHead")
+    for item in items if isinstance(items, list) else []:
+        _sync_reviewer_test(state, item["findingKey"], item["content"])
+        _record_round_append(state, "testRestore", {"findingKey": item["findingKey"], "path": item["path"],
+                                                    "source": "reviewer", "restoredHead": head})
+    if items:
+        _decision(state, "break-it-test-restored",
+                  "the pass's fix step carried the test reviewer's break-it test again: %s"
+                  % ", ".join(i["findingKey"] for i in items))
+
+
+def _bounded_mismatch(state, ids, targets_by_id, results):
+    """A test mismatch in a bounded audit round. B1's: the restores are put into B2's one fix step (no restore-only
+    step, no second test) and the audit goes on (True). B2's: the pass hands back `bounded-pass-open` (False)."""
+    bounded = state["boundedPass"]
+    if bounded.get("step") == BOUNDED_STEP_FINAL_AUDIT:
+        _bounded_hand_back(state, "The bounded pass's final audit found the committed break-it test is not the test "
+                                  "role's version, or weakens it (%s); no restore or second test runs past the pass's "
+                                  "one fix step, so no weakened test is left on a converged head. The PR is handed "
+                                  "back with its findings still open; certification is withheld." % ", ".join(ids))
+        return False
+    items, fault = _restore_items(state, targets_by_id, ids, results)
+    if fault is not None:
+        _bounded_hand_back(state, "The test reviewer's break-it test could not be restored in the pass's fix step "
+                                  "(%s). The PR is handed back with its findings still open; certification is "
+                                  "withheld." % fault)
+        return False
+    bounded["restores"] = items
+    # axis: B2's batch carries the test role's version the fixer commits, so its report passes the live submission check — see bite-proof record i2554_bounded_pass_b2 (E-restore-submits)
+    for item in items:
+        _sync_reviewer_test(state, item["findingKey"], item["content"])
+    return True
+
+
+def _begin_bounded_fix(state, config, open_ids, held, session_dir=None):
+    """B2 from B1: the open Important part (B1's undischarged targets and the in-PR new issues the severity rule
+    holds open; an owner ruling no fixer received joins in the queue) goes to one fix batch. A fault of the pass
+    (an open id with no audit target, an issue that compiles to no finding) hands back `bounded-pass-open`."""
+    targets = [dict(t) for t in state.get("_auditTargets") or [] if isinstance(t, dict) and t.get("id") in open_ids]
+    missing = sorted(open_ids - {t["id"] for t in targets})
+    issue_rows, unbound = [], []
+    for issue in held:
+        compiled, _drops = mechanical_compile([dict(issue)], state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
+        keyed = [f for f in compiled if isinstance(f, dict) and not f.get("summaryEntry") and _finding_identity_key(f)]
+        issue_rows += keyed
+        if not keyed:
+            unbound.append(str(issue.get("title")))
+    # axis: B1's reports of one finding merge with each other and with its open target, every place they name kept, so B2's audit owes them all — see bite-proof record i2554_bounded_pass_b2 (E-merge-places)
+    rows = _union_open_blockers(targets, issue_rows)
+    # axis: a merged row carries the strongest severity any of its reports holds, so a blocking B1 report never rides as a Minor's context — see bite-proof record i2554_bounded_pass_b2 (E-merge-severity)
+    by_key = {}
+    for row in [*targets, *issue_rows]:
+        by_key.setdefault(_finding_identity_key(row), []).append(row.get("severity"))
+    for row in rows:
+        row["severity"] = _strongest_severity(by_key.get(_finding_identity_key(row)) or [row.get("severity")])
+    if missing or unbound:
+        _bounded_hand_back(state, "The bounded pass could not begin its fix step (%s). The PR is handed back with "
+                                  "its findings still open; certification is withheld."
+                           % "; ".join(([("open audit id(s) with no audit target: %s" % ", ".join(missing))] if missing else [])
+                                       + ([("new issue(s) that carry no finding: %s" % "; ".join(unbound))] if unbound else [])))
+        return
+    _seed_pending_new_issues(state)  # every issue B1 raised is on the ledger before B2's audits replace `_newIssues`
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    state["boundedPass"]["fixed"] = sorted(i for i in outcome.get("discharged") or [] if isinstance(i, str))
+    state["boundedPass"]["step"] = BOUNDED_STEP_FIX
+    _decision(state, "bounded-pass-begun",
+              "the bounded pass's audits left %d finding(s) open: one fix batch, then one more audit round" % len(rows))
+    _queue_bounded_fix(state, config, rows, session_dir=session_dir)
+
+
+def _strongest_severity(severities):
+    """The strongest of the severities one finding's reports hold: any value that is not exactly `Minor` or `Nit`
+    (`Critical` first, then `Important`, then a missing or unknown value, which fails toward a target), else `Minor`
+    over `Nit`."""
+    blocking = [s for s in severities if s not in ("Minor", "Nit")]
+    if blocking:
+        rank = {"Critical": 0, "Important": 1}
+        return sorted(blocking, key=lambda s: rank.get(s, 2) if isinstance(s, str) else 2)[0]
+    return "Minor" if "Minor" in severities else severities[0]
+
+
+def _queue_bounded_fix(state, config, rows, session_dir=None):
+    """Queue B2's one fix batch (the queue policy runs inside `_queue_fix_batch`). With no target left there is no B2
+    step: the session converges through the one chokepoint, B1's discharges standing and what is left (Minor and
+    Nit, unruled) settling by the terminal settle's normal rule."""
+    status = _queue_fix_batch(state, config, _hold_owner_choice(state, rows), session_dir=session_dir)
+    bounded = state["boundedPass"]
+    if status == "queued":
+        return
+    if bounded.get("trigger") == "fix-keeps-failing":
+        # the stall's stuck finding is always a target: nothing queued means the pass never ran, so today's ending stands
+        if not state.get("terminal"):
+            state.pop("boundedPass", None)
+            if _unsettled_owner_choices(state):
+                _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+            else:
+                _hand_back(state, "fix-keeps-failing", "audit-stall persists after self-recovery", cap=False)
+        return
+    bounded["step"] = BOUNDED_STEP_DONE
+    if state.get("terminal") or state.get("step") == P_TERMINAL:
+        return
+    bounded["leftForOwner"] = []
+    _decision(state, "bounded-pass-settled",
+              "the bounded pass has no target left for its fix step: B1's discharges stand and what is left settles "
+              "by the terminal settle's normal rule")
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+
+
+def _settle_ruled_empty_bounded_fix(state, config, session_dir=None):
+    """A ruling left B2's pending fix step no target and the step holds no work: the stale slice is cleared and the pass
+    settles through the one chokepoint, as a B2 batch with no target does (`_queue_bounded_fix`)."""
+    for key in ("_fixBatch", "_fixQueue", "_fixBatchIndex"):
+        state.pop(key, None)
+    state["boundedPass"]["step"] = BOUNDED_STEP_DONE
+    state["boundedPass"]["leftForOwner"] = []
+    _decision(state, "bounded-pass-settled",
+              "a ruling left the bounded pass's fix step no target: what is left settles by the terminal settle's "
+              "normal rule")
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
+
+
+def _begin_stall_bounded_pass(state, config, breaker, session_dir=None):
+    """B2 from the post-recovery `fix-keeps-failing` stall: one fix batch holding the stuck finding (always a target),
+    each of its failed audits' reasons carried in the row's `auditFailures`; round `r`'s fix leg, then round `r + 1`'s
+    audits. True when the pass began. A batch that cannot be composed leaves today's hand-back to the caller."""
+    if "boundedPass" in state or "extraAudit" in state:
+        return False
+    batch, refusal = _compose_stall_fix_batch(state, breaker)
+    if refusal is not None or not batch:
+        return False
+    stuck = [_finding_identity_key(t) for t in _stalled_open_targets(state, breaker)]
+    stuck = [key for key in stuck if key]
+    state["boundedPass"] = {"trigger": "fix-keeps-failing", "step": BOUNDED_STEP_FIX, "rounds": [], "stuck": stuck}
+    _decision(state, "bounded-pass-begun",
+              "audit-stall persists after self-recovery: one fix batch for the stuck finding(s), then one more "
+              "audit round")
+    if isinstance((state["rounds"].get(str(state["round"])) or {}).get("fix"), dict):
+        _bounded_hand_back(state, "The bounded pass could not begin: round %s already holds a fix record. The PR is "
+                                  "handed back with its findings still open; certification is withheld."
+                           % state["round"])
+        return True
+    rows = []
+    for row in batch:
+        row = dict(row)
+        if _finding_identity_key(row) in stuck:
+            row["auditFailures"] = _audit_failures(state, row)
+        rows.append(row)
+    _queue_bounded_fix(state, config, rows, session_dir=session_dir)
+    return True
+
+
+def _audit_failures(state, row):
+    """Every failed audit of the finding `row` in the round records, oldest first: `{round, ruling, reasonKind, reason}`."""
+    failed = []
+
+    def line_less(ident):  # an id minus its trailing `@L<digits>`: an audit at an earlier line is the same finding
+        return re.sub(r"@L\d+$", "", ident) if isinstance(ident, str) and ident else None
+
+    mine = line_less(row.get("id"))
+    for rkey in sorted(state.get("rounds") or {}, key=_round_number):
+        entries = state["rounds"][rkey].get("audits") if isinstance(state["rounds"][rkey], dict) else None
+        for audit in entries if isinstance(entries, list) else []:
+            if (isinstance(audit, dict) and audit.get("ruling") not in audits._CLEARS
+                    and mine is not None and line_less(audit.get("id")) == mine):
+                failed.append({"round": _round_number(rkey), "ruling": audit.get("ruling"),
+                               "reasonKind": audit.get(audits.AUDIT_REASON_KIND_FIELD), "reason": audit.get("reason")})
+    return failed
+
+
+def _begin_bounded_audit_round(state, config):
+    """B2's fix leg folded and its gate passed: the pass's own round writer begins its audit round (`cap + 2` after a
+    `round-cap` trigger, `r + 1` after a stall at round `r`), which dispatches only the audits over B2's fixes."""
+    bounded = state["boundedPass"]
+    next_round = state["round"] + 1
+    bounded["rounds"] = list(bounded.get("rounds") or []) + [next_round]
+    bounded["step"] = BOUNDED_STEP_FINAL_AUDIT
+    _begin_post_cap_round(state, config, next_round)
+
+
+def _bounded_fix_commit(state, key):
+    """The B2 fix commit bound to the finding `key`, else the step's head commit, else None."""
+    rec = state["rounds"].get(str(state["round"] - 1)) or {}
+    fix = rec.get("fix") if isinstance(rec.get("fix"), dict) else {}
+    names = _slice_finding_resolver(state.get("fixBatch") or [])
+    for binding in fix.get("commits") or []:
+        if isinstance(binding, dict) and names.get(binding.get("finding")) == key and _nonempty_str(binding.get("commit")):
+            return binding["commit"]
+    head = rec.get("fixFoldHead")
+    return head if _nonempty_str(head) else None
+
+
+def _settle_bounded_fix(state, config, session_dir=None):
+    """B2's audit round folded: nothing else runs after it (no finder, seams check, fixer, stall recovery or second
+    verify). Each uncleared target that is not a bare Minor or Nit, and each in-PR new issue its auditors raised whose
+    severity is not Minor or Nit, is settled `left-for-owner` with its evidence BEFORE the convergence check, so the
+    break-it kept check finds a disposition and never parks. Minor and Nit leftovers settle by the terminal settle."""
+    bounded = state["boundedPass"]
+    bounded["step"] = BOUNDED_STEP_DONE
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    open_ids = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
+    raw_issues = state.get("_newIssues") or []
+    dict_issues = [ni for ni in raw_issues if isinstance(ni, dict)]
+    stray = len(raw_issues) - len(dict_issues)
+    held = [ni for ni in _route_outside_new_issues(state, dict_issues) if _holds_bounded_pass_open(ni)]
+    targets = {t["id"]: t for t in state.get("_auditTargets") or [] if isinstance(t, dict) and isinstance(t.get("id"), str)}
+    faults = (["the audit outcome is unreadable"] if open_ids is None else []) \
+        + (["%d new-issue entr%s not a record" % (stray, "y is" if stray == 1 else "ies are")] if stray else [])
+    if open_ids is not None and not open_ids <= set(targets):
+        faults.append("open audit id(s) with no audit target: %s" % ", ".join(sorted(open_ids - set(targets))))
+    raised = []
+    for issue in held if not faults else []:
+        compiled, _drops = mechanical_compile([dict(issue)], state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
+        keys = [_finding_identity_key(f) for f in compiled if isinstance(f, dict) and not f.get("summaryEntry")]
+        raised += [k for k in keys if k]
+        if not any(keys):
+            faults.append("new issue %r carries no finding" % issue.get("title"))
+    if faults:
+        _bounded_hand_back(state, "The bounded pass could not settle (%s). The PR is handed back with its findings "
+                                  "still open; certification is withheld." % "; ".join(faults))
+        return
+    ledger_by_key, _fault = _disposition_ledger_by_key(state)
+    effective = _live_ruling_by_key(state)
+    audit_by_id = {a.get("id"): a for a in outcome.get("audits") or [] if isinstance(a, dict)}
+    left = []
+    for tid in sorted(open_ids):
+        row = targets[tid]
+        key = _finding_identity_key(row) or tid
+        # axis: an uncleared target that is not a bare Minor or Nit is left for the owner with its evidence before the kept check — see bite-proof record i2554_bounded_pass_b2
+        if not _bounded_stays_target(state, row, ledger_by_key, effective):
+            continue
+        audit = audit_by_id.get(tid) or {}
+        evidence = {"fixCommit": _bounded_fix_commit(state, key),
+                    "audit": {"ruling": audit.get("ruling"), "reasonKind": audit.get(audits.AUDIT_REASON_KIND_FIELD),
+                              "reason": audit.get("reason")}}
+        _record_disposition(state, key, review_findings_schema.LEFT_FOR_OWNER, state["round"], openAtLoopEnd=True,
+                            settledReason="still open after the bounded pass's one fix step and audit round",
+                            **{session_contract.BOUNDED_PASS_EVIDENCE_FIELD: evidence})
+        left.append(key)
+    if raised:
+        _seed_pending_new_issues(state)  # the raised issues are on the ledger, so each takes a disposition
+    for key in raised:
+        _record_disposition(state, key, review_findings_schema.LEFT_FOR_OWNER, state["round"], openAtLoopEnd=True,
+                            settledReason="raised by the bounded pass's final audit and still open",
+                            **{session_contract.BOUNDED_PASS_EVIDENCE_FIELD: {"fixCommit": None, "raisedByFinalAudit": True}})
+        left.append(key)
+    cleared = {i for i in outcome.get("discharged") or [] if isinstance(i, str)} & set(targets)
+    bounded["fixed"] = sorted(set(bounded.get("fixed") or []) | cleared)
+    bounded["leftForOwner"] = sorted(set(left))
+    _decision(state, "bounded-pass-settled",
+              "the bounded pass's fix step was audited: %d fixed, %d left for the owner"
+              % (len(bounded["fixed"]), len(bounded["leftForOwner"])))
     _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
 
 
@@ -11164,6 +11539,9 @@ def _handle_stall(state, config, breaker, session_dir=None):
         _route_stall_self_recovery(state, config, batch, refusal, breaker,
                                    session_dir=session_dir)
         return
+    # axis: the stall that persists past its recovery begins the bounded pass, never the fix-keeps-failing hand-back — see bite-proof record i2554_bounded_pass_b2
+    if _begin_stall_bounded_pass(state, config, breaker, session_dir=session_dir):
+        return
     _hand_back(state, "fix-keeps-failing",
                breaker.get("detail") or "audit-stall persists after self-recovery", cap=False)
 
@@ -11555,6 +11933,8 @@ def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
             "shapeDrivers": sorted(shape_drivers)}
     if bounded:
         cert["boundedPass"] = {"trigger": bounded.get("trigger"), "rounds": list(bounded.get("rounds") or [])}
+        if "leftForOwner" in bounded:  # the pass ran its B2 step: what it cleared and what it left for the owner
+            cert["boundedPass"].update(fixed=list(bounded.get("fixed") or []), leftForOwner=list(bounded["leftForOwner"]))
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -15534,7 +15914,14 @@ def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
     if _batch_names_places(state):
         guidance = (KIND_PLACES_GUIDANCE if guidance == _GATE_GUIDANCE_NO_GUIDANCE
                     else guidance + "\n\n" + KIND_PLACES_GUIDANCE)
+    # the bounded pass's context-only findings ride the guidance file, never fix-batch.json (a findings array other code reads)
+    context = _bounded_context_block(state)
+    if context:
+        guidance = context if guidance == _GATE_GUIDANCE_NO_GUIDANCE else guidance + "\n\n" + context
     fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
+    restores = _bounded_restore_payload(state)
+    if restores:
+        fields["restores"] = restores
     guidance_path = _fix_guidance_path_for_round(session_dir, rnd, state)
     if guidance == _GATE_GUIDANCE_NO_GUIDANCE:
         if os.path.lexists(guidance_path):

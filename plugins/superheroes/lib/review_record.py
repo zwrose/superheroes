@@ -711,6 +711,20 @@ def _int_or_none(v):
     return v is None or _is_int(v)
 
 
+def _bounded_evidence_ok(v):
+    """True for exactly one of the two shapes the driver writes for a finding its bounded pass left for the owner: a
+    fix commit (a non-empty string or null) with the last audit's ruling, reason kind and reason (each a string or
+    null), or a finding the pass's final audit raised."""
+    if not isinstance(v, dict):
+        return False
+    if set(v) == {"fixCommit", "raisedByFinalAudit"}:
+        return v["fixCommit"] is None and v["raisedByFinalAudit"] is True
+    audit = v.get("audit")
+    return (set(v) == {"fixCommit", "audit"} and (v["fixCommit"] is None or (isinstance(v["fixCommit"], str) and bool(v["fixCommit"])))
+            and isinstance(audit, dict) and set(audit) == {"ruling", "reasonKind", "reason"}
+            and all(_str_or_none(x) for x in audit.values()))
+
+
 def _items_fault(v, item_fault):
     """Where a list's item is malformed, as a path suffix (`[2].grade`), "" when `v` is no list, else None."""
     if not isinstance(v, list):
@@ -991,6 +1005,10 @@ def _validate(a):
         chk(session_contract.OPEN_AT_LOOP_END_FIELD not in f or (
             f[session_contract.OPEN_AT_LOOP_END_FIELD] is True and f.get("outcome") == _LEFT_FOR_OWNER
             and decided_by is None), f"findings[{i}].{session_contract.OPEN_AT_LOOP_END_FIELD}")
+        # axis: the bounded pass's evidence rides only a left-for-owner finding, in exactly one of the two shapes the driver writes — see bite-proof record i2554_bounded_pass_record (E-evidence-shape)
+        chk(session_contract.BOUNDED_PASS_EVIDENCE_FIELD not in f or (
+            f.get("outcome") == _LEFT_FOR_OWNER and _bounded_evidence_ok(f[session_contract.BOUNDED_PASS_EVIDENCE_FIELD])),
+            f"findings[{i}].{session_contract.BOUNDED_PASS_EVIDENCE_FIELD}")
         if "grade" in f:
             fault = _grade_fault(f["grade"])
             # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
@@ -1061,11 +1079,15 @@ def _validate(a):
         chk(isinstance(extra, dict) and set(extra) == {"why"} and _nb(extra["why"]), "rounds.extraAudit")
     if "boundedPass" in rounds:
         bounded = rounds["boundedPass"]
-        # axis: the bounded pass is said with its trigger and its rounds and nothing else — see bite-proof record i2552_bounded_pass_b1
-        chk(isinstance(bounded, dict) and set(bounded) == {"trigger", "rounds"}
+        # axis: the bounded pass is said with its trigger, its rounds and the ones whose audits folded, and nothing else; the audited rounds are listed rounds in ascending order, and only a stall pass may list no round — see bite-proof records i2552_bounded_pass_b1 and i2554_bounded_pass_record (E-stall-record)
+        chk(isinstance(bounded, dict) and set(bounded) == {"trigger", "rounds", "auditedRounds"}
             and bounded["trigger"] in BOUNDED_PASS_TRIGGERS
-            and isinstance(bounded["rounds"], list) and bool(bounded["rounds"])
-            and all(isinstance(n, int) and not isinstance(n, bool) for n in bounded["rounds"]), "rounds.boundedPass")
+            and isinstance(bounded["rounds"], list)
+            and (bool(bounded["rounds"]) or bounded["trigger"] == "fix-keeps-failing")  # a stall pass may hand back before its audit round
+            and all(isinstance(n, int) and not isinstance(n, bool) for n in bounded["rounds"])
+            and isinstance(bounded["auditedRounds"], list)
+            and all(isinstance(n, int) and not isinstance(n, bool) and n in bounded["rounds"] for n in bounded["auditedRounds"])
+            and all(x < y for x, y in zip(bounded["auditedRounds"], bounded["auditedRounds"][1:])), "rounds.boundedPass")
     if "rerunChecks" in a:
         fault = _items_fault(a["rerunChecks"], _rerun_fault)
         # axis: a re-run check holds the first failure and the one re-run, two runs, each with a coherent status — see bite-proof record c1l1_wo_a_record_seam
@@ -1942,7 +1964,10 @@ def _drop_stale_open_marker(findings):
         # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
         stale = (session_contract.OPEN_AT_LOOP_END_FIELD in f
                  and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
-        out.append({k: v for k, v in f.items() if k != session_contract.OPEN_AT_LOOP_END_FIELD} if stale else f)
+        # axis: the bounded pass's evidence stays only on a finding still left for the owner, so a finding the owner later decides never carries it into the validator
+        moved = session_contract.BOUNDED_PASS_EVIDENCE_FIELD in f and f.get("outcome") != _LEFT_FOR_OWNER
+        gone = ((session_contract.OPEN_AT_LOOP_END_FIELD,) if stale else ()) + ((session_contract.BOUNDED_PASS_EVIDENCE_FIELD,) if moved else ())
+        out.append({k: v for k, v in f.items() if k not in gone} if gone else f)
     return out
 
 
@@ -2865,8 +2890,27 @@ def _bounded_pass_line(rounds):
     if not isinstance(bounded, dict):
         return None
     cap = rounds.get("cap")
-    return (f"Bounded pass: the cap round's fixes were audited in round {', '.join(str(n) for n in bounded.get('rounds') or [])}, "
-            f"which is not counted in the {f'{cap} ' if cap is not None else ''}rounds.")
+    listed, audited = bounded.get("rounds") or [], bounded.get("auditedRounds") or []
+
+    def fix_then(n):  # the pass's one bounded fix and what ran after it; an audit is named only for a round in `auditedRounds`
+        return f"audited in round {n}" if n in audited else "not audited"
+
+    if bounded.get("trigger") == "fix-keeps-failing":
+        if not listed:
+            return "Bounded pass: it began after a fix kept failing, and handed back before its audit round began."
+        later = listed[-1]
+        return ("Bounded pass: a fix that kept failing got one more bounded fix, "
+                + (f"audited in round {later}." if later in audited else "which was not audited."))
+    first = listed[0] if listed else None
+    text = (f"the cap round's fixes were audited in round {first}" if first in audited
+            else "handed back before the cap round's fixes were audited")
+    if len(listed) > 1:
+        text += f", then one bounded fix was made and {fix_then(listed[1])}"
+    # axis: the pass's rounds are named as not counted only for a round-cap pass, and an audit only for an audited round — see bite-proof record i2554_bounded_pass_record (E-audited)
+    named = " and ".join(str(n) for n in listed)
+    only = len(listed) == 1
+    return (f"Bounded pass: {text}; round{'' if only else 's'} {named} {'is' if only else 'are'} not counted in the "
+            f"{f'{cap} ' if cap is not None else ''}rounds.")
 
 
 # the not-run reason break_it.py (REASON_TRANSIT_REDACTED) stamps on a test whose text carries a transit redaction placeholder; spelled here because this module does not import break_it

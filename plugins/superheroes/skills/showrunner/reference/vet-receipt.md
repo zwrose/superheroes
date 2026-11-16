@@ -331,7 +331,13 @@ The vet carries these checks. Nothing automated runs them at handback.
 ## A handback with open findings
 
 A review stops at its round cap and hands the PR back with every finding still open, Important and
-Critical alike; a fix that keeps failing its audit hands back the same way. Nothing from the review
+Critical alike; a fix that keeps failing its audit hands back the same way. Three rounds run past the
+cap, and no others: [the bounded pass](../../review-code/reference/round-driver.md#the-bounded-pass)'s
+audit of the cap round's fixes (round `cap + 1`), its audit of its one fix (round `cap + 2`), and an
+ordered extra audit round a saved state holds (round `cap + 1`). A session stops at the cap in four
+ways: `round-cap`, `extra-audit-open`, a `bounded-pass-open` of a pass whose trigger is `round-cap`,
+and a converged `round-cap` bounded pass. A pass begun by a fix that kept failing below the cap is
+not a stop at the cap. Nothing from the review
 reached the owner while it ran, so this vet is where each open finding is settled. Read the open
 findings from the latest review record and grade each one's consequence as
 [The review record checks](#the-review-record-checks) grade a real consequence: against the
@@ -349,9 +355,12 @@ holds the PR until the record settles it. Where no sheet is built it is a line u
 reaches the owner as a question.
 
 **A finding with a real owner consequence takes one of two next steps, and you choose which.** The two
-apply to a session handed back with last decision `round-cap` or `fix-keeps-failing`. A cap round with
-unaudited fixes is handled by [the bounded pass](../../review-code/reference/round-driver.md#the-bounded-pass),
-so no extra audit round is ordered.
+apply to a session handed back with last decision `round-cap` or `fix-keeps-failing`. A session handed
+back `bounded-pass-open` takes the same two next steps. A cap round with unaudited fixes is handled by
+[the bounded pass](../../review-code/reference/round-driver.md#the-bounded-pass), so no extra audit
+round is ordered. A session that ended `converged` as a bounded pass has no handback, and the
+`left-for-owner` cards the pass settled are settled at the vet like any leftover: grade each one,
+decide a code-quality finding for the owner's veto, and take one of the two next steps for the rest.
 
 1. **A leftover for the owner.** The finding goes to the owner, framed in owner terms as
    `skills/showrunner/reference/owner-decisions.md` § The per-item spine says for a leftover. Its

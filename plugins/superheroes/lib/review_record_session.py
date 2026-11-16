@@ -1170,6 +1170,11 @@ def _findings_and_merges(state):
                 and rep.get("disposition") == _LEFT_FOR_OWNER and _decided_by(rep, outcome) is None
                 and sc.open_at_loop_end(rep)):
             held[sc.OPEN_AT_LOOP_END_FIELD] = True
+        # axis: a finding the bounded pass left for the owner carries the pass's evidence from its representative row, never from another row — see bite-proof record i2554_bounded_pass_record (E-evidence)
+        if (outcome == _LEFT_FOR_OWNER and rep is not None and not _valid_repeat_kept(rep)
+                and rep.get("disposition") == _LEFT_FOR_OWNER and _decided_by(rep, outcome) is None
+                and sc.BOUNDED_PASS_EVIDENCE_FIELD in rep):
+            held[sc.BOUNDED_PASS_EVIDENCE_FIELD] = copy.deepcopy(rep[sc.BOUNDED_PASS_EVIDENCE_FIELD])
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": finding_decided_by(rep, outcome, rulings) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
@@ -1714,19 +1719,21 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             makers.append({"family": family, "source": "seat map maker list"})
     wider = _wider_rounds(rounds)
     last = decisions[-1] if decisions else {}
+    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
     if abandoned is not None:
         cause, capped = {}, False  # no terminal to map
     else:
         cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
         if state["terminal"] == _HANDED_BACK:
-            # a hand-back stops at the cap only for the round cap and the extra audit; the others end early
-            capped = last.get("kind") in _HANDED_BACK_AT_CAP
+            # a hand-back stops at the cap only for the round cap, the extra audit and a `round-cap` pass's own fault; the others end early
+            # axis: a stall pass's `bounded-pass-open` is not a stop at the cap, and neither is one whose state holds no readable pass — see bite-proof record i2554_bounded_pass_record (E-stall-cap)
+            capped = last.get("kind") in _HANDED_BACK_AT_CAP and (
+                last.get("kind") != "bounded-pass-open" or bool(bounded and bounded.get("trigger") == "round-cap"))
         else:
             capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
     rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     extra = state.get("extraAudit")
-    bounded = state.get("boundedPass") if isinstance(state.get("boundedPass"), dict) else None
     bounded_rounds = bounded.get("rounds") if bounded and isinstance(bounded.get("rounds"), list) else []
     # a converged bounded pass kept the cap: its trigger was the round cap
     capped = capped or bool(abandoned is None and state["terminal"] == "converged" and bounded
@@ -1736,8 +1743,12 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         state.get("provenCopies") or [], state.get("headDiff") or state.get("reviewedDiff"))
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
-    # axis: every round the bounded pass lists is labelled, never counted, and a round both labels name is left out once — see bite-proof record i2552_bounded_pass_b1
-    post_cap = {str(n) for n in bounded_rounds if _int(n)}
+    # axis: a round the bounded pass lists is left out of the count only above the cap (a `fix-keeps-failing` pass's rounds are real rounds), and a round both labels name is left out once — see bite-proof records i2552_bounded_pass_b1 and i2554_bounded_pass_record (E-count)
+    cap_n = cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None
+    post_cap = {str(n) for n in bounded_rounds
+                if _int(n) and (n > cap_n if cap_n is not None else bounded.get("trigger") == "round-cap")}
+    # the pass's rounds whose audits folded in the session: the driver's `_fold_audits` writes the round's `audits` entry
+    audited = sorted({n for n in bounded_rounds if _int(n) and isinstance(rounds.get(str(n)), dict) and "audits" in rounds[str(n)]})
     if isinstance(extra, dict):
         post_cap.add(str(extra.get("round")))
     counted = len(rounds) - len(post_cap & set(rounds))
@@ -1759,7 +1770,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
                        **({"wider": wider} if wider else {}),
                        **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {}),
-                       **({"boundedPass": {"trigger": bounded.get("trigger"), "rounds": list(bounded_rounds)}}
+                       **({"boundedPass": {"trigger": bounded.get("trigger"), "rounds": list(bounded_rounds),
+                                           "auditedRounds": audited}}
                           if bounded else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},

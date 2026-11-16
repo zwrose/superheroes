@@ -1680,12 +1680,13 @@ def _persistent_not_discharged_seams(io=None):
         fix_step=fix_step, io=io, vendors=["claude", "codex"])
 
 
-def test_not_discharged_twice_self_recovers_once_then_is_handed_back(tmp_path):
+def test_not_discharged_twice_self_recovers_once_then_gets_the_bounded_pass(tmp_path):
     receipt = RD.run_loop(_persistent_not_discharged_seams(), _cfg_cert(maxRounds=20))
     recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
-    assert receipt["verdict"] == "handed-back"
-    assert receipt["decisions"][-1]["kind"] == "fix-keeps-failing"
+    assert receipt["verdict"] == "converged"
+    assert receipt["decisions"][-1]["kind"] == "converged"
+    assert receipt["certification"]["shape"] == "bounded-pass", receipt["certification"]
 
 
 _STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
