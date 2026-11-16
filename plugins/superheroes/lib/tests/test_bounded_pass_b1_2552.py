@@ -24,6 +24,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import review_record as RR  # noqa: E402
+import session_checkout as SC  # noqa: E402
 import test_c1l4b_extra_audit as X  # noqa: E402
 import test_review_record as TRR  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
@@ -550,12 +551,27 @@ def _rearm_state(seams, cap):
 
 
 def test_t9_a_cap_round_whose_fixer_applied_nothing_hands_back_round_cap_with_no_pass(tmp_path):
-    # axis: the pass begins only on fixes the fixer reported applying: a batch queued with none applied hands
-    # back, and no round begins past the cap — see bite-proof record i2552_bounded_pass_b1 (E-applied)
+    # axis: the pass begins only on applied work: a batch queued with no reported fix, no commit, no PR-body fix
+    # and a head diff the fixer left as it was hands back, and no round begins past the cap — see bite-proof
+    # record i2552_bounded_pass_b1 (E-applied). The world is the never-converging loop of
+    # `_rearm_forever_seams`, whose fixer reports no fixes; its cap round's fixer returns the head diff the
+    # round before left (`_headf_ns(cap - 1)`, the cap round's reviewed diff), so the head stays put.
     cap = 4
-    result, state = _rearm_state(TRD._rearm_forever_seams(), cap)
+    seams = TRD._rearm_forever_seams()
+    queued = seams["fix_step"]
+
+    def head_unchanged_at_the_cap(batch, rnd, payload):
+        out = queued(batch, rnd, payload)
+        if rnd == cap:
+            out["headDiff"] = TRD._headf_ns(cap - 1)
+        return out
+
+    seams["fix_step"] = head_unchanged_at_the_cap
+    result, state = _rearm_state(seams, cap)
     assert result["verdict"] == "handed-back" and state["decisions"][-1]["kind"] == "round-cap"
     assert state["round"] == cap and state["rounds"][str(cap)]["fix"]["fixes"] == []
+    assert not state["rounds"][str(cap)]["fix"].get("commits")
+    assert state["headDiff"] == state["reviewedDiff"], "the cap round's fixer left the head where it was"
     assert "boundedPass" not in state and "bounded-pass-begun" not in _kinds(state)
     assert max(int(n) for n in state["rounds"]) == cap
 
@@ -580,6 +596,66 @@ def test_t10_a_cap_round_that_committed_a_fix_but_reported_no_fixes_enters_the_p
     assert (n["action"], n["round"]) == (RD.P_AUDITS, CAP + 1), trace
     assert state["boundedPass"] == {"trigger": "round-cap", "step": "audit", "rounds": [CAP + 1]}
     assert "bounded-pass-begun" in _kinds(state)
+
+
+def _committing_respond(checkout):
+    """`_respond()`, except that the cap round's fixer commits a real (non-restore) code change in the session's
+    git checkout and answers an empty fixes list with the post-fix head diff: no binding, so the submit chokepoint
+    records no fix commit, and only the head diff shows the work."""
+    base = _respond()
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_APPLY_FIXES and rnd == CAP:
+            with open(os.path.join(checkout, "fixed_module.py"), "w", encoding="utf-8") as fh:
+                fh.write("FIXED = True\n")
+            SC._git(checkout, "add", "-A")
+            SC._git(checkout, "commit", "-q", "-m", "fix the open finding")
+            return {"fixes": [], "headDiff": TRD._headf_ns(CAP), "changedSubjects": ["Code"]}
+        return base(phase, payload, rnd)
+
+    return respond
+
+
+def test_t11_a_cap_round_that_committed_a_fix_with_no_binding_enters_the_pass(tmp_path):
+    # axis: the pass begins on a head diff that changed in the cap round: a session that committed a fix, bound
+    # none and reported an empty fixes list leaves both record lists empty, and only the head diff shows the
+    # fix — see bite-proof record i2552_bounded_pass_b1 (E-head-diff)
+    checkout = str(tmp_path / "checkout")
+    d, n, trace = _session(tmp_path, _committing_respond(checkout), stop=lambda n: n["round"] > CAP)
+    state = X._state(d)
+    cap_fix = state["rounds"][str(CAP)]["fix"]
+    assert cap_fix["fixes"] == [] and not cap_fix.get("commits"), cap_fix
+    # the session checkout holds its base commit and the fix commit
+    assert SC._git(checkout, "rev-list", "--count", "HEAD").stdout.strip() == "2"
+    assert (n["action"], n["round"]) == (RD.P_AUDITS, CAP + 1), trace
+    assert state["boundedPass"] == {"trigger": "round-cap", "step": "audit", "rounds": [CAP + 1]}
+    assert "bounded-pass-begun" in _kinds(state)
+
+
+def test_t11_break_it_without_the_head_diff_signal_the_same_session_hands_back_round_cap(tmp_path, monkeypatch):
+    # axis: A/B — the same session (a commit, no binding, an empty fixes list) enters the pass with the head-diff
+    # signal and hands back `round-cap` with it removed (neutralized here) — see bite-proof record
+    # i2552_bounded_pass_b1 (E-head-diff)
+    monkeypatch.setattr(RD, "_head_diff_changed", lambda state: False)
+    checkout = str(tmp_path / "checkout")
+    d, terminal, _trace = _session(tmp_path, _committing_respond(checkout))
+    final = X._state(d)
+    assert terminal["payload"]["verdict"] == "handed-back" and final["decisions"][-1]["kind"] == "round-cap"
+    assert "boundedPass" not in final and final["round"] == CAP
+
+
+@pytest.mark.parametrize("reviewed,head,expected", [
+    (TRD.DIFF, TRD.HEAD, True),
+    (TRD.DIFF, TRD.DIFF, False),
+    (None, TRD.HEAD, False),
+    (TRD.DIFF, None, False),
+    (TRD.DIFF, 5, False),
+    (3, TRD.HEAD, False),
+], ids=["differs", "equal", "reviewed-missing", "head-missing", "head-not-text", "reviewed-not-text"])
+def test_t11_the_head_diff_signal_needs_both_diffs_as_text_and_unequal(reviewed, head, expected):
+    state = _capped_state(fix={"fixes": [], "commits": []})
+    state["reviewedDiff"], state["headDiff"] = reviewed, head
+    assert RD._bounded_pass_applies(state, state["config"]) is expected
 
 
 def _capped_state(**record):

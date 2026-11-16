@@ -181,8 +181,12 @@ def test_a_state_that_is_not_an_unfinished_continuable_generation_is_left_as_it_
 
 # --- G3: a session in its stored last round finishes it and begins no round after it ------------
 
-def test_g3_a_generation_six_session_runs_its_stored_cap_round_and_begins_no_round_after_it(tmp_path):
+def test_g3_a_generation_six_session_runs_its_stored_cap_round_and_begins_no_round_after_it(tmp_path, monkeypatch):
     # axis: an unfinished state of a continuable earlier generation at the current schema is not refused — see bite-proof record c1l4b_wo_b
+    # the bounded pass is off: this is the earlier release's cap hand-back, which the stored session ran to
+    monkeypatch.setattr(RD, "_begin_bounded_pass",
+                        lambda state, config, trigger: RD._cap_blocks(state, config, state["round"] + 1,
+                                                                      "post-verify-advance"))
     session_dir = _bootstrap(tmp_path, BOUNDARY)
     before = _state(session_dir)
     assert before["round"] == STORED_CAP == before["config"]["maxRounds"] and not before.get("terminal")

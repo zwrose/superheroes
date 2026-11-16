@@ -203,7 +203,11 @@ def test_t2_verify_fail_after_audits_halts(tmp_path):
 
 
 # axis: cap round with no prior gate runs verify before the round-cap hand-back
-def test_t3_cap_gate_runs_then_hands_back(tmp_path):
+def test_t3_cap_gate_runs_then_hands_back(tmp_path, monkeypatch):
+    # the bounded pass is off: this pins the cap hand-back of the release before it, with the head changed
+    monkeypatch.setattr(RD, "_begin_bounded_pass",
+                        lambda state, config, trigger: RD._cap_blocks(state, config, state["round"] + 1,
+                                                                      "post-verify-advance"))
     d = str(tmp_path)
     cfg = _cfg(maxRounds=1, verifyCommand="pytest -q")
     respond = _responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE)

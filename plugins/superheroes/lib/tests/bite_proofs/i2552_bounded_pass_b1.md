@@ -4,8 +4,8 @@ Issue 2552, layer 1 of 2497: the review loop's bounded pass. Detector file:
 `plugins/superheroes/lib/tests/test_bounded_pass_b1_2552.py`. Each red and green below is one run of one exact node id with
 `scripts/pinned-python -B -X pycache_prefix=/tmp/wt2497-pyc -m pytest <node id> -q -n auto`.
 
-The guarded-element set is these eight: E-entry, E-load, E-both, E-settle, E-minor,
-E-record, E-applied, E-applied-work (the last added by the fix leg for vet finding V969-1). Each was neutralized by a targeted edit, run red, restored by the inverse edit, and run green. Captures are
+The guarded-element set is these nine: E-entry, E-load, E-both, E-settle, E-minor,
+E-record, E-applied, E-applied-work, E-head-diff (the last two added by the fix legs for vet finding V969-1). Each was neutralized by a targeted edit, run red, restored by the inverse edit, and run green. Captures are
 quoted at the decisive lines (each full capture is under 2 KiB, so nothing is elided beyond the pytest header and the
 `warning: The UV_NATIVE_TLS ...` / `bringing up nodes...` lines). No secret, token, URL or personal detail appears in any
 capture; nothing was redacted. Each node id below is written `file::test_name` with the file being
@@ -181,3 +181,29 @@ round's `fix.fixes`); none of the six neutralized lines appears in it. The resto
   ```
 - **Restore:** the inverse edit. **Restored line quoted:** `    return bool(_round_applied_work(state["rounds"][str(cap)]))`
 - **Raw green:** `1 passed in 2.18s`
+
+## E-head-diff
+
+- **Guarded element:** `round_driver.py` `_bounded_pass_applies` with its helper `_head_diff_changed`, the head-diff signal.
+  **Axis:** the cap round applied work when its post-fix `headDiff` differs from the round's `reviewedDiff` (both text,
+  read through `_changed_sections_only` as `_enter_delta_round` reads them). A session that committed a fix, bound none and
+  answered an empty fixes list leaves `fix.fixes` and `fix.commits` empty, and only the head diff shows the fix; it is audited.
+  A missing or non-text diff gives no signal, and a cap round with neither record facts nor a changed head diff hands back
+  `round-cap` (`test_t9`, rebuilt on a fixer that leaves the head unchanged, pins that half).
+- **Detector (expected red):** `test_bounded_pass_b1_2552.py::test_t11_a_cap_round_that_committed_a_fix_with_no_binding_enters_the_pass`
+  (end to end through `cmd_next`/`cmd_submit` in a session whose checkout is a real git repository; the cap round's fixer
+  commits a real code change and answers `fixes: []`). Its A/B pair is
+  `test_t11_break_it_without_the_head_diff_signal_the_same_session_hands_back_round_cap`.
+- **Neutralization:** the signal dropped from the last line of `_bounded_pass_applies`: `    return
+  bool(_round_applied_work(state["rounds"][str(cap)]))`.
+- **Raw red** (ran once; the `UV_NATIVE_TLS` and `bringing up nodes...` lines elided):
+  ```
+  >       assert (n["action"], n["round"]) == (RD.P_AUDITS, CAP + 1), trace
+  E       AssertionError: [('dispatch-panel', 1), ('dispatch-verifiers', 1), ('dispatch-synthesis', 1), ('apply-fixes', 1), ('dispatch-audits', 2), ('run-verify', 2), ...]
+  E       assert ('terminal', 2) == ('dispatch-audits', 3)
+  FAILED plugins/superheroes/lib/tests/test_bounded_pass_b1_2552.py::test_t11_a_cap_round_that_committed_a_fix_with_no_binding_enters_the_pass
+  1 failed in 2.28s
+  ```
+- **Restore:** the inverse edit. **Restore receipt (restored line quoted):**
+  `    return bool(_round_applied_work(state["rounds"][str(cap)]) or _head_diff_changed(state))`
+- **Raw green:** `1 passed in 2.52s`
