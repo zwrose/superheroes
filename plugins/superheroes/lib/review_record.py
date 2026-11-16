@@ -78,6 +78,10 @@ PARTS_SCHEMA = "review-record-parts/1"
 EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
 _RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
+# Why a reviewer run with a runner nonce has no bound run folder (`unboundRuns`): `not-in-extras` — no listed folder names
+# the nonce and every listed folder read and named a run of this session; `unmatched` — two listed folders claim the nonce,
+# or no folder names it while some listed folder could not be read or named no nonce of this session's runs.
+UNBOUND_RUN_CASES = ("not-in-extras", "unmatched")
 CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
@@ -1067,6 +1071,14 @@ def _validate(a):
             and _is_int(e["attempt"]) and e["attempt"] >= 1
             and isinstance(e["silentSeconds"], (int, float)) and not isinstance(e["silentSeconds"], bool)
             and math.isfinite(e["silentSeconds"]) and e["silentSeconds"] >= 0 for e in ends), "silenceWatchdogEnds")
+    if "unboundRuns" in a:
+        unbound = a["unboundRuns"]
+        # axis: an unbound run names its seat, its nonce and one of the two case tokens, exactly those keys — see bite-proof record i2516_unbound_runs
+        chk(isinstance(unbound, list) and all(
+            isinstance(e, dict) and set(e) == {"seat", "nonce", "case"} and ne(e["seat"]) and ne(e["nonce"]) and bool(e["seat"].strip())
+            and bool(e["nonce"].strip())
+            # axis: the case is one of UNBOUND_RUN_CASES, never another word — see bite-proof record i2516_unbound_runs
+            and e["case"] in UNBOUND_RUN_CASES for e in unbound), "unboundRuns")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -2179,6 +2191,9 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         # axis: a codex seat the watchdog ended is named in the record whenever the account lists an end — see bite-proof record i2375_c_watchdog_ends
         **({"silenceWatchdogEnds": [dict(e, seat=_shown_seat(e["seat"])) for e in a["silenceWatchdogEnds"]]}
            if a.get("silenceWatchdogEnds") else {}),
+        # axis: a reviewer run with a nonce and no bound run folder is named in the record whenever the account lists one — see bite-proof record i2516_unbound_runs
+        **({"unboundRuns": [dict(e, seat=_shown_seat(e["seat"]), nonce="[REDACTED NONCE]" if _seat_hidden(e["nonce"]) else e["nonce"])
+                            for e in a["unboundRuns"]]} if a.get("unboundRuns") else {}),
         "unreadFiles": unread, "rawOutputs": [],
         # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
         "leftForOwner": [_name(f) for f in findings if waits_for_owner(f, findings)],
@@ -2911,6 +2926,18 @@ def _watchdog_line(ends, level):
         f"{e['seat']} attempt {e['attempt']} after {e['silentSeconds']} s silent" for e in ends) + "."
 
 
+def _unbound_line(runs, level):
+    """The summary line for the reviewer runs that carry a nonce no single run folder claims; None when the record carries
+    none. Level 0 names each run; the compact levels give their count, and the record's JSON keeps the list."""
+    if not (isinstance(runs, list) and runs):
+        return None
+    if level >= 1:
+        # axis: the compact levels give the count only, so the line stays bounded however many runs there are — see bite-proof record i2516_unbound_runs
+        return f"Unbound runs: {_plural(len(runs), 'run', 'runs')} {LISTED}."
+    # axis: level 0 names every run (seat, nonce, case) in list order — see bite-proof record i2516_unbound_runs
+    return "Unbound runs: " + "; ".join(f"{e['seat']} nonce {e['nonce']} ({e['case']})" for e in runs) + "."
+
+
 def _test_lens_line(r):
     """The one `Test lens:` line. A record with no usable `testLens` part reads unmeasured."""
     part = r.get("testLens")
@@ -3017,6 +3044,7 @@ def _summary(r, level):
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
+    unbound_line = _unbound_line(r.get("unboundRuns"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
@@ -3031,6 +3059,7 @@ def _summary(r, level):
         # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
         *([transit_line] if transit_line else []),
         *([watchdog_line] if watchdog_line else []),
+        *([unbound_line] if unbound_line else []),
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         *([rounds_line] if rounds_line else []),
         *([extra_audit_line] if extra_audit_line else []),
@@ -3072,7 +3101,7 @@ def _summary(r, level):
             checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
     checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
                              if l is not floor_line and l is not withheld_line and l is not refusals_line
-                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+                             and l is not transit_line and l is not watchdog_line and l is not unbound_line and l not in wider_lines and all(l is not q for q in quoted_lines))
     _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 
