@@ -83,6 +83,18 @@ def call(cwd, paths, proposed=None, root=None):
     """The floor, the lane and the reasons for ``paths``. Never raises: a ``paths`` that is not a
     list of strings goes straight to ``risk_areas.touched``, which answers ``not-set``."""
     got = risk_areas.touched(cwd, paths, root=root)
+    return _from_read(got, paths, proposed)
+
+
+def call_pinned(cwd, paths, stored, proposed=None):
+    """The lane for ``paths`` against a risk-areas read already taken, such as a review session's pinned read."""
+    got = risk_areas.touched(cwd, paths, stored=stored)
+    return _from_read(got, paths, proposed)
+
+
+def _from_read(got, paths, proposed):
+    """The floor, the lane and the reasons for one ``risk_areas.touched`` answer ``got``, the ``paths`` it
+    was taken for and a proposed lane."""
     state, unmatchable = got["riskAreas"], got["unmatchable"]
     hits = [{"name": hit["area"]["name"], "matched": list(hit["matched"])} for hit in got["touched"]]
     floor, why = None, []

@@ -343,8 +343,9 @@ def _write_text_kind(cwd, proposal, root):
 
 
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
-    """Record an owner-approved calibration change. The caller applies between reviews: the command
-    does not check for a running review, so the advisor runs it only when no review loop is in flight.
+    """Record an owner-approved calibration change. It may run at any time: a running review keeps the
+    calibration it captured at its start (`lib/calibration_pin.py`), so the change reaches every review
+    that starts after the write (a review session with no capture reads calibration live until it ends).
 
     Canon's append path cannot carry a store root (`canon._locate` resolves the ambient store), so a
     `root` naming any other store is refused (`store-override-unsupported`) before anything is written,

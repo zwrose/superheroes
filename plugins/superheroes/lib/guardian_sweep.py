@@ -57,6 +57,40 @@ def _repo_root(cwd):
     return store_core.repo_root(cwd)
 
 
+def _read_duplication_skip(cwd, root):
+    """The calibrated duplication skip globs, read once per sweep. Never raises.
+
+    ``project_config`` imports this module at load, so it is imported lazily here. Any
+    failure (import, call, or a result that is not a list of strings) skips nothing and
+    says why: ``globs`` [] with reason ``duplication-skip-unreadable``. ``repoRoot`` is
+    the repository root the globs are matched from (None when it cannot be resolved).
+    """
+    try:
+        repo_root = _repo_root(cwd)
+    except Exception:
+        repo_root = None
+    try:
+        import project_config
+        res = project_config.read_duplication_skip(cwd, root)
+        globs = res["globs"]
+        if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
+            raise TypeError("globs is not a list of strings: %r" % (globs,))
+        return {
+            "globs": list(globs),
+            "reason": res.get("reason"),
+            "detail": res.get("detail"),
+            "repoRoot": repo_root,
+        }
+    except Exception as exc:
+        # bite-proof axis: a failing reader skips nothing and says so.
+        return {
+            "globs": [],
+            "reason": "duplication-skip-unreadable",
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+            "repoRoot": repo_root,
+        }
+
+
 def _positive_cadence_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -800,6 +834,9 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
     issue_cache = {}
     first_baseline_max = config.get(
         "firstBaselineValidateMax", _DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
+    # Calibrated duplication skip trees: read once per sweep, handed to every lens ctx.
+    duplication_skip = _read_duplication_skip(cwd, root)
+    skipped_by_lens = {}
 
     for lens in lenses:
         if set(lens.required_facts) & unsatisfied:
@@ -821,6 +858,7 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             "run": run,
             "prevDigest": None if lens_new else prev_entry.get("digest"),
             "verifyCommand": verify_command,
+            "duplicationSkip": duplication_skip,
         }
         try:
             out = lens.collect(ctx) or {}
@@ -830,6 +868,11 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
             out, status, reason, boundary = {}, "not-collected", "malformed collect: %s" % exc, False
         except Exception as exc:
             out, status, reason, boundary = {}, "not-collected", "collect raised: %s" % exc, False
+
+        # Whatever a lens skipped is reported on every status, the not-collected skip path
+        # included — a skip is never silent.
+        if isinstance(out.get("skippedTrees"), dict):
+            skipped_by_lens[lens.name] = out["skippedTrees"]
 
         if status == "not-collected":
             degraded_lenses.append(lens.degrade(reason))
@@ -1021,6 +1064,19 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
                     lrec.get("issue"), cwd=cwd,
                     deadline=issue_deadline, cache=issue_cache),
             }
+            # A filed pair touching a skipped tree is absent from this sweep because the
+            # lens never looked at it, not because it was fixed: mark it so closure
+            # leaves it filed. A pair this sweep did measure is never marked skipped.
+            # bite-proof axis: a present candidate is never marked skipped, even when its
+            # path holds a pipe that pair_touches_skip can split into a skipped-looking half.
+            if (lens.name == "duplication" and duplication_skip["globs"]
+                    and matched_cand is None):
+                import guardian_lens_duplication
+                if guardian_lens_duplication.pair_touches_skip(
+                        rid, duplication_skip["globs"],
+                        cwd=os.path.realpath(cwd),
+                        repo_root=duplication_skip.get("repoRoot")):
+                    filed_observations[rid]["skipped"] = True
 
         if lens_surfaced:
             lens_meta[lens.name] = {
@@ -1129,13 +1185,22 @@ def collect(cwd, lenses=None, root=None, run=None, config=None):
         "sweptSha": swept_sha,
         "sweepId": sweep_id,
         "filedObservations": filed_observations,
+        "skippedTrees": {
+            "read": {
+                "globs": list(duplication_skip["globs"]),
+                "reason": duplication_skip["reason"],
+                "detail": duplication_skip["detail"],
+            },
+            "lenses": skipped_by_lens,
+        },
         "committed": committed,
         "storageMode": storage_mode,
     }
 
 
 _LEDGER_DECISION_STATES = ("filed", "accepted", "declined", "triaged-out")
-_LEDGER_DECISION_KEYS = ("disposition", "issue", "reason", "reraiseWhen")
+_LEDGER_DECISION_KEYS = ("disposition", "issue", "reason", "reraiseWhen",
+                         guardian_ledger.DEFERRED_BY_POLICY)
 
 
 def _nonempty_str(val):
@@ -1162,6 +1227,17 @@ def _ledger_decision_errors(did, verdict, ledger):
         errors.append("%s: ledger filed requires a non-empty issue" % did)
     elif state in ("accepted", "declined") and not _nonempty_str(ledger.get("reason")):
         errors.append("%s: ledger %s requires a non-empty reason" % (did, state))
+    if guardian_ledger.DEFERRED_BY_POLICY in ledger:
+        deferred = ledger[guardian_ledger.DEFERRED_BY_POLICY]
+        # Axis: type (a bool, never null/0/1/"true") and disposition (true only on a
+        # deferrable state) are separate refusals, each mirrored from validate_record.
+        if not isinstance(deferred, bool):
+            errors.append("%s: ledger.%s must be a boolean"
+                          % (did, guardian_ledger.DEFERRED_BY_POLICY))
+        elif deferred and state not in guardian_ledger.DEFERRABLE_STATES:
+            errors.append("%s: ledger.%s true requires disposition %s"
+                          % (did, guardian_ledger.DEFERRED_BY_POLICY,
+                             "|".join(guardian_ledger.DEFERRABLE_STATES)))
     return errors
 
 
@@ -1217,6 +1293,9 @@ def _close_filed_records(records, observations, sweep_id):
         obs = (observations or {}).get(rid)
         if obs is None:
             continue
+        # bite-proof axis: a filed record whose pair is in a skipped tree is never advanced.
+        if obs.get("skipped"):
+            continue
         if not _issue_ready_for_closure(obs.get("issueState")):
             continue
         if not obs.get("present"):
@@ -1254,6 +1333,7 @@ def _decisions_from_dispositions(dispositions):
                 "issue": ledger.get("issue"),
                 "reason": ledger.get("reason"),
                 "reraiseWhen": ledger.get("reraiseWhen"),
+                "deferredByPolicy": ledger.get("deferredByPolicy"),
             })
         elif d.get("verdict") == "rejected":
             reason = d.get("reason")
@@ -1263,6 +1343,7 @@ def _decisions_from_dispositions(dispositions):
                 "issue": None,
                 "reason": reason if isinstance(reason, str) and reason.strip() else None,
                 "reraiseWhen": None,
+                "deferredByPolicy": None,
             })
     return decisions
 
@@ -1306,9 +1387,33 @@ def _redecide_settled(record, decision, candidate):
         return None, None
     proposed = copy.deepcopy(record)
     proposed["metricAtDisposition"] = _resettled_metric(candidate, record)
-    for key in ("reason", "reraiseWhen"):
+    for key in ("reason", "reraiseWhen", guardian_ledger.DEFERRED_BY_POLICY):
         if decision.get(key) is not None:
             proposed[key] = decision[key]
+    proposed["date"] = guardian_ledger._today()
+    ok, reasons = guardian_ledger.validate_record(proposed)
+    if not ok:
+        return None, "; ".join(reasons)
+    return proposed, None
+
+
+def _deferral_changed(record, decision):
+    """Does a same-disposition decision carry a deferredByPolicy that differs from the record's?
+
+    An absent decision flag (None) never changes anything; an absent record flag reads as
+    False, so an explicit `false` on a flagless record is equal and a no-op."""
+    want = decision.get(guardian_ledger.DEFERRED_BY_POLICY)
+    return want is not None and want != bool(record.get(guardian_ledger.DEFERRED_BY_POLICY))
+
+
+def _redefer(record, decision):
+    """Flip only the deferredByPolicy flag of a same-disposition record → (record, reason).
+
+    The record is updated in place on a deep copy: the flag and `date` change,
+    `adjudicatedIn` stays write-once. `(None, why)` when the updated record is not valid
+    (e.g. `true` on a disposition that cannot be deferred)."""
+    proposed = copy.deepcopy(record)
+    proposed[guardian_ledger.DEFERRED_BY_POLICY] = decision[guardian_ledger.DEFERRED_BY_POLICY]
     proposed["date"] = guardian_ledger._today()
     ok, reasons = guardian_ledger.validate_record(proposed)
     if not ok:
@@ -1326,7 +1431,9 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
     target; surfaced/reopened → target when `ALLOWED_TRANSITIONS` allows it. A decision
     already at its target is a no-op (idempotent re-run) — except an accepted/declined
     record whose candidate materially worsened, which is re-settled in place at the new
-    metric (`_redecide_settled`). A decision with no legal path, or whose chain `advance`
+    metric (`_redecide_settled`), and a same-disposition decision whose `deferredByPolicy`
+    differs from the record's, which flips that flag in place (`_redefer`). A decision with
+    no legal path, or whose chain `advance`
     refuses part-way, is skipped and reported — the working copy is dropped, so a
     half-advanced record is never written."""
     new_records = list(records or [])
@@ -1346,16 +1453,22 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
         rid = existing["id"] if existing is not None else decided_id
         from_state = existing.get("disposition") if existing is not None else None
         if from_state == target:
+            proposed, why = None, None
             if target in guardian_ledger.WONT_FIX_STATES:
                 proposed, why = _redecide_settled(
                     existing, dec, cand_by_id.get(decided_id))
-                if why:
-                    skipped.append({"id": rid, "from": from_state, "to": target,
-                                    "reason": "re-decision refused: %s" % why})
-                elif proposed is not None:
-                    new_records = [proposed if r is existing else r for r in new_records]
-                    applied.append({"id": rid, "from": from_state, "to": target,
-                                    "redecided": True})
+            # Axis: a same-disposition decision whose deferredByPolicy differs from the
+            # record's updates the record in place (once — a worsened trade that already
+            # re-settled above carried the new flag with it, so it is not flipped twice).
+            if proposed is None and why is None and _deferral_changed(existing, dec):
+                proposed, why = _redefer(existing, dec)
+            if why:
+                skipped.append({"id": rid, "from": from_state, "to": target,
+                                "reason": "re-decision refused: %s" % why})
+            elif proposed is not None:
+                new_records = [proposed if r is existing else r for r in new_records]
+                applied.append({"id": rid, "from": from_state, "to": target,
+                                "redecided": True})
             continue
         if existing is None:
             chain = ["candidate", "surfaced", target]
@@ -1378,7 +1491,7 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
             continue
         fields = {"sweepId": sweep_id,
                   "metricAtDisposition": _metric_at_disposition(cand_by_id.get(decided_id))}
-        for key in ("issue", "reason", "reraiseWhen"):
+        for key in ("issue", "reason", "reraiseWhen", guardian_ledger.DEFERRED_BY_POLICY):
             fields[key] = dec.get(key)
         working = new_records
         failure = None

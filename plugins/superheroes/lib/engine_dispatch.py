@@ -7776,12 +7776,18 @@ def _observation_from_attempt(run_dir_real, state, attempt):
 
 # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run
 # without one — see bite-proof record i2381_every_attempt
+# axis: a silence-watchdog-ended attempt with no usage total leaves its tokens unmeasured, not the whole run, when another attempt measured — see bite-proof record i2514_partial_cost
 def _attempts_cost(run_dir_real, state):
     """{"tokens", "wallSeconds", "attempts"} summed over every attempt the journal shows, or None.
 
     Each attempt needs a dict `ended` and a finite non-negative numeric (not bool) `wallSeconds`; a codex run also needs
     the attempt's own stdout to carry a valid usage total. Any other engine, an empty attempts map, or any attempt
-    short of a figure gives None. Never raises."""
+    short of a figure gives None, with one exception (#2514): an attempt the silence watchdog ended
+    (`_silence_watchdog_end`) whose stdout carries no usage total (`codex_usage_tokens(..., explicit=True)` is None)
+    adds its wall seconds and no tokens, and its number joins `tokensUnmeasured`. A run with such an attempt and at least
+    one measured attempt gives {"tokens", "wallSeconds", "attempts", "tokensUnmeasured": [attempt numbers, ascending]}:
+    the measured attempts' tokens and every attempt's wall time. A run with no measured attempt gives None. A run whose
+    attempts all measured gives exactly the three keys, as before. Never raises."""
     try:
         opened = state.get("opened")
         if not isinstance(opened, dict) or opened.get("engine") != "codex":
@@ -7789,7 +7795,7 @@ def _attempts_cost(run_dir_real, state):
         attempts = state.get("attempts")
         if not isinstance(attempts, dict) or not attempts:
             return None
-        tokens, wall = 0, 0
+        tokens, wall, unmeasured = 0, 0, []
         for att in sorted(attempts):
             slot = attempts[att]
             ended = slot.get("ended") if isinstance(slot, dict) else None
@@ -7799,12 +7805,24 @@ def _attempts_cost(run_dir_real, state):
             if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):
                 return None
             stdout = _read_capped_text(os.path.join(run_dir_real, "attempt-%d.stdout" % att), stream=CAP_STREAM_STDOUT)
-            used = engine_adapter.codex_usage_tokens(stdout)
-            if used is None:
-                return None
+            if _silence_watchdog_end(ended):
+                used = engine_adapter.codex_usage_tokens(stdout, explicit=True)
+                if used is None:
+                    wall += secs
+                    unmeasured.append(att)
+                    continue
+            else:
+                used = engine_adapter.codex_usage_tokens(stdout)
+                if used is None:
+                    return None
             tokens += used
             wall += secs
-        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+        if not unmeasured:
+            return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+        # axis: a run with no measured attempt has no figure, however many attempts the watchdog ended — see bite-proof record i2514_partial_cost
+        if len(unmeasured) == len(attempts):
+            return None
+        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts), "tokensUnmeasured": unmeasured}
     except Exception:
         return None
 
