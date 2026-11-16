@@ -90,7 +90,7 @@ _EXPECTED_CMD_NAMES = (
     "cmd_attest",
     "cmd_break_it_change",  # session state + mirror + one journal row; no durable seat records
     "cmd_checkpoint",
-    "cmd_extra_audit",  # session state + mirror + one journal row, copies the receipt to round-receipt.superseded-1.json; no durable seat records
+    "cmd_extra_audit",  # refuses extra-audit-retired at once: no state write, at most one refusal journal row; no durable seat records
     "cmd_next",
     "cmd_record_missing",
     "cmd_record_result",

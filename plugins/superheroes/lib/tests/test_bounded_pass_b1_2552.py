@@ -150,7 +150,9 @@ def test_t1_break_it_without_the_entry_the_cap_round_hands_back_with_its_fixes_u
     final = X._state(d)
     assert terminal["payload"]["verdict"] == "handed-back" and final["decisions"][-1]["kind"] == "round-cap"
     assert "boundedPass" not in final and final["round"] == CAP
-    assert RD._cap_round_fix_unaudited(final)
+    assert RD._round_cap(final["config"]) == CAP and final["round"] == CAP
+    assert isinstance(final["rounds"][str(CAP)]["fix"], dict) and RD._fix_batch_keys(final)
+    assert final["decisions"][-1]["kind"] == "round-cap" and final["decisions"][-1]["round"] == CAP
 
 
 # --- T2: every fix discharged, nothing Important open: converged `bounded-pass` -----------------------
@@ -235,10 +237,10 @@ def test_t4_an_important_new_issue_cited_outside_the_pr_goes_to_the_outside_list
 # --- T5 (BC-B1): a session saved inside an ordered extra audit round --------------------------------
 
 def test_t5_a_saved_session_inside_an_ordered_extra_round_is_not_handed_back_and_settles_on_the_extra_settle(
-        tmp_path, monkeypatch):
+        tmp_path):
     # axis: the legacy `extraAudit` round at `cap + 1` is excepted by the load guard and settled by the extra
     # settle — see bite-proof record i2552_bounded_pass_b1
-    d, batch = X._ordered(tmp_path, monkeypatch)
+    d, batch = X._ordered(tmp_path)  # built on `X._legacy_extra_round`, the writes the retired verb made
     state = X._state(d)
     assert "boundedPass" not in state and state["extraAudit"]["round"] == CAP + 1 and not state.get("terminal")
     n = RD.cmd_next(d)
@@ -251,9 +253,9 @@ def test_t5_a_saved_session_inside_an_ordered_extra_round_is_not_handed_back_and
     assert "boundedPass" not in final and not {"bounded-pass-begun", "bounded-pass-settled"} & set(_kinds(final))
 
 
-def test_t5_an_audit_result_submitted_after_the_upgrade_settles_on_the_extra_settle(tmp_path, monkeypatch):
+def test_t5_an_audit_result_submitted_after_the_upgrade_settles_on_the_extra_settle(tmp_path):
     # axis: the extra round's audits, emitted before the upgrade and answered after it, hand back `extra-audit-open`
-    d, _batch = X._ordered(tmp_path, monkeypatch, extra="not-discharged")
+    d, _batch = X._ordered(tmp_path, extra="not-discharged")  # built on `X._legacy_extra_round`
     assert RD.cmd_next(d)["action"] == RD.P_AUDITS  # the audits were emitted by the earlier release
     terminal, emitted = X._finish(d, X._respond(extra="not-discharged"))
     assert emitted == [RD.P_AUDITS, RD.P_TERMINAL], emitted
@@ -263,11 +265,12 @@ def test_t5_an_audit_result_submitted_after_the_upgrade_settles_on_the_extra_set
 
 
 def test_the_extra_audit_verb_refuses_a_session_that_ran_the_bounded_pass(tmp_path):
-    # axis: a session holding `boundedPass` refuses an order with the already-run token, so the verb never writes
-    # the second key — see bite-proof record i2552_bounded_pass_b1
+    # axis: the verb refuses every call with the retired token, so it never writes `extraAudit` into a session
+    # holding `boundedPass` — see bite-proof record i2552_bounded_pass_b1
     d, _terminal, _trace = _session(tmp_path, _respond("not-discharged"))
     assert X._state(d)["decisions"][-1]["kind"] == "round-cap"
-    X._refused(d, X._order(tmp_path), "extra-audit-already-run")
+    out = RD.cmd_extra_audit(d, str(tmp_path / "order.json"), "advisor", X.PR)
+    assert out["ok"] is False and out["reason"] == "extra-audit-retired", out
     assert "extraAudit" not in X._state(d)
 
 

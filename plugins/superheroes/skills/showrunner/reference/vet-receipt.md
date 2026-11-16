@@ -348,32 +348,19 @@ holds the PR until the record settles it. Where no sheet is built it is a line u
 *what accepting it means*, saying what you decided and that the owner can take it back. It never
 reaches the owner as a question.
 
-**A finding with a real owner consequence takes one of three next steps, and you choose which:**
+**A finding with a real owner consequence takes one of two next steps, and you choose which.** The two
+apply to a session handed back with last decision `round-cap` or `fix-keeps-failing`. A cap round with
+unaudited fixes is handled by [the bounded pass](../../review-code/reference/round-driver.md#the-bounded-pass),
+so no extra audit round is ordered.
 
-1. **An [extra audit round](../../../rubric/glossary.md#extra-audit-round).** One more round that
-   audits only the last round's fixes, with no panel and no new search. A PR has it at most once, so
-   it is open to you only while the PR's review records show no extra audit round. It is open to you
-   only when all three hold: the session handed back with last decision `round-cap`; the cap round
-   applied a fix no audit checked; and the build session still holds the handed-back session folder.
-   After a `fix-keeps-failing` hand-back the verb always refuses `extra-audit-nothing-to-audit`,
-   because its last fix was already audited, so the choices there are a leftover or a rethink, and an
-   open Critical leaves only by a rethink. Where the session folder is gone, or the PR's comment
-   history cannot be read cleanly (the verb refuses `extra-audit-pr-history-unreadable`), the same two
-   choices remain. You order it by message to the build session that holds the session folder. That
-   session writes the order file `{"why": "<reason>"}` and runs
-   `python3 -B <plugin root>/lib/round_driver.py extra-audit --session-dir <session dir> --order-file <order file> --by advisor --pr <N>`,
-   then continues `next` / `advance` to the terminal and the review record. The verb and its refusals
-   are in [The extra audit round](../../review-code/reference/round-driver.md#the-extra-audit-round).
-2. **A leftover for the owner.** The finding goes to the owner, framed in owner terms as
+1. **A leftover for the owner.** The finding goes to the owner, framed in owner terms as
    `skills/showrunner/reference/owner-decisions.md` § The per-item spine says for a leftover. Its
    outcome in the record is `left-for-owner`, and the third row of the review record checks holds
    the PR until the owner is shown it.
-3. **A rethink.** The PR goes back to the builder to rethink the approach, not to patch the finding.
+2. **A rethink.** The PR goes back to the builder to rethink the approach, not to patch the finding.
    The record of the PR's next review session shows whether the rethink converged.
 
-**An open Critical is never a leftover.** It leaves the cap only by the extra audit round or a
-rethink, so on a PR that already had its extra audit round, or wherever the extra audit round is not
-open (the conditions above), it goes to a rethink.
+**An open Critical is never a leftover.** It goes to a rethink.
 
 **The cap-choice field.** The receipt records each choice in one fixed field, `**Cap choices.**`,
 which the gardening pass counts. Under it, each choice is a bullet followed by its own marker line:
@@ -384,12 +371,13 @@ which the gardening pass counts. Under it, each choice is a bullet followed by i
 <!-- superheroes:cap-choice choice=<choice> vet=<this vet's ordinal> record=<link to the review record> key=<findingKey> -->
 ```
 
-`choice` is exactly one of three spellings: `extra-audit-round`, `leftover` or `rethink`. `key` is
+`choice` is `leftover` or `rethink`. A receipt may carry a third spelling, `extra-audit-round`, which
+no new choice writes and which the gardening pass reads. `key` is
 the finding's stored `findingKey`, copied exactly from the review record, and runs to the end of the
 marker line; never the finding's `id`, which is the reviewer's own and can repeat. `record` is the
 review record the choice was made against. A posted line is never removed or rewritten, even when
-the receipt is edited in place: a later vet's choice for the same finding, such as a rethink after
-an extra audit round that did not settle it, is a new line in that vet's receipt, carrying that
+the receipt is edited in place: a later vet's choice for the same finding, such as a rethink for a
+finding first left for the owner, is a new line in that vet's receipt, carrying that
 vet's ordinal. A receipt that records `leftover` for a Critical is a defect in the receipt. A vet
 with no open finding that has a real owner consequence writes no field.
 

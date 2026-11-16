@@ -123,7 +123,7 @@ and the failure then surfaces *after all the work is done*.
 - **A real independent review before handback** — the *shape* of review scales; its
   existence does not.
 - **Receipts before claims**, **disclosed degradations**, **CI**, **owner-only merges**.
-- **The round cap and the only-what-changed rule.** A review session runs at most 4 rounds in every lane, bar the one extra audit round the advisor may order. A PR that comes back is reviewed for what changed since the last reviewed commit, and gets a full review only when the returning-review decider answers `full`. The record writer refuses a light or micro record over the cap with `review-record-round-cap-exceeded`.
+- **The round cap and the only-what-changed rule.** A review session runs at most 4 rounds in every lane; past the cap only the round of [the bounded pass](../skills/review-code/reference/round-driver.md#the-bounded-pass) runs. A PR that comes back is reviewed for what changed since the last reviewed commit, and gets a full review only when the returning-review decider answers `full`. The record writer refuses a light or micro record over the cap with `review-record-round-cap-exceeded`.
 
 **Single-reviewer lanes (light and micro).** The one reviewer comes from a different model family than every [maker](glossary.md#maker) of the change. Once the orchestrator (light) or the advisor (micro) types the change, that session is a maker, so a reviewer from its family is not independent. A review record that names no maker cannot show independence, so it reads not reviewed.
 

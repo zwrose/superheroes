@@ -978,8 +978,9 @@ PR-body markers from the retired execution spine survive independently of it:
   marker is its author's declaration, so the writer reads no prose and the vet reads the prose
   against the markers.
 - **Cap-choice lines** — the vet receipt's `**Cap choices.**` field carries one `superheroes:cap-choice`
-  marker line per choice, written by the advisor at vet in the receipt comment: `choice=` one of
-  `extra-audit-round`, `leftover` or `rethink`, then `vet=` (the vet's ordinal), `record=` (the review
+  marker line per choice, written by the advisor at vet in the receipt comment: `choice=` is
+  `leftover` or `rethink` (a marker carrying `extra-audit-round` is read; no new choice writes it),
+  then `vet=` (the vet's ordinal), `record=` (the review
   record the choice was made against) and `key=` (the finding's `findingKey`, to the end of the line).
   The gardening pass counts them. A posted line is never rewritten; a later choice is a new line.
   Payload-carrying, like the list markers, so not an exact-byte anchor. Home:

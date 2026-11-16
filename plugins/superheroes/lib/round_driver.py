@@ -10466,11 +10466,6 @@ def _begin_post_cap_round(state, config):
                                    "nothing to audit" % _post_cap_round_name(state))
 
 
-def _begin_extra_audit_round(state, config):
-    """Begin the one extra audit round, ordered at the cap, by the `extra-audit` verb."""
-    _begin_post_cap_round(state, config)
-
-
 def _cap_round_holds_fix_batch(state, cap):
     """True when the state's round is the cap, the cap round's record carries a `fix`, and the fix
     batch names a finding: the cap round applied fixes."""
@@ -13338,240 +13333,28 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
     return {"ok": True, "finding": staged_id, "run": record}
 
 
-# --- the extra audit round ----------------------------------------------------------------------
+# --- the extra audit round (retired) -------------------------------------------------------------
 #
-# A session that was handed back at its round cap can be reopened once, by the advisor's order, for
-# one more round: it audits the cap round's fixes and nothing else (no panel, scoped finder, gap
-# sweep, fixer or verify), and it is labelled in the record. A PR gets at most one such round, across
-# all its sessions. `_begin_post_cap_round` is the only way a session begins round `cap + 1`, for
-# this verb or for the bounded pass (`_begin_bounded_pass`), which a cap round with unaudited fixes
-# enters on its own.
+# The advisor no longer orders an extra audit round: a cap round with unaudited fixes enters the
+# bounded pass on its own (`_begin_bounded_pass`), which replaces it. The verb stays so that an old
+# order fails loudly: it refuses at once, before it takes the lock or reads any state, receipt or
+# order file, and posts nothing. A session whose state holds `extraAudit` (an ordered round saved
+# mid-round) still finishes it through `_is_extra_audit_round` and `_settle_extra_audit`, and its
+# record still carries `rounds.extraAudit`.
 
-EXTRA_AUDIT_STATE_UNREADABLE = "extra-audit-state-unreadable"
-EXTRA_AUDIT_ORDER_INVALID = "extra-audit-order-invalid"
-EXTRA_AUDIT_NOT_AT_CAP = "extra-audit-not-at-cap"
-EXTRA_AUDIT_ALREADY_RUN = "extra-audit-already-run"
-EXTRA_AUDIT_NOTHING_TO_AUDIT = "extra-audit-nothing-to-audit"
-EXTRA_AUDIT_HEAD_UNRESOLVABLE = "extra-audit-head-unresolvable"
-EXTRA_AUDIT_HEAD_MOVED = "extra-audit-head-moved"
-EXTRA_AUDIT_RECEIPT_FAULTED = "extra-audit-receipt-faulted"
-EXTRA_AUDIT_PR_HISTORY_UNREADABLE = "extra-audit-pr-history-unreadable"
-EXTRA_AUDIT_ALREADY_RUN_ON_PR = "extra-audit-already-run-on-pr"
-EXTRA_AUDIT_RESERVATION_FAILED = "extra-audit-reservation-failed"
-EXTRA_AUDIT_SUPERSEDED_RECEIPT = "round-receipt.superseded-1.json"
-_EXTRA_AUDIT_CAP_KINDS = ("round-cap", "fix-keeps-failing")
+EXTRA_AUDIT_RETIRED = "extra-audit-retired"
+EXTRA_AUDIT_RETIRED_DETAIL = ("the extra audit round is retired: a cap round with unaudited fixes enters "
+                              "the bounded pass on its own (round-driver reference § The bounded pass)")
 _RECEIPT_FINALIZED_MARKS = ("_receiptFinalized", "_receiptFault", "_receiptFaultClass")
 
 
-def _checkout_head(session_dir, state):
-    """The head of the checkout the session ran in, or None when git cannot name it."""
-    repo_root = _resolve_repo_root(session_dir, state)
-    if not repo_root:
-        return None
-    return store_core.run_git(repo_root, "rev-parse", "HEAD") or None
-
-
-def _load_extra_audit_order(order_file):
-    """(why, None) for an order file that is a JSON object with exactly one key, `why`, a non-blank
-    string; else (None, what is wrong with it)."""
-    try:
-        with open(order_file, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError, TypeError, RecursionError) as exc:
-        return None, "the order file is unreadable: %s" % exc
-    if not isinstance(doc, dict) or set(doc) != {"why"}:
-        return None, "the order file must be a JSON object with exactly one key, `why`"
-    why = doc["why"]
-    if not isinstance(why, str) or not why.strip():
-        return None, "`why` must be a non-blank string"
-    return why, None
-
-
-def _cap_round_fix_unaudited(state):
-    """True when the cap round applied a fix batch that no audit round has audited.
-
-    A fix is audited in the round after the one that applied it, and `_advance_round` never begins a
-    round past the cap. So a record of the cap round that carries a `fix`, in a session whose round is
-    still the cap and whose last decision is the `round-cap` hand-back, names a fix whose audit round
-    was refused at the boundary. A `fix-keeps-failing` hand-back is never this: it is found in an
-    audit fold, in a round that holds no fix of its own (a fix would have advanced the round first),
-    and its last decision is not `round-cap`."""
-    if not _cap_round_holds_fix_batch(state, _round_cap(state.get("config"))):
-        return False
-    rnd = state["round"]
-    decisions = state.get("decisions")
-    last = decisions[-1] if isinstance(decisions, list) and decisions else None
-    return isinstance(last, dict) and last.get("kind") == "round-cap" and last.get("round") == rnd
-
-
 def cmd_extra_audit(session_dir, order_file, by, pr, repo=None, readers=None):
-    """Reopen a session handed back at its cap for one extra audit round, by the advisor's order.
-
-    `readers` is a test seam for the record reader that checks the PR's earlier records."""
-    try:
-        with round_records.session_lock(session_dir):
-            upgrade = _upgrade_gate(session_dir, EXTRA_AUDIT_CMD)
-            if upgrade is not None:
-                return upgrade
-            refusal = _commit_recover_or_refuse(session_dir, EXTRA_AUDIT_CMD)
-            if refusal is not None:
-                return refusal
-            return _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=repo,
-                                           readers=readers)
-    except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, EXTRA_AUDIT_CMD, held)
-
-
-def _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers):
-    """(refusal, repo): the refusal for what the PR's earlier review records and reservations show, or
-    None when none shows the round; repo is the repository the PR is read from."""
-    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
-    if repo is None:
-        try:
-            resolved = review_record._readers(readers)["repo_name"](
-                _resolve_repo_root(session_dir, state))
-        except Exception:  # noqa: BLE001 — the seam is a foreign call; the history read then fails closed
-            resolved = None
-        if isinstance(resolved, str) and review_record._REPO_RE.fullmatch(resolved):
-            repo = resolved
-        else:
-            # axis: a repository that cannot be resolved from the session checkout refuses, it never falls back to the ambient directory's
-            return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
-                               detail="the repository could not be resolved from the session checkout"), None
-    history = review_record.extra_audit_history(pr, repo, readers, session_id=_meta_session_id(session_dir))
-    # axis: PR history that cannot be read refuses, it never reads as "the round has not run" — see bite-proof record c1l4b_wo_a
-    if not history.get("ok"):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
-                           detail=history.get("detail")), repo
-    # axis: a PR whose earlier review record shows the extra audit round refuses a second one — see bite-proof record c1l4b_wo_a
-    if history.get("ran"):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN_ON_PR,
-                           sessionId=history.get("sessionId"), url=history.get("url")), repo
-    return None, repo
-
-
-def _supersede_receipt(session_dir):
-    """(name, sha256, None) once `round-receipt.json` is copied byte for byte to its superseded name,
-    or (None, None, None) when no receipt file exists; (None, None, detail) when the copy cannot be
-    made or proven. The copy is atomic; a copy already there (a re-run after a crash) must hold the
-    same bytes and is left as it is."""
-    path = os.path.join(session_dir, RECEIPT_FILE)
-    if not os.path.lexists(path):
-        return None, None, None
-    target = os.path.join(session_dir, EXTRA_AUDIT_SUPERSEDED_RECEIPT)
-    try:
-        with open(path, "rb") as fh:
-            original = fh.read()
-        digest = hashlib.sha256(original).hexdigest()
-        if os.path.lexists(target):
-            with open(target, "rb") as fh:
-                held = hashlib.sha256(fh.read()).hexdigest()
-            if held != digest:
-                return None, None, ("%s already exists and differs from the current receipt"
-                                    % EXTRA_AUDIT_SUPERSEDED_RECEIPT)
-            return EXTRA_AUDIT_SUPERSEDED_RECEIPT, digest, None
-        round_commit.atomic_write_bytes(target, original)
-        with open(target, "rb") as fh:
-            copied = hashlib.sha256(fh.read()).hexdigest()
-    except OSError as exc:
-        return None, None, "the receipt could not be copied: %s" % exc
-    if copied != digest:
-        try:
-            os.unlink(target)
-        except OSError:
-            pass
-        return None, None, "the copy of the receipt does not match its original"
-    return EXTRA_AUDIT_SUPERSEDED_RECEIPT, digest, None
-
-
-def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=None):
-    ok, state = load_state(session_dir)
-    if not ok or state is None:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_STATE_UNREADABLE,
-                           detail=state if not ok else "no state")
-    why, order_fault = _load_extra_audit_order(order_file)
-    if order_fault is not None:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ORDER_INVALID,
-                           value=order_file, detail=order_fault)
-    # A session that was ordered its extra round ends on that round's own terminal (converged, or a
-    # hand-back that is not the cap's), never on the cap's, so this test comes before the at-cap one:
-    # after it, the second order would otherwise meet "not at the cap" and never be named a repeat.
-    # axis: a session that already ran its extra audit round refuses a second order — see bite-proof record c1l4b_wo_a
-    # axis: a session that ran the bounded pass refuses an order too, so the verb never writes the second key — see bite-proof record i2552_bounded_pass_b1
-    if "extraAudit" in state or "boundedPass" in state:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN)
-    decisions = state.get("decisions")
-    last = decisions[-1] if isinstance(decisions, list) and decisions else None
-    last_kind = last.get("kind") if isinstance(last, dict) else None
-    if not (state.get("terminal") == "handed-back" and last_kind in _EXTRA_AUDIT_CAP_KINDS):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_NOT_AT_CAP,
-                           terminal=state.get("terminal"), lastDecision=last_kind)
-    if not _cap_round_fix_unaudited(state):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_NOTHING_TO_AUDIT)
-    certified = _session_certified_head(session_dir, state)
-    try:
-        current = _checkout_head(session_dir, state)
-    except Exception:  # noqa: BLE001 — a head that cannot be read is unresolvable, not a crash
-        current = None
-    if not certified or not current:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_HEAD_UNRESOLVABLE,
-                           certifiedHead=certified, checkoutHead=current)
-    # axis: a checkout that moved off the session's certified head refuses before any write — see bite-proof record c1l4b_wo_a
-    if certified != current:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_HEAD_MOVED,
-                           certifiedHead=certified, checkoutHead=current)
-    if state.get("_receiptFinalized"):
-        fault = _verify_terminal_receipt(session_dir)
-        if fault:
-            return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RECEIPT_FAULTED,
-                               detail=str(fault))
-    refusal, repo = _extra_audit_pr_history_refusal(session_dir, state, pr, repo, readers)
-    if refusal is not None:
-        return refusal
-    # axis: the allowance is reserved on the PR after every local check and before the receipt copy and the state commit, so a second session sees it — a reservation that cannot be posted refuses with nothing written
-    import review_record  # noqa: E402 — lazy: the closure of this module stays unchanged
-    reserved = review_record.reserve_extra_audit(pr, repo, _meta_session_id(session_dir), why, readers)
-    if not reserved.get("ok"):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RESERVATION_FAILED,
-                           detail=reserved.get("detail"))
-    # axis: after posting, the verb re-reads the PR and proceeds only when no other session's reservation or round record has a lower comment id than its own — the first reservation posted wins; a loser leaves its reservation in place, and a failed re-read refuses with nothing written locally
-    elected = review_record.extra_audit_history(pr, repo, readers, session_id=_meta_session_id(session_dir),
-                                                own_id=reserved.get("id"))
-    if not elected.get("ok"):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_PR_HISTORY_UNREADABLE,
-                           detail=elected.get("detail"))
-    if elected.get("ran"):
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_ALREADY_RUN_ON_PR,
-                           sessionId=elected.get("sessionId"), url=elected.get("url"))
-    superseded, superseded_sha, copy_fault = _supersede_receipt(session_dir)
-    if copy_fault is not None:
-        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RECEIPT_FAULTED,
-                           detail=copy_fault)
-    config = state.get("config") or {}
-    new_round = _round_cap(config) + 1
-    state["extraAudit"] = {"why": why, "by": by, "round": new_round,
-                           "orderedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                           "supersededReceipt": superseded, "supersededReceiptSha256": superseded_sha}
-    _set_terminal(state, None)
-    state["certification"] = None
-    state["pending"] = None
-    for mark in _RECEIPT_FINALIZED_MARKS:
-        state.pop(mark, None)
-    _decision(state, "extra-audit-ordered",
-              "extra audit round %d ordered by %s: %s" % (new_round, by, why))
-    _begin_extra_audit_round(state, config)
-    journal_entry = _journal_entry_for_commit(
-        session_dir, EXTRA_AUDIT_CMD, "accepted", round=new_round, by=by, pr=pr,
-        supersededReceiptSha256=superseded_sha)
-    try:
-        c = round_commit.begin(session_dir, "extra-audit-order")
-        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, EXTRA_AUDIT_CMD, exc)
-    return {"ok": True, "round": new_round, "supersededReceipt": superseded,
-            "reservationTransit": reserved.get("transit")}
+    """Refuse the retired `extra-audit` verb at once: no lock, no upgrade gate, no commit recovery, no
+    read of the state, the receipt or the order file, and nothing posted. The one write is the journal
+    row of a refusal, and only when the session folder exists."""
+    if isinstance(session_dir, str) and os.path.isdir(session_dir):
+        return _refuse_cmd(session_dir, EXTRA_AUDIT_CMD, EXTRA_AUDIT_RETIRED, detail=EXTRA_AUDIT_RETIRED_DETAIL)
+    return {"ok": False, "reason": EXTRA_AUDIT_RETIRED, "detail": EXTRA_AUDIT_RETIRED_DETAIL}
 
 
 def _fetch_ci_run(repo_root, run_id):
@@ -19055,7 +18838,9 @@ def _repair_before_fresh_checks(session_dir):
 def _dispatch(args):
     # An unfinished session from an earlier plugin version is refused before any other check here
     # reads its saved state.
-    upgrade = _upgrade_gate_unlocked(args.session_dir, args.cmd)
+    # The retired `extra-audit` verb skips the gate: it refuses `extra-audit-retired` before it reads any
+    # state, takes the lock or writes a marker, whatever the session's generation.
+    upgrade = None if args.cmd == EXTRA_AUDIT_CMD else _upgrade_gate_unlocked(args.session_dir, args.cmd)
     if upgrade is not None:
         sys.stdout.write(json.dumps(upgrade) + "\n")
         return 1

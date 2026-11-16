@@ -748,8 +748,9 @@ nothing Important open, and otherwise hands back `round-cap` as any cap round th
   terminal (`_hand_back` in `lib/round_driver.py`), verdict `handed-back`, last decision
   `round-cap`, with every open finding, Important and Critical alike, each with its outcome. There
   is no park or held state, no fix leg after the cap, and no new session started to keep going. The
-  one round past the cap is the audit of the cap round's own unaudited fixes: the bounded pass, or
-  the extra audit round the advisor ordered (§ The bounded pass, § The extra audit round).
+  one round past the cap is the audit of the cap round's own unaudited fixes: the bounded pass, or,
+  for a session whose state holds an ordered extra audit round, that round (§ The bounded pass,
+  § The extra audit round, which is retired).
 - **The same fix fails its audit in two rounds in a row.** Only an audit that answers the fix wrong
   counts (or one that carries no recognised reason kind, so an older round counts as before). A
   scope-only hold clears, so it does not count; an audit that never answered, and a merged finding
@@ -791,7 +792,8 @@ cap round's verify gate folds: no order, no advisor and no `extra-audit` call. A
 above its cap never begins one, and a session holds at most one pass.
 
 **The one round.** Past the cap a session runs at most one round, round `cap + 1`, and it is entered
-by the bounded pass or by an ordered extra audit round, and by nothing else. The state records
+by the bounded pass or by an ordered extra audit round a saved state holds (the extra audit round is
+retired: nothing begins one), and by nothing else. The state records
 `boundedPass` as `{"trigger": "round-cap", "step": "audit" or "done", "rounds": [<cap + 1>]}`, and
 the decision `bounded-pass-begun` names the cap and the number of fixes to audit.
 
@@ -828,80 +830,31 @@ hand-back. The fields are described in [review-record.md](review-record.md).
 
 ## The extra audit round
 
-When a session hands the PR back at the cap with a fix the cap round applied and no audit checked,
-the advisor may order one [extra audit round](../../../rubric/glossary.md#extra-audit-round) at the
-vet. At most one is allowed per PR, across all its sessions. A cap round with unaudited fixes enters
-the bounded pass on its own (§ The bounded pass), so the verb applies only to a session already
-handed back at its cap with a fix unaudited, and never to one that ran the pass. The build session
-that holds the handed-back session directory orders it:
+The [extra audit round](../../../rubric/glossary.md#extra-audit-round) is retired: nothing orders
+one. A cap round with unaudited fixes enters the bounded pass on its own (§ The bounded pass).
 
-```bash
-python3 -B <plugin root>/lib/round_driver.py extra-audit --session-dir <session dir> --order-file <the order file> --by <who> --pr <N>
-```
+**The verb.** `extra-audit` stays a driver verb so that an old order fails loudly. It refuses
+`extra-audit-retired` at once, naming the bounded pass, before it takes the session lock or reads any
+state, receipt or order file. It posts nothing on the PR. Its one write is the journal row of the
+refusal, and only when the session folder exists.
 
-`--repo <owner/name>` is optional: append it to that line to name the PR's repository. The order
-file is the JSON object `{"why": "<non-blank reason>"}`, with no other key. The build session
-then carries on with the normal `next` / `advance` loop to the terminal and writes the review record
-as usual.
-
-**The refusals,** checked in this order. Each refuses with nothing changed but a journal row.
-
-1. The shared lock, upgrade and commit-recovery refusals.
-2. `extra-audit-state-unreadable`.
-3. `extra-audit-order-invalid`.
-4. `extra-audit-already-run`: this session already ran an extra round or the bounded pass. This comes
-   before the at-cap check because a session that ran its extra round ends on that round's own
-   terminal, never on the cap's.
-5. `extra-audit-not-at-cap`: the session is not `handed-back` with last decision `round-cap` or
-   `fix-keeps-failing`.
-6. `extra-audit-nothing-to-audit`: no fix the cap round applied is unaudited. A `fix-keeps-failing`
-   handback always lands here, because its last fix was already audited.
-7. `extra-audit-head-unresolvable` and `extra-audit-head-moved`: the checkout's HEAD is not the
-   session's certified head.
-8. `extra-audit-receipt-faulted` (the finalized-receipt check): the finalized receipt fails its
-   on-disk check.
-9. `extra-audit-pr-history-unreadable` (the first PR-history read): the repository could not be
-   resolved from the session checkout, or the PR's comments could not be listed, or a review-record
-   comment on it does not parse, or an extra-audit reservation comment names no session. This fails
-   closed.
-10. `extra-audit-already-run-on-pr` (the first PR-history read): an earlier review record on the PR
-    shows an extra audit round, or another session already posted its reservation comment on the PR.
-11. `extra-audit-reservation-failed`: the reservation comment could not be posted. Once every check
-    above passes, and before the receipt copy and the state commit, the verb posts one comment on the
-    PR (first line `<!-- superheroes:extra-audit-reserved -->`, then the session id and the order's
-    why). A reservation from the same session does not count, so a re-run after a crash carries on.
-    A refusal after this point leaves the reservation comment on the PR.
-12. `extra-audit-pr-history-unreadable` (the re-read after the reservation is posted): the verb reads
-    the PR's comments again, and the re-read fails for any reason item 9 names. This fails closed.
-13. `extra-audit-already-run-on-pr` (the re-read): another session's reservation, or a review record
-    showing the extra round, has a lower comment id than this session's own reservation. The first
-    reservation posted wins; the loser keeps its reservation in place and refuses.
-14. `extra-audit-receipt-faulted` (the superseded-copy check): the receipt cannot be copied to its
-    superseded name, the copy does not match it, or an existing superseded copy does not match it.
-
-**The round.** The verb reopens the session as round 5, the cap plus one. That round dispatches
-**only `dispatch-audits`**, over the cap round's fixes. It runs no panel, scoped finder, seams check,
-verifiers, synthesis, fix step or verify run. A surface the round cannot derive hands back
-`extra-audit-open` instead of scheduling a panel.
-
-**The two ends.**
+**A session that holds an ordered round.** A session whose state holds `extraAudit` finishes the
+round it holds. The round is round `cap + 1`. It dispatches **only `dispatch-audits`**, over the cap
+round's fixes, and runs no panel, scoped finder, seams check, verifiers, synthesis, fix step or verify
+run. A surface it cannot derive hands back `extra-audit-open` instead of scheduling a panel. It ends
+one of two ways:
 
 - **Every fix discharged, nothing else blocking.** The session ends `converged` through the normal
-  convergence check, which still hands back a held owner choice as `owner-choice-open`.
+  convergence check, which hands back a held owner choice as `owner-choice-open`.
 - **Otherwise** it ends `handed-back` with the decision kind `extra-audit-open`, which counts as a
   stop at the cap. An auditor's new issue in that round is not searched or fixed; it is left open for
   the vet.
 
-**The receipt.** The finalized `round-receipt.json` is copied, byte for byte, to
-`round-receipt.superseded-1.json` before the state is reopened. It is never moved or deleted. The
-extra round's terminal then writes a fresh `round-receipt.json`. A crash between the copy and the
-state commit leaves the original session as it was, and a re-run carries on.
-
-**The record.** `rounds.count` does not count the extra round. `rounds.extraAudit` is
-`{"why": …}`. `stoppedAtCap` is true for `extra-audit-open`. The record writer also refuses
-`review-record-extra-audit-repeated`: an account showing the extra round, when an earlier readable
-record from another session on the PR shows one too. That is a backstop; the verb's own check comes
-first. The fields are described in [review-record.md](review-record.md).
+**The record.** Only a session whose state holds `extraAudit` writes `rounds.extraAudit`, as
+`{"why": …}`; `rounds.count` does not count that round, and `stoppedAtCap` is true for
+`extra-audit-open`. The record writer refuses `review-record-extra-audit-repeated`: an account
+showing the extra round, when an earlier readable record from another session on the PR shows one
+too. The fields are described in [review-record.md](review-record.md).
 
 ## Lens coverage beside counts
 
