@@ -2155,7 +2155,38 @@ def _resolve_commit(repo_root, rev):
     return out.strip() if isinstance(out, str) and _full_sha(out.strip()) else None
 
 
-def build_record(account, readers, prior=None, history=(), session_uncertified=None):
+def _derive_raisers(findings, reviewers, earlier, earlier_unreadable):
+    """A hand account's findings with a raiser the account did not name (issue 2515).
+
+    A finding with no non-blank `raisedBy` takes, in order: the `raisedBy` of the first earlier readable record (newest
+    first) that holds it by stored key, or, when none holds it and no earlier record was unreadable, the name of the one
+    reviewer row that ran. Otherwise it stays as it was; a relist is never credited to the reviewer that relisted it.
+    """
+    # axis: a finding the account leaves unattributed is credited to the one reviewer that ran, only when exactly one ran, no earlier record holds it, and no earlier record was unreadable — see bite-proof record i2515_hand_raiser
+    ran = [v["name"] for v in reviewers if v["ran"] != RAN_NOT_RUN and "carried" not in v]
+    sole = ran[0] if len(ran) == 1 else None
+    field = session_contract.RAISED_BY_FIELD
+
+    def named(v):
+        return isinstance(v, str) and bool(v.strip())
+
+    out = []
+    for f in findings:
+        if named(f.get(field)):
+            out.append(f)
+            continue
+        held = next((i for r in earlier for i in r["findings"] if isinstance(i, dict) and _key(i) == _key(f)), None)
+        if held is not None:
+            out.append(dict(f, **{field: held[field]}) if named(held.get(field)) else f)
+        elif sole is not None and not earlier_unreadable:
+            out.append(dict(f, **{field: sole}))
+        else:
+            out.append(f)
+    return out
+
+
+def build_record(account, readers, prior=None, history=(), session_uncertified=None, *, derive_raiser=False,
+                 earlier=(), earlier_unreadable=False):
     a, rd, dis = _validate(account), _readers(readers), []
     meta = rd["pr_meta"](a["pr"], a["repo"])
     head_read = meta.get("head") if isinstance(meta, dict) else None
@@ -2193,6 +2224,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings = _apply_owner_rulings(findings, a["findings"], a["ownerRulings"])
+    if derive_raiser:
+        findings = _derive_raisers(findings, reviewers, earlier, earlier_unreadable)
 
     def owner_ruling_comments():
         # One read per distinct cited link, and none for a link that is not a comment permalink in this repository.
@@ -3645,7 +3678,8 @@ def _refuse_unless_read_back(rd, pr, repo, head, summary):
     raise Refusal("review-record-unreadable-after-write", detail)
 
 
-def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None):
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None,
+          from_session=False):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -3706,7 +3740,11 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
-        record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified)
+        # the earlier readable records, newest first: the latest one this write reads, then the older ones
+        earlier = ([prior] if prior else []) + list(reversed(history))
+        earlier_unreadable = any(n["why"] == "unreadable" for n in not_checked)
+        record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified,
+                              derive_raiser=not from_session, earlier=earlier, earlier_unreadable=earlier_unreadable)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]

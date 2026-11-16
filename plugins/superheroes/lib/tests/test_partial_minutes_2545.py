@@ -38,8 +38,8 @@ def test_t1_a_pr_whose_only_shortfall_is_partial_runs_counts_in_the_minutes_figu
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["minutes"]["total"] == 4.0 and cost["minutes"]["median"] == 2.0
     assert cost["tokens"]["total"] == 100 and cost["tokens"]["median"] == 100
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
+    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
     seats, why = row["measures"]["seats"], _why(row)
     assert seats["security-reviewer"]["tokens"] == 100 and seats["security-reviewer"]["minutes"] == 1.5
     assert seats["code-reviewer"]["minutes"] == 2.5 and "seats.code-reviewer.minutes" not in why
@@ -52,8 +52,8 @@ def test_t1_a_pr_whose_only_shortfall_is_partial_runs_counts_in_the_minutes_figu
     assert cost["minutes"]["total"] == 2.5 and cost["minutes"]["median"] == 2.5
     assert cost["tokens"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
     assert "reviewerCostPerPr.minutes" not in _why(row)
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
+    assert cost["prsLeftOut"]["minutes"] == {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
     assert RM.problems(row) == []
 
 
@@ -67,7 +67,7 @@ def test_t2_a_session_with_a_run_lacking_a_figure_leaves_the_pr_out_of_both():
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
     for k in ("tokens", "minutes"):
-        assert cost["prsLeftOut"][k] == {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 1}, k
+        assert cost["prsLeftOut"][k] == {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}, k
     seats, why = row["measures"]["seats"], _why(row)
     assert seats["security-reviewer"]["tokens"] == 100 and seats["security-reviewer"]["minutes"] == 1.5
     for seat in ("code-reviewer", "premortem-reviewer"):
@@ -89,7 +89,7 @@ def test_t3_a_pr_whose_sessions_are_all_complete_reads_as_today():
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"] == {"median": 150, "p90": 150, "total": 150, "topTenthShare": 1.0}
     assert cost["minutes"] == {"median": 3.5, "p90": 3.5, "total": 3.5, "topTenthShare": 1.0}
-    none_left = {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0}
+    none_left = {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
     assert cost["prsLeftOut"] == {"tokens": none_left, "minutes": none_left}
     seats = row["measures"]["seats"]
     assert seats["security-reviewer"]["tokens"] == 150 and seats["security-reviewer"]["minutes"] == 3.5
@@ -127,6 +127,6 @@ def test_t4_census_every_seat_reads_tokens_and_minutes_through_their_own_rule():
         assert why.get("seats.%s.minutes" % seat) == minutes_why, seat
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 120 and cost["minutes"]["total"] == 5.0
-    assert cost["prsLeftOut"]["tokens"] == {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 1}
-    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 1, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
+    assert cost["prsLeftOut"]["minutes"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0, "handWritten": {"count": 0, "why": RM.HAND_WRITTEN_WHY}}
     assert RM.problems(row) == []
