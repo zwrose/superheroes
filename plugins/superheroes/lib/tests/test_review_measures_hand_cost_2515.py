@@ -81,7 +81,7 @@ def _psc(tokens, minutes, runs=1, partial=1, without=0, by_seat=None):
 
 
 def test_partial_and_hand_written_prs_read_together_and_partial_never_exceeds_count():
-    # axis: a PR holding a partial session is never hand-written (it counts under count and partial), a hand-only PR adds nothing to partial, and partial never exceeds count
+    # axis: each measure is read on its own and partial counts only PRs under count: PR 4 (a partial session beside one with no sessionCost key) is hand-written for minutes and under count and partial for tokens, a hand-only PR adds nothing to partial, and partial never exceeds count
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2515_hand_cost.md
     records = [
         _rec(1),                                                     # PR 1: one complete session, measured
