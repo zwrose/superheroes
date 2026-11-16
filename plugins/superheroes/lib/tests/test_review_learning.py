@@ -482,6 +482,97 @@ def test_tally_a_pr_supplied_twice_reads_incomplete_evidence(second_pr):
     assert RL.tally([one], [], D, until="2026-10-11")["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
 
 
+def _at(rec, written_at):
+    """The same record written at another time."""
+    return dict(rec, writtenAt=written_at)
+
+
+# axis: a catch is credited to its raiser seat when any record of the PR shows that seat ran — see bite-proof record i2517_tally_all_records
+def test_tally_a_carried_catch_credits_the_raiser_an_earlier_record_shows_running():
+    earlier = _at(_record(1, "a", D, [_row("premortem-reviewer"), _row("code-reviewer")],
+                          [_finding("k", "Failure-Mode", "left-for-owner", raised_by="premortem-reviewer")]), "2026-10-10T09:00:00Z")
+    later = _at(_record(1, "b", D, [_row("code-reviewer")],
+                        [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")]), "2026-10-10T11:00:00Z")
+    for order in ([earlier, later], [later, earlier]):
+        got = RL.tally(order, [], D, until="2026-10-11")
+        assert got["seats"] == {"premortem-reviewer": {"reviews": 1, "caught": 1}, "code-reviewer": {"reviews": 1, "caught": 0}}
+        assert got["raiserRunNotShown"] == 0 and got["unattributedCatches"] == 0 and got["measured"] is True
+
+
+def test_tally_a_raiser_no_record_of_the_pr_shows_running_still_reads_run_not_shown():
+    earlier = _at(_record(1, "a", D, [_row("code-reviewer"), _row("premortem-reviewer", "not-run")], []), "2026-10-10T09:00:00Z")
+    later = _at(_record(1, "b", D, [_row("code-reviewer")],
+                        [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")]), "2026-10-10T11:00:00Z")
+    got = RL.tally([earlier, later], [], D, until="2026-10-11")
+    assert got["seats"]["premortem-reviewer"]["caught"] == RL.UNMEASURED
+    assert got["seats"]["code-reviewer"] == {"reviews": 1, "caught": 0}
+    assert got["raiserRunNotShown"] == 1 and got["unattributedCatches"] == 0
+
+
+def test_tally_only_the_latest_records_catches_count():
+    rows = [_row("code-reviewer")]
+    earlier = _at(_record(1, "a", D, rows, [_finding("k-old", "Code"), _finding("k-shared", "Code")]), "2026-10-10T09:00:00Z")
+    later = _at(_record(1, "b", D, rows, [_finding("k-shared", "Code", "left-for-owner"), _finding("k-new", "Code")]), "2026-10-10T11:00:00Z")
+    for order in ([earlier, later], [later, earlier]):
+        got = RL.tally(order, [], D, until="2026-10-11")
+        # k-old is not in the latest record; k-shared was fixed in the earlier record but is left for the owner in the latest
+        assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
+        assert got["measured"] is True
+
+
+# axis: two records of a PR at its latest time make the latest ambiguous and read incomplete — see bite-proof record i2517_tally_all_records
+def test_tally_two_records_at_the_latest_time_read_incomplete():
+    rows = [_row("code-reviewer")]
+    one = _record(1, "a", D, rows, [_finding("k", "Code")])
+    two = _record(1, "b", D, rows, [_finding("k", "Code")])
+    got = RL.tally([one, two], [], D, until="2026-10-11")
+    assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+    assert got["leftOut"]["malformed"] == 1
+    earlier = _at(_record(1, "c", D, rows, []), "2026-10-10T08:00:00Z")
+    got = RL.tally([earlier, one], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["leftOut"]["malformed"] == 0
+
+
+# axis: every record of a counted PR is checked, an earlier one included, whatever its own date — see bite-proof record i2517_tally_all_records
+@pytest.mark.parametrize("damage", [{"ok": False}, {"unreadFiles": ["x"]}, {"reviewers": []}, {"findings": [{}]}])
+def test_tally_a_damaged_earlier_record_reads_incomplete(damage):
+    rows = [_row("code-reviewer")]
+    earlier = dict(_record(1, "a", "2026-10-09", rows, [_finding("k0", "Code")]), **damage)  # dated before the adoption day
+    latest = _record(1, "b", D, rows, [_finding("k", "Code")])
+    for order in ([earlier, latest], [latest, earlier]):
+        got = RL.tally(order, [], D, until="2026-10-11")
+        assert (got["measured"], got["reason"], got["seats"]) == (False, "incomplete-evidence", {})
+        assert got["leftOut"]["malformed"] == 1
+    sound = _record(1, "a", "2026-10-09", rows, [_finding("k0", "Code")])
+    assert RL.tally([sound, latest], [], D, until="2026-10-11")["measured"] is True
+
+
+def test_tally_an_out_of_range_pr_leaves_every_record_out_unread():
+    rows = [_row("code-reviewer")]
+    sound = _record(9, "z", D, rows, [_finding("k", "Code")])
+    damaged = dict(_record(1, "a", D, rows, []), ok=False)  # inside the range, but its PR's latest record is after `until`
+    late = _record(1, "b", "2026-10-20", rows, [_finding("k1", "Code")])
+    got = RL.tally([damaged, late, sound], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["leftOut"]["afterWindow"] == 2 and got["leftOut"]["malformed"] == 0
+    tie_one = _record(2, "c", "2026-10-20", rows, [])
+    tie_two = _record(2, "d", "2026-10-20", rows, [])
+    got = RL.tally([tie_one, tie_two, sound], [], D, until="2026-10-11")
+    assert got["measured"] is True and got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["leftOut"]["afterWindow"] == 2 and got["leftOut"]["malformed"] == 0
+
+
+# axis: a catch with no recorded raiser blanks every seat that ran on its PR, a seat an earlier record shows included — see bite-proof record i2517_tally_all_records
+def test_tally_a_no_raiser_catch_blanks_seats_that_ran_in_an_earlier_record():
+    earlier = _at(_record(1, "a", D, [_row("security-reviewer")], []), "2026-10-10T09:00:00Z")
+    later = _at(_record(1, "b", D, [_row("code-reviewer")], [_unraised("k", "Code")]), "2026-10-10T11:00:00Z")
+    got = RL.tally([earlier, later], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": RL.UNMEASURED},
+                            "security-reviewer": {"reviews": 1, "caught": RL.UNMEASURED}}
+    assert got["raiserNotRecorded"] == 1
+
+
 def test_tally_finding_without_a_key_falls_back_to_its_id():
     one, two = _finding(None, "Code", fid="F-1"), _finding(None, "Code", fid="F-2")
     got = RL.tally([_record(1, "a", D, [_row("code-reviewer")], [one, two])], [], D, until="2026-10-11")

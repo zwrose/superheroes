@@ -49,7 +49,9 @@ later `next` never takes it again. Round 1's record carries it as `returning`: `
 `countable`, `newAreas`, `why`. A proven copy is in no input of a returning round. A catch-up that
 touched a file the PR also changes reads no changed file when the PR's own lines in that file did not
 change. An earlier record whose only gap was CI pending on its final commit counts as finished once CI
-has passed on that commit, or on a head reached from it by catch-up merges only.
+has passed on that commit, or on a head reached from it by catch-up merges only; only a record that
+holds a CI line in `whatIsMissing` can have that gap, since the record writer adds no CI line
+([what "reviewed" means](review-record.md#what-reviewed-means)).
 
 An **empty returning round** — the change since the last reviewed commit is a catch-up merge or proven
 copies only, with no carried finding due an audit — converges with no reviewer run (`scopedFinder:
