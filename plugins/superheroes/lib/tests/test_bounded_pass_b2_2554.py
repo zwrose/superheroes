@@ -763,6 +763,32 @@ def test_t3_two_b1_reports_of_one_finding_reach_b2_as_one_row_owing_every_place_
     assert places == [3, 19], queued[0][0]["kindOfMistake"]
 
 
+@pytest.mark.parametrize("target,report,merged", [
+    # a report with no severity is compiled as Important, so the merged row stays a target (fail closed)
+    ("Minor", "Important", "Important"), ("Nit", "Critical", "Critical"), ("Minor", None, "Important"),
+    ("Important", "Minor", "Important"), ("Nit", "Minor", "Minor")],
+    ids=["minor-important", "nit-critical", "minor-missing", "important-minor", "nit-minor"])
+def test_t3_a_b1_report_merged_into_an_open_target_keeps_the_strongest_severity(monkeypatch, target, report, merged):
+    # axis: a merged row carries the strongest severity any of its reports holds, so a blocking B1 report never rides
+    # as a Minor's context — see bite-proof record i2554_bounded_pass_b2 (E-merge-severity)
+    state = RD.new_state(TRD._cfg(maxRounds=CAP))
+    state["round"] = CAP + 1
+    state["reviewedDiff"] = _PLACES_DIFF
+    state["boundedPass"] = {"trigger": "round-cap", "step": "audit", "rounds": [CAP + 1]}
+    open_target = {"id": "src/a.py::unchecked retry@L2", "title": "unchecked retry", "file": "src/a.py", "line": 2,
+                   "severity": target, "consequence": TRD._CONSEQUENCE, "body": "the body"}
+    state["_auditTargets"] = [open_target]
+    queued = []
+    monkeypatch.setattr(RD, "_queue_bounded_fix", lambda st, cfg, rows, session_dir=None: queued.append(rows))
+    issue = dict(open_target, severity=report)
+    issue.pop("id")
+    if report is None:
+        issue.pop("severity")
+    RD._begin_bounded_fix(state, state["config"], {open_target["id"]}, [issue])
+    assert len(queued) == 1 and len(queued[0]) == 1, queued
+    assert queued[0][0].get("severity") == merged, queued[0][0]
+
+
 def test_t10_the_b1_only_pass_and_the_ordinary_session_are_unchanged(tmp_path):
     d, terminal, trace, final = _b2_run(tmp_path, {})
     assert final["certification"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1]}

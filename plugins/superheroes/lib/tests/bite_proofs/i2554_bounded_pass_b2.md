@@ -220,3 +220,20 @@ repository sweep raised. Each red and green is one run of one exact node id with
   ```
 - **Restore:** the inverse edit. **Restored line quoted:** `    rows = _union_open_blockers(targets, issue_rows)`
 - **Raw green:** `1 passed in 7.60s`
+
+## E-merge-severity (review session 2, round 2 of PR 2558)
+
+- **Guarded element:** `round_driver.py` `_begin_bounded_fix`, the line
+  `row["severity"] = _strongest_severity(by_key.get(_finding_identity_key(row)) or [row.get("severity")])` after the
+  union. **Axis:** a merged row carries the strongest severity any of its reports holds, so a blocking B1 report never
+  rides as a Minor's context.
+- **Detector (expected red):** `plugins/superheroes/lib/tests/test_bounded_pass_b2_2554.py::test_t3_a_b1_report_merged_into_an_open_target_keeps_the_strongest_severity[minor-important]`
+- **Neutralization:** the line replaced by `pass`, so the union's first-wins severity stands.
+- **Raw red:**
+  ```
+  E       AssertionError: {'id': 'src/a.py::unchecked retry@L2', 'title': 'unchecked retry', 'file': 'src/a.py', 'line': 2, ...}
+  E       assert 'Minor' == 'Important'
+  ```
+- **Restore:** the inverse edit. **Restored line quoted:**
+  `        row["severity"] = _strongest_severity(by_key.get(_finding_identity_key(row)) or [row.get("severity")])`
+- **Raw green:** `1 passed in 3.31s`

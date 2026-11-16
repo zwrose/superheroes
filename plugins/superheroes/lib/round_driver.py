@@ -10823,6 +10823,12 @@ def _begin_bounded_fix(state, config, open_ids, held, session_dir=None):
             unbound.append(str(issue.get("title")))
     # axis: B1's reports of one finding merge with each other and with its open target, every place they name kept, so B2's audit owes them all — see bite-proof record i2554_bounded_pass_b2 (E-merge-places)
     rows = _union_open_blockers(targets, issue_rows)
+    # axis: a merged row carries the strongest severity any of its reports holds, so a blocking B1 report never rides as a Minor's context — see bite-proof record i2554_bounded_pass_b2 (E-merge-severity)
+    by_key = {}
+    for row in [*targets, *issue_rows]:
+        by_key.setdefault(_finding_identity_key(row), []).append(row.get("severity"))
+    for row in rows:
+        row["severity"] = _strongest_severity(by_key.get(_finding_identity_key(row)) or [row.get("severity")])
     if missing or unbound:
         _bounded_hand_back(state, "The bounded pass could not begin its fix step (%s). The PR is handed back with "
                                   "its findings still open; certification is withheld."
@@ -10836,6 +10842,17 @@ def _begin_bounded_fix(state, config, open_ids, held, session_dir=None):
     _decision(state, "bounded-pass-begun",
               "the bounded pass's audits left %d finding(s) open: one fix batch, then one more audit round" % len(rows))
     _queue_bounded_fix(state, config, rows, session_dir=session_dir)
+
+
+def _strongest_severity(severities):
+    """The strongest of the severities one finding's reports hold: any value that is not exactly `Minor` or `Nit`
+    (`Critical` first, then `Important`, then a missing or unknown value, which fails toward a target), else `Minor`
+    over `Nit`."""
+    blocking = [s for s in severities if s not in ("Minor", "Nit")]
+    if blocking:
+        rank = {"Critical": 0, "Important": 1}
+        return sorted(blocking, key=lambda s: rank.get(s, 2) if isinstance(s, str) else 2)[0]
+    return "Minor" if "Minor" in severities else severities[0]
 
 
 def _queue_bounded_fix(state, config, rows, session_dir=None):
