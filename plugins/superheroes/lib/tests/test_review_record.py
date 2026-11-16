@@ -191,12 +191,12 @@ def test_session_only_run_counts_and_is_labelled():
 
 
 def test_session_only_review_counts_only_on_the_final_commit():
-    # axis: commit binding; a session-only review of an earlier or unstated commit credited as a review of the final commit
+    # axis: commit binding; a session-only review of a commit GitHub did not confirm as the PR head, or of an unstated commit, credited as a review of the final commit
     reviewers = [reviewer(runDir=None)]
     rec = build(account(reviewers=reviewers, finalCommit=EARLIER))
     v = rec["reviewers"][0]
     assert v["ran"] == "not-run"
-    assert v["runNote"] == f"the session reported a review of {EARLIER[:7]}, not the final commit {HEAD[:7]}"
+    assert v["runNote"] == rr.BR1_NOTE
     assert {"fact": "code-reviewer ran", "session": True, "code": "not-run"} in rec["sessionDisagreements"]
     assert [m["name"] for m in rec["missingReviews"]] == ["code-reviewer"]
     assert (rec["status"], rec["parked"]) == ("not-reviewed", True)
@@ -210,21 +210,24 @@ def test_session_only_review_counts_only_on_the_final_commit():
 
 
 def test_code_wins_over_the_session_account():
-    # axis: code over account; lane, final commit and CI taking the session's claim over code's reading
+    # axis: code over account; lane and CI taking the session's claim over code's reading (the final commit is the session's own, issue 2496)
     fake = Fake(ci=PENDING, meta={"head": HEAD, "body": "", "issues": [9]},
-                marker={"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": "9"})
+                marker={"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": "9"},
+                runs={"/run/code-reviewer": (dict(GOOD_RUN, viewHeadSha=EARLIER), None)})
     rec = build(account(lane="light", finalCommit=EARLIER, ci="green"), fake)
-    assert (rec["lane"]["value"], rec["finalCommit"]["sha"], rec["ci"]["state"]) == ("full", HEAD, "pending")
-    assert {d["fact"] for d in rec["sessionDisagreements"]} == {"lane", "finalCommit", "ci"}
-    assert len(rec["sessionDisagreements"]) == 3
+    assert (rec["lane"]["value"], rec["finalCommit"]["sha"], rec["ci"]["state"]) == ("full", EARLIER, "pending")
+    assert {d["fact"] for d in rec["sessionDisagreements"]} == {"lane", "ci"}
+    assert len(rec["sessionDisagreements"]) == 2
 
 
-def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_not_reviewed():
-    # axis: outcome binding; fixes finished on a later commit certifying a PR head they never reached
-    rec = build(account(finalCommit=EARLIER))
+def test_a_session_that_ended_on_another_commit_than_the_pr_head_is_reviewed_on_its_own_commit():
+    # axis: outcome binding; the record certifies the commit its session reviewed (issue 2496), never the PR head it reads from GitHub
+    fake = Fake(runs={"/run/code-reviewer": (dict(GOOD_RUN, viewHeadSha=EARLIER), None)})
+    rec = build(account(finalCommit=EARLIER), fake)
     assert rec["reviewers"][0]["ran"] == "engine-record" and rec["reviewers"][0]["coversFinalCommit"]
-    assert rec["status"] == "not-reviewed"
-    assert f"the session ended on {EARLIER[:7]}, but the PR's final commit is {HEAD[:7]}" in rr.render(rec)
+    assert rec["finalCommit"]["sha"] == EARLIER
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+    assert "the session ended on" not in rr.render(rec)
     assert build(account(finalCommit=HEAD))["status"] == "reviewed"
 
 
@@ -247,14 +250,14 @@ def test_ci_that_is_not_green_is_kept_in_the_record_and_withholds_nothing(ci, wo
     assert rec["status"] == "reviewed" and rec["ci"]["state"] == word and rec["whatIsMissing"] == []
 
 
-def test_green_claimed_on_an_earlier_sha_is_not_reviewed():
-    # axis: final-commit CI; CI read on the account's earlier commit rather than the PR head, or the disagreement going unrecorded
+def test_ci_is_read_on_the_certified_commit_not_the_moved_pr_head():
+    # axis: final-commit CI; CI read on the PR head rather than the certified commit, or a finalCommit disagreement entry reappearing
     seen = []
     readers = dict(Fake().readers(), check_data=lambda sha, repo: seen.append(sha) or GREEN)
     rec = rr.build_record(account(finalCommit=EARLIER, ci="green"), readers)
-    assert seen == [HEAD]
-    assert {"fact": "finalCommit", "session": EARLIER, "code": HEAD} in rec["sessionDisagreements"]
-    assert rec["finalCommit"]["sha"] == HEAD and rec["ci"]["sha"] == HEAD
+    assert seen == [EARLIER]
+    assert not [d for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
+    assert rec["finalCommit"]["sha"] == EARLIER and rec["ci"]["sha"] == EARLIER
 
 
 def test_status_ignores_ci_read_on_a_different_sha_than_the_final_commit():
@@ -1641,14 +1644,14 @@ def test_a_fix_round_review_reads_reviewed():
     assert "- auditor: ran (engine record);" in text
 
 
-def test_a_head_moved_after_the_last_round_reads_not_reviewed():
-    # axis: reviewed status when no credited run covers the final commit; a head that moved after the last round
+def test_a_head_moved_after_the_last_round_still_certifies_the_sessions_final_commit():
+    # axis: the record certifies the commit its session reviewed (issue 2496); a head that moved after the last round neither changes the final commit nor adds an open line
     fake = Fake(runs=_fix_round_runs(), meta={"head": THIRD, "body": "", "issues": []})
     rec = build(_fix_round_account(), fake)
-    assert [v["ran"] for v in rec["reviewers"]] == ["engine-record"] * 2 + ["not-run"]
-    assert not any(v["coversFinalCommit"] for v in rec["reviewers"])
-    assert rec["status"] == "not-reviewed"
-    assert f"no planned reviewer's run covers the final commit {THIRD[:7]}" in rec["whatIsMissing"]
+    assert [v["ran"] for v in rec["reviewers"]] == ["engine-record"] * 3
+    assert rec["reviewers"][2]["coversFinalCommit"] is True
+    assert rec["finalCommit"] == {"sha": HEAD, "source": rr.HEAD_MOVED_SOURCE} and rec["headAtWrite"] == THIRD
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
 
 
 def test_a_row_listed_for_one_commit_is_not_credited_for_another():
@@ -2054,17 +2057,16 @@ def _head_moving_readers(heads):
     return {**fake.readers(), "pr_meta": meta}
 
 
-def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_unavailable_basis(tmp_path):
-    # axis: the changed-file evidence bound to the recorded commit; files of a newer head judged against the earlier one
+def test_a_head_that_moves_between_the_meta_read_and_the_files_read_gives_the_unavailable_basis_and_no_open_line(tmp_path):
+    # axis: the changed-file evidence bound to the certified commit; files of a newer head judged against the earlier one, or the moved head reading not-reviewed (issue 2496)
     repo = risk_repo(tmp_path)
     rec = rr.build_record(account(repoRoot=repo), _head_moving_readers([HEAD, "f" * 40]))
     basis = rec["laneBasis"]
     assert basis["source"] == "unavailable" and basis["floor"] == "full"
     assert basis["why"][0] == rr.lane_call.WHY_NO_PATHS + " the PR head moved while its changed files were read"
     assert rec["finalCommit"]["sha"] == HEAD
-    assert basis["headMoved"] is True
-    assert rec["status"] == "not-reviewed"
-    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+    assert "headMoved" not in basis
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
 
 
 def test_a_head_that_cannot_be_re_read_gives_the_could_not_be_re_read_reason_and_no_moved_head(tmp_path):
@@ -2090,14 +2092,14 @@ def _unavailable_files_readers(heads):
     return {**readers, "changed_paths": lambda pr, repo: None}
 
 
-def test_files_unavailable_and_head_moved_reads_not_reviewed_with_the_moved_head_line(tmp_path):
-    # axis: the head re-read on the unavailable-files path; a head that moved during a failed file read left unflagged
+def test_files_unavailable_and_head_moved_gives_the_unavailable_basis_and_no_moved_head_line(tmp_path):
+    # axis: the head re-read on the unavailable-files path; a head that moved during a failed file read read as a path list, or as an open line (issue 2496)
     repo = risk_repo(tmp_path)
     rec = rr.build_record(account(repoRoot=repo), _unavailable_files_readers([HEAD, "f" * 40]))
     basis = rec["laneBasis"]
-    assert basis["source"] == "unavailable" and basis["headMoved"] is True
-    assert rec["status"] == "not-reviewed"
-    assert "the PR head moved while the record was written; this record does not cover the new head" in rec["whatIsMissing"]
+    assert basis["source"] == "unavailable" and "headMoved" not in basis
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == []
+    assert "the PR head moved while the record was written; this record does not cover the new head" not in rec["whatIsMissing"]
 
 
 def test_files_unavailable_and_head_stable_has_no_moved_head_line(tmp_path):
