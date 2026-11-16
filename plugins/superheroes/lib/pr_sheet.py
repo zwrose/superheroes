@@ -661,7 +661,7 @@ def _record(raw, n, problems):
     for f in rec["findings"]:
         out, name = (f.get("outcome"), _title(f)) if isinstance(f, dict) else (None, None)
         waits = review_record.waits_for_owner(f, rec["findings"])
-        # a card-shaped finding waits or is a repeat another card holds, a no-outcome Minor or Nit card included (#2531)
+        # a card-shaped finding waits or is a repeat another card holds, a no-outcome Minor or Nit card included
         card = review_record.card_shaped(f)
         if not _text(name):
             problems.append(f"{where}: a finding has no title, summary or id")
