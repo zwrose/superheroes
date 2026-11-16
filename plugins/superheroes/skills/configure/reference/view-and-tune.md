@@ -240,6 +240,22 @@ action that owns it, leaving the rest of the calibration untouched:
   so. This answers a different question from set-up § 4.9: size count exclusions decide what counts
   toward a pull request's size, while this decides which duplication is not worth reporting, so
   neither value is copied into the other.
+- **Name the collector and the inboxes (item 21)** → write only item 21, a JSON object with exactly
+  two keys: `collector`, the collector's issue number, and `inboxes`, a list of issue numbers
+  (`[]` for none). Numbers are positive whole numbers, no inbox is listed twice, and no inbox is the
+  collector. The write replaces the whole value, so read it first with
+  `python3 -B "$ROOT_DIR/lib/project_config.py" advisor-issues --cwd .`, edit, and write it all back.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item advisorIssues --cwd . <<'SUPERHEROES_ANSWER'
+  {"collector": 12, "inboxes": [15]}
+  SUPERHEROES_ANSWER
+  ```
+
+  Read the result the same way as the `stackingTool` write above: only `written` or `noop` means it
+  was saved. Anything else is reported with its `reason`, and nothing is stored. What the advisor does
+  with the inboxes is in `skills/showrunner/reference/owner-decisions.md` § Declared inboxes.
 
 - **Item 13 after the move into Canon** → once item 13 points to Canon, it holds no value of its
   own, and `set --item materialConsequenceLine` is refused with `material-line-in-canon`. Record a

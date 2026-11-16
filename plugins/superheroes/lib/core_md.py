@@ -2247,22 +2247,26 @@ def clear_break_it_interpreter(cwd, *, root=None):
     return result
 
 
-def read_risk_areas(cwd, root=None, path=None):
-    """Read ``projectConfiguration.riskAreas`` from core.md (from the file ``path`` when given, as a
-    review session's pinned copy). Total and read-only: never raises,
-    never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
-    a valid key reads its areas as stored; a present but invalid key reads declared True, areas
-    None, reason ``risk-areas-malformed``; every other failure reads reason
-    ``risk-areas-unreadable`` with a detail naming the underlying reason or exception."""
+PROJECT_CONFIG_REASON_UNREADABLE = "project-config-unreadable"
+PROJECT_CONFIG_REASON_CORE_ABSENT = "core-md-absent"
+
+
+def read_project_config_value(cwd, key, root=None, path=None):
+    """Read one raw ``projectConfiguration[key]`` value from core.md (from the file ``path`` when
+    given, as a review session's pinned copy; a given path is never swapped for the live file).
+    Total and read-only: never raises, never writes. Returns ``present`` (the key is in the raw
+    object), ``value`` (a deep copy of the stored value when present, else None; a stored JSON null
+    is present with value None), ``reason`` (None on a successful read, ``core-md-absent`` when
+    there is no core calibration file, ``project-config-unreadable`` for every other failure),
+    ``detail`` (None or a string naming the underlying reason or exception) and ``behind``."""
     base = {
-        "declared": False,
-        "areas": None,
-        "malformed": [],
+        "present": False,
+        "value": None,
         "reason": None,
         "detail": None,
         "behind": False,
     }
-    unreadable = RISK_AREAS_REASON_UNREADABLE
+    unreadable = PROJECT_CONFIG_REASON_UNREADABLE
     try:
         try:
             path = path or _size_exclude_core_path(cwd, root)
@@ -2270,7 +2274,7 @@ def read_risk_areas(cwd, root=None, path=None):
             return dict(base, reason=unreadable,
                         detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
         if path is None:
-            return dict(base, reason="core-md-absent")
+            return dict(base, reason=PROJECT_CONFIG_REASON_CORE_ABSENT)
 
         structural = _structural_refusal_at_path(path)
         if structural is not None:
@@ -2297,6 +2301,7 @@ def read_risk_areas(cwd, root=None, path=None):
         # parse_core turns a non-dict projectConfiguration into {}, so the raw block is read here
         mb = _JSON_BLOCK.search(text)
         block, duplicate_key = _loads_rejecting_duplicate_keys(mb.group(1)) if mb else (None, None)
+        # axis: a duplicate key in the core block reads unreadable, never as the last value winning — see bite-proof record i2504_wo_a_advisor_issues R4
         if duplicate_key is not None:
             return dict(base, reason=unreadable, behind=behind,
                         detail="duplicate-core-key:%s" % duplicate_key)
@@ -2310,14 +2315,44 @@ def read_risk_areas(cwd, root=None, path=None):
                         detail="project-configuration-not-an-object: %s at %s"
                         % (type(block[PROJECT_CONFIGURATION_KEY]).__name__, path))
         mapping = block.get(PROJECT_CONFIGURATION_KEY) or {}
-        if RISK_AREAS_KEY not in mapping:
+        if key not in mapping:
             return dict(base, behind=behind)
-        raw = mapping[RISK_AREAS_KEY]
+        return dict(base, present=True, value=copy.deepcopy(mapping[key]), behind=behind)
+    except Exception as exc:  # total: any other failure is a named read refusal, never a raise
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
+
+
+def read_risk_areas(cwd, root=None, path=None):
+    """Read ``projectConfiguration.riskAreas`` from core.md (from the file ``path`` when given, as a
+    review session's pinned copy). Total and read-only: never raises,
+    never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
+    a valid key reads its areas as stored; a present but invalid key reads declared True, areas
+    None, reason ``risk-areas-malformed``; every other failure reads reason
+    ``risk-areas-unreadable`` with a detail naming the underlying reason or exception."""
+    base = {
+        "declared": False,
+        "areas": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    unreadable = RISK_AREAS_REASON_UNREADABLE
+    try:
+        got = read_project_config_value(cwd, RISK_AREAS_KEY, root, path=path)
+        if got["reason"] == PROJECT_CONFIG_REASON_UNREADABLE:
+            return dict(base, reason=unreadable, detail=got["detail"], behind=got["behind"])
+        if got["reason"] == PROJECT_CONFIG_REASON_CORE_ABSENT:
+            return dict(base, reason="core-md-absent")
+        behind = got["behind"]
+        if not got["present"]:
+            return dict(base, behind=behind)
+        raw = got["value"]
         malformed = validate_risk_areas(raw)
         if malformed:
             return dict(base, declared=True, malformed=malformed,
                         reason=RISK_AREAS_REASON_MALFORMED, behind=behind)
-        return dict(base, declared=True, areas=copy.deepcopy(raw), behind=behind)
+        return dict(base, declared=True, areas=raw, behind=behind)
     except Exception as exc:  # total: any other failure is a named read refusal, never a raise
         return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
 

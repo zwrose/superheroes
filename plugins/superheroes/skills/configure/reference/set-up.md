@@ -13,6 +13,7 @@
 - §4.8 — Sandbox access for the claude implementer — all off by default
 - §4.9 — Size count exclusions — none by default
 - §4.10 — Duplication skip trees — none by default
+- §4.11 — Advisor issues — the collector and the inboxes
 - §5 — Secrets stay out of shared calibration (NFR)
 - §6 — Cloud builds: the setup sitting
 - Recovering an interrupted set-up
@@ -501,6 +502,26 @@ unreadable value skips nothing and the report says so. This answers a different 
 size count exclusions decide what counts toward a pull request's size, while this decides which
 duplication is not worth reporting, so neither value is copied into the other. Later changes go
 through the view-and-tune path (`skills/configure/reference/view-and-tune.md` § 2).
+
+## 4.11 — Advisor issues — the collector and the inboxes
+
+Ask the owner for the issue number of the project's collector, and for the issue numbers of any
+inboxes: issues where routines or people post things for the advisor. No inbox is a fine answer.
+Write item 21 (`advisorIssues`) with both:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item advisorIssues --cwd . <<'SUPERHEROES_ANSWER'
+{"collector": 12, "inboxes": []}
+SUPERHEROES_ANSWER
+```
+
+Read the result: only `written` or `noop` means it was saved. Report anything else to the owner with
+its `reason`, and nothing is stored.
+
+Skipping this leaves item 21 unset. The advisor then resolves the collector from its memory and reads
+no inbox. What the advisor does with the collector and the inboxes is in
+`skills/showrunner/reference/owner-decisions.md` § Declared inboxes.
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

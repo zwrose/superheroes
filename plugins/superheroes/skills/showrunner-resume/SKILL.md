@@ -41,7 +41,8 @@ Read **no other source when choosing a row**, and in particular read **no handed
 3. the builder-liveness heartbeat sweep;
 4. each lane's recorded leader process, probed for liveness;
 5. each lane's issue and pull request: any **park record** on either, with its stated blocker and any owner or advisor ruling to resume; whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it (the receipt `skills/workhorse/SKILL.md` § 10. Review before handback requires — that section is the term's one definition, and every later use here means that receipt), the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
-6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. Whether the transcript resolved is evidence for the decision table's row 2; the table decides. The reader **stats the file only** and never reads its contents.
+6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. Whether the transcript resolved is evidence for the decision table's row 2; the table decides. The reader **stats the file only** and never reads its contents;
+7. the collector and every inbox that calibration item 21 names, read with the `advisor-issues` command below, and each inbox's comments since its last-read record (`skills/showrunner/reference/owner-decisions.md` § Declared inboxes). Source 7 is read for the report and for triage. It never selects a lane's row.
 
 When row 4 is the candidate for a lane, also read that lane's dead worktrees, local branches, and pushed tip — **only** as the unpushed-work sweep `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting defines. Do not re-describe that sweep here.
 
@@ -60,6 +61,12 @@ python3 -B "$ROOT_DIR/lib/launcher.py" count --repo-root "$REPO_ROOT" --batch "$
 
 ```bash
 python3 -B "$ROOT_DIR/lib/heartbeat.py" sweep --repo-root "$REPO_ROOT"
+```
+
+For 7, read the collector and the inboxes from calibration:
+
+```bash
+python3 -B "$ROOT_DIR/lib/project_config.py" advisor-issues --cwd "$REPO_ROOT"
 ```
 
 Probe each lane's recorded leader pid from the ledger's `started` record — a double-confirmed process check, never a global process match. Detail: `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery.
@@ -119,14 +126,14 @@ Exactly three lines:
 
 1. **Seat and reads** — which seat this is, which configuration directory it pinned, and what durable sources it read.
 2. **Lanes by branch** — counts and lane identifiers grouped by parked, re-arm, vet, adopt, and unresolved.
-3. **Watches and owner items** — watches armed, batches not armed and why, and anything owed to the owner.
+3. **Watches and owner items** — watches armed, batches not armed and why, and anything owed to the owner. It also lists each declared inbox with what is new since its last-read record (or "nothing new"), and names any inbox read or item-21 read that failed.
 
 ### Worked example (row 3 vet and row 2 re-arm)
 
 ```text
 Seat: showrunner advisor, instance ~/.claude. Read resume point, ledger batch wave-a, heartbeat sweep, process probes, PR #220 and #221 CI by workflow+sha, session transcripts (stat only).
 Lanes: vet 1 (#220 — PR exists, non-draft, durable review receipt, remote head = receipt commit, CI success on that sha by workflow name); re-arm 1 (#221 — leader positively live, heartbeat nonterminal, transcript resolved and written within `LIVENESS_QUIET_WINDOW_SECONDS`); adopt 0; parked 0; unresolved 0.
-Watches: armed loop for wave-a. None skipped. Owner: none.
+Watches: armed loop for wave-a. None skipped. Inbox: inbox <number> — nothing new since the last-read record. Owner: none.
 ```
 
 ### Worked example (row 5 unresolved, row 2 re-arm, batch not armed)
@@ -177,6 +184,8 @@ Three instances: the one-off watch verb returns at once and never waits; the ter
 | The process listing for the duplicate check fails or is ambiguous | Do not arm that batch. Name it in the report. |
 | The outcome verb or the amendment verb refuses | Stop the transition for that lane and name it in the report. |
 | Arming fails | Name the batch in the report. Do not claim the watch is running. |
+| Item 21 is unreadable (`advisor-issues` `status: unreadable`) | Name it in line 3 of the report; never skip it. The collector falls back to durable memory, and no inbox can be read. No lane's row changes. |
+| An inbox read fails while item 21 reads `declared` | Name the failed inbox in line 3 of the report; never skip it. Keep the collector item 21 names, and leave that inbox's last-read record unchanged. No lane's row changes. |
 | The instance pin cannot be determined on this host | The pin rule is yours alone; if you cannot determine the instance, name that in line 1 and do not launch until you can. |
 
 ## Common mistakes
