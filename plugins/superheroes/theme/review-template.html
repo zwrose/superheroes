@@ -2050,7 +2050,7 @@
     const PR_WORD_KEYS = [
       "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
-      "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "reviewHeading",
+      "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "listedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
       "acceptedCount", "nothingToAcceptCount", "acceptingUnchecked", "acceptingUncheckedCount", "acceptingCanon", "acceptingCanonCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
@@ -2513,6 +2513,7 @@
       if (prSheet.decidedForYou !== undefined) parts.push(buildDecidedForYou(prSheet.decidedForYou, entryTitle));
       if (prSheet.craft.length > 0) parts.push(buildFolded("pr-craft", prWords.craftHeading, prSheet.craft.map(entryLine)));
       if (prSheet.alreadyDecided.length > 0) parts.push(buildFolded("pr-decided", prWords.decidedHeading, prSheet.alreadyDecided.map(entryLine)));
+      if (prSheet.listed !== undefined) parts.push(buildFolded("pr-listed", prWords.listedHeading, prSheet.listed.map(entryLine)));
       if (prSheet.history.length > 0) parts.push(buildFolded("pr-review", prWords.reviewHeading, prSheet.history));
       if (sheetKind === "stack") {
         parts.push(buildFolded("pr-prs", prWords.prsHeading, prSheet.prs.map(function (pr) {

@@ -517,7 +517,7 @@ def test_the_record_of_that_catch_up_reads_reviewed_green_on_the_caught_up_head_
     rec = TC._latest(fake)
     assert rec["status"] == "reviewed" and rec["finalCommit"]["sha"] == s.head != s.reviewed
     assert rec["ci"]["state"] == "green" and rec["ci"]["sha"] == s.head, rec["ci"]
-    assert rec["checked"][0] == "CI on %s: green" % s.head[:7], rec["checked"]
+    assert rec["checked"][0].startswith("Reviewers that ran: ") and not any(c.startswith("CI on") for c in rec["checked"]), rec["checked"]
     assert rec["findings"] == [] and rec["leftForOwner"] == []
 
 
@@ -606,7 +606,9 @@ def test_a_recheck_at_the_caught_up_head_that_still_finds_it_keeps_it_for_the_ow
     assert out["ok"] is True, out
     rec = TC._latest(fake)
     [held] = rec["findings"]
-    assert held["outcome"] == "left-for-owner" and rec["leftForOwner"] == [held["id"]]
+    # the repository declares no risk area, so this Minor is listed for the merge verdict (#2493), not a card
+    assert held["outcome"] == "left-for-owner" and held["inRiskArea"] is False
+    assert rec["leftForOwner"] == [] and rec["listedForMerge"] == [held["id"]]
     assert "a check against the final commit" in held["reason"] and "still reads past the end" in held["reason"]
     [row] = rec["carriedRechecks"]
     assert row["result"] == "kept" and row["checkedHead"] == s.head, row
