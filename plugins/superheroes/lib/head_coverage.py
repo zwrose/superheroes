@@ -305,10 +305,18 @@ def _qualification(run, x, head, files, sources=()):
             continue
         for section in mine:
             hunks.extend({"file": path, "header": header} for header in _section_headers(section))
-    # a file the diff shows beyond the asked paths (a rename's other side) is read too
+    # a file the diff shows beyond the asked paths (a rename's other side) is read too, and its hunks are listed for the
+    # vet like any other
     for path, mine in shown.items():
-        if path not in files and not all(_section_qualifies(s, run, x, head) for s in mine):
+        if path in files:
+            continue
+        if not all(_section_qualifies(s, run, x, head) for s in mine):
             bad.append(path)
+            continue
+        for section in mine:
+            # axis: every section the judgement rests on is listed for the vet to read, a source path's included — see bite-proof record i2496_wo_a_head_coverage (E-hunks)
+            headers = _section_headers(section) or [section["text"].split("\n", 1)[0]]
+            hunks.extend({"file": path, "header": header} for header in headers)
     if bad:
         return False, [], "not only prose or comment lines: %s" % ", ".join(sorted(set(bad))[:5])
     return True, hunks, ""
@@ -467,6 +475,7 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     if authors_ok and qualifies:
         result["answer"] = JUDGEMENT
         result["hunks"] = hunks
+        result["files"] = list(dict.fromkeys([*result["files"], *(h["file"] for h in hunks)]))
         result["why"].append(_line(WHY_PROSE_OR_COMMENTS, "every remaining difference is prose or comment lines by the builder; "
                                                           "the vet reads the %d hunk(s)" % len(hunks)))
     return result

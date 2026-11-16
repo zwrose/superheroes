@@ -274,6 +274,21 @@ def test_a_move_over_a_reviewed_prose_path_that_a_copy_proof_settles_reads_the_s
     assert got["answer"] == "needs-review" and got["files"] == [], got
 
 
+def test_a_judgement_that_rests_on_a_source_path_lists_that_paths_hunks(tmp_path):
+    # axis: every section the judgement rests on is listed for the vet to read, a source path's included — see bite-proof record i2496_wo_a_head_coverage (E-hunks)
+    repo = TR.Repo(tmp_path)
+    doc = "docs/notes.md"
+    base, reviewed, earlier = TR.returning(repo, first={"src/app.py": TR.numbered("app", 10), doc: "notes\n"})
+    repo.git("mv", "-f", "README.md", doc)
+    repo.write(doc, repo.read(doc) + "more notes\n")
+    head = repo.commit("move the readme over the reviewed notes, with an edit")
+    proof = [{"file": doc, "source": "upstream/notes.md", "sha256": hashlib.sha256(repo.read(doc).encode()).hexdigest()}]
+    got = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert [c["file"] for c in got["copies"]] == [doc], got
+    assert got["answer"] == "judgement", got
+    assert "README.md" in got["files"] and any(h["file"] == "README.md" for h in got["hunks"]), got
+
+
 def test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement(tmp_path):
     repo = TR.Repo(tmp_path)
     base = repo.git("rev-parse", "main")
