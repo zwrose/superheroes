@@ -97,7 +97,6 @@ LEFT_OUT_WHY = "a review session has no complete sessionCost"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
-RAISED_BY = session_contract.RAISED_BY_FIELD
 
 
 def _num(v):

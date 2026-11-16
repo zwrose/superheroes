@@ -1,8 +1,8 @@
 # Bite-proof record — a run the silence watchdog ended still counts the cost it measured (#2514)
 
-Detector file: `plugins/superheroes/lib/tests/test_partial_cost_2514.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one production file, made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2514 -m pytest '<exact node id>' -q`, one test node each, output captured whole; the `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture, and the `tmp_path` directory names are as the runner printed them (no secret, token, URL or personal data appears in any capture, so nothing is redacted). The twelve guarded elements are the twelve the order declared (G1-G12); none is grouped, and each has its own neutralization, red and green. Each target occurred exactly once in the edit's `old_string` (the edit tool refuses a non-unique match). The `file:line` numbers below are those of the restored (HEAD) files.
+Detector file: `plugins/superheroes/lib/tests/test_partial_cost_2514.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one production file, made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2514 -m pytest '<exact node id>' -q`, one test node each, output captured whole; the `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture, and the `tmp_path` directory names are as the runner printed them (no secret, token, URL or personal data appears in any capture, so nothing is redacted). The thirteen guarded elements are the twelve the first order declared (G1-G12) and the one a later order added (G13); none is grouped, and each has its own neutralization, red and green. Each target occurred exactly once in the edit's `old_string` (the edit tool refuses a non-unique match). The `file:line` numbers below are those of the restored (HEAD) files.
 
-The detectors the entries name are the tests that carry a `# bite-proof:` line: T1 (G1 and G5), T2 (G3), T5 (G2), T6 (G4), T8 (G6), T9 `[empty-list]` (G7), T10 `[partial-but-complete]` (G8) and `[partial-over-the-runs]` (G9), T11a (G10), T11b (G11), T11c (G12).
+The detectors the entries name are the tests that carry a `# bite-proof:` line: T1 (G1 and G5), T2 (G3), T5 (G2), T6 (G4), T8 (G6), T9 `[empty-list]` (G7), T10 `[partial-but-complete]` (G8) and `[partial-over-the-runs]` (G9), T11a (G10), T11b (G11), T11c (G12) and T12 `[plain]` and `[watchdog]` (G13).
 
 ## G1. Watchdog-unmeasured branch (`lib/engine_dispatch.py`, `_attempts_cost`)
 
@@ -623,6 +623,87 @@ FAILED plugins/superheroes/lib/tests/test_partial_cost_2514.py::test_t11c_a_seat
 ```
 .                                                                        [100%]
 1 passed in 4.04s
+```
+
+## G13. Wall-time check (`lib/engine_dispatch.py`, `_attempts_cost`)
+
+- **Guarded element:** `engine_dispatch.py:7805-7806`, `if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):` / `return None`, the check that runs before the usage read and leaves the run without a figure when an ended attempt carries no finite non-negative numeric `wallSeconds`. Added after G1-G12, on the file at the merge of main into this branch, so its `file:line` is that file's (G1-G12's `engine_dispatch.py` and `review_measures.py` numbers are those of the earlier files).
+- **Axis:** an ended attempt with no wall time leaves the run without a figure, a usage total and a watchdog end notwithstanding.
+- **Detector:** `test_partial_cost_2514.py::test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure`, both parametrized cases (`[plain]`: attempt 1 has no `wallSeconds` key, no watchdog marks, and a usage total of 40 tokens, then a clean measured retry of wall 30; `[watchdog]`: the same, with attempt 1's ended record also carrying `signalSource="silence-watchdog"` and a `silenceWatchdog` record). Driven at the `_attempts_cost` seam, read as `ED._attempts_cost(os.path.realpath(run_dir), ED._journal_state(records))`, not through `seam_cost` (whose `attempt-not-completed` assertion holds only when the last attempt is a watchdog end; here the last attempt is a clean retry). The test's own helper `_journal_without_first_wall_time` journals the run with `journal_run` and rewrites attempt 1's `attempt-ended` record without its `wallSeconds` key.
+- **Neutralization:** the `return None` under that `if` became `secs = 0`, so a missing wall time reads as zero.
+
+**Raw red** (exit 1; both cases):
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure[plain] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with0')
+over = {}
+
+    @pytest.mark.parametrize("over", [{}, WATCHDOG], ids=["plain", "watchdog"])
+    def test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure(tmp_path, over):
+        # axis: an ended attempt with no wall time leaves the run without a figure, a usage total and a watchdog end notwithstanding
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2514_partial_cost.md
+        run_dir = _journal_without_first_wall_time(tmp_path, [
+            attempt(stream(input_tokens=30, output_tokens=10), 600, **over), attempt(stream(**RETRY), 30)])
+        records, _ = ED._journal_read(run_dir)
+        state = ED._journal_state(records)
+        assert "wallSeconds" not in state["attempts"][1]["ended"] and state["attempts"][2]["ended"]["wallSeconds"] == 30
+        assert (ED._silence_watchdog_end(state["attempts"][1]["ended"])) is bool(over)
+>       assert ED._attempts_cost(os.path.realpath(run_dir), state) is None
+E       AssertionError: assert {'tokens': 100, 'wallSeconds': 30, 'attempts': 2} is None
+E        +  where {'tokens': 100, 'wallSeconds': 30, 'attempts': 2} = <function _attempts_cost at 0x7fefe2a1cea0>('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with0/run', {'opened': {'kind': 'run-opened', 'runKind': 'review', 'engine': 'codex', 'roleKind': 'review', ...}, 'leaseToken': No...gid': None, 'ended': {'kind': 'attempt-ended', 'attempt': 2, 'exit': 0, 'timedOut': False, ...}}}, 'folded': None, ...})
+E        +    where <function _attempts_cost at 0x7fefe2a1cea0> = ED._attempts_cost
+E        +    and   '/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with0/run' = <function realpath at 0x7fefe3de5da0>('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with0/run')
+E        +      where <function realpath at 0x7fefe3de5da0> = <module 'posixpath' (frozen)>.realpath
+E        +        where <module 'posixpath' (frozen)> = os.path
+
+/home/user/wt-2514/plugins/superheroes/lib/tests/test_partial_cost_2514.py:331: AssertionError
+_ test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure[watchdog] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with1')
+over = {'signalSource': 'silence-watchdog', 'silenceWatchdog': {'silentSeconds': 600.0, 'thresholdSeconds': 600, 'killAt': 1.0}}
+
+    @pytest.mark.parametrize("over", [{}, WATCHDOG], ids=["plain", "watchdog"])
+    def test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure(tmp_path, over):
+        # axis: an ended attempt with no wall time leaves the run without a figure, a usage total and a watchdog end notwithstanding
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2514_partial_cost.md
+        run_dir = _journal_without_first_wall_time(tmp_path, [
+            attempt(stream(input_tokens=30, output_tokens=10), 600, **over), attempt(stream(**RETRY), 30)])
+        records, _ = ED._journal_read(run_dir)
+        state = ED._journal_state(records)
+        assert "wallSeconds" not in state["attempts"][1]["ended"] and state["attempts"][2]["ended"]["wallSeconds"] == 30
+        assert (ED._silence_watchdog_end(state["attempts"][1]["ended"])) is bool(over)
+>       assert ED._attempts_cost(os.path.realpath(run_dir), state) is None
+E       AssertionError: assert {'tokens': 100, 'wallSeconds': 30, 'attempts': 2} is None
+E        +  where {'tokens': 100, 'wallSeconds': 30, 'attempts': 2} = <function _attempts_cost at 0x7fefe2a1cea0>('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with1/run', {'opened': {'kind': 'run-opened', 'runKind': 'review', 'engine': 'codex', 'roleKind': 'review', ...}, 'leaseToken': No...gid': None, 'ended': {'kind': 'attempt-ended', 'attempt': 2, 'exit': 0, 'timedOut': False, ...}}}, 'folded': None, ...})
+E        +    where <function _attempts_cost at 0x7fefe2a1cea0> = ED._attempts_cost
+E        +    and   '/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with1/run' = <function realpath at 0x7fefe3de5da0>('/tmp/claude-0/pytest-of-root/pytest-34/test_t12_an_ended_attempt_with1/run')
+E        +      where <function realpath at 0x7fefe3de5da0> = <module 'posixpath' (frozen)>.realpath
+E        +        where <module 'posixpath' (frozen)> = os.path
+
+/home/user/wt-2514/plugins/superheroes/lib/tests/test_partial_cost_2514.py:331: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_partial_cost_2514.py::test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure[plain]
+FAILED plugins/superheroes/lib/tests/test_partial_cost_2514.py::test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure[watchdog]
+2 failed in 3.79s
+```
+
+**Restore:** the inverse edit put `return None` back in place of `secs = 0`.
+**Restore receipt** (the restored lines, quoted from `engine_dispatch.py:7805-7806`):
+
+```
+            if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):
+                return None
+```
+
+**Raw green** (exit 0; both cases):
+
+```
+..                                                                       [100%]
+2 passed in 4.22s
 ```
 
 ## After every restore

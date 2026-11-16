@@ -7,6 +7,7 @@ the measures row counts the PR as left out (`prsLeftOut.<k>.partial`) and reads 
 
 Bite-proof record: i2514_partial_cost
 """
+import json
 import os
 import sys
 
@@ -301,3 +302,30 @@ def test_t11c_a_seat_only_partial_sessions_blank_reads_cost_partial_and_any_othe
     # a whole window of complete sessions has no reason at all
     row = RM.compute(_full(), FROM, UNTIL)
     assert row["measures"]["seats"]["security-reviewer"]["tokens"] == 100 and "seats.security-reviewer.tokens" not in _why(row)
+
+
+def _journal_without_first_wall_time(tmp_path, attempts):
+    """`journal_run`'s run, then attempt 1's `attempt-ended` record rewritten without its `wallSeconds` key."""
+    run_dir = journal_run(tmp_path, attempts)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "attempt-ended" and rec.get("attempt") == 1:
+            assert "wallSeconds" in rec
+            del rec["wallSeconds"]
+    with open(ED._journal_path(run_dir), "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    return run_dir
+
+
+@pytest.mark.parametrize("over", [{}, WATCHDOG], ids=["plain", "watchdog"])
+def test_t12_an_ended_attempt_without_wall_seconds_leaves_the_run_without_a_figure(tmp_path, over):
+    # axis: an ended attempt with no wall time leaves the run without a figure, a usage total and a watchdog end notwithstanding
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2514_partial_cost.md
+    run_dir = _journal_without_first_wall_time(tmp_path, [
+        attempt(stream(input_tokens=30, output_tokens=10), 600, **over), attempt(stream(**RETRY), 30)])
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    assert "wallSeconds" not in state["attempts"][1]["ended"] and state["attempts"][2]["ended"]["wallSeconds"] == 30
+    assert (ED._silence_watchdog_end(state["attempts"][1]["ended"])) is bool(over)
+    assert ED._attempts_cost(os.path.realpath(run_dir), state) is None
