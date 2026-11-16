@@ -501,3 +501,19 @@ E       assert ('needs-review' == 'judgement'
 ```
 
 **restore:** the inverse Edits; `git status --short` in the probe worktree printed nothing after them. **green:** the same file, `14 passed in 4.03s`.
+
+**Superseded in round 3 (commit 28e8dda8):** the `moved` filter on `move_sources` hid a move into a path X already held, so every remaining file's sources are read again (the copy subtraction stays), and a file that carries sources is never dropped as a copy.
+
+### E-rename-overwrite — a move into a reviewed path still shows the source it deletes (second session, round 3)
+
+**guard:** `_check`, `move_sources = set().union(*(sources.get(p, set()) for p in remaining))`.
+
+**neutralization:** the round-2 form, `... for p in remaining if p in moved`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k reviewed_prose_path -q -p no:cacheprovider`
+```
+E       assert 'judgement' == 'needs-review'
+1 failed, 14 deselected in 0.63s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `15 passed in 4.73s`.
