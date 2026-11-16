@@ -1,6 +1,6 @@
 # Bite-proof record — the owner-card count and repeat suppression read the certified-review rule (#2531)
 
-**Provenance:** light lane, orchestrator-typed (maker family claude). Detector file: `plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py`, unedited between each red and its green. Every entry is a targeted, reversible edit made and undone with the edit tool at committed head `91eabf4d (e1 to e4; e5 to e7 name their own)` (no `git checkout`, `restore`, `reset` or `stash`); after every restore, `git status --porcelain` printed nothing. Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py -q -p no:randomly -k "<expr>"`; the last line of each capture is the run's exit status. Redaction: the worktree path is shown as `<worktree>` and the `UV_NATIVE_TLS` deprecation line `uv` prints first is dropped; no secret, token, URL or personal data appears, so nothing else is redacted.
+**Provenance:** light lane, orchestrator-typed (maker family claude). Detector file: `plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py`, unedited between each red and its green. Every entry is a targeted, reversible edit made and undone with the edit tool at committed head `91eabf4d (e1 to e4; e5 to e8 name their own)` (no `git checkout`, `restore`, `reset` or `stash`); after every restore, `git status --porcelain` printed nothing. Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py -q -p no:randomly -k "<expr>"`; the last line of each capture is the run's exit status. Redaction: the worktree path is shown as `<worktree>` and the `UV_NATIVE_TLS` deprecation line `uv` prints first is dropped; no secret, token, URL or personal data appears, so nothing else is redacted.
 
 ## e1. The owner-card count reads the waiting set (`review_measures._release_measures`, the `cards` predicate)
 
@@ -401,9 +401,9 @@ exit=0
 
 ## e7. The acceptance check reads an earlier record's held repeat (`leftover_accepting._leftovers`; review session 2, finding v0)
 
-- **Axis:** a stored leftForOwner entry that names a no-outcome Minor or Nit repeat another card now holds is matched to that card-shaped finding, so the record stays readable and the finding is still asked for; a listed finding still is not. Run at `a9018a79`.
+- **Axis:** a stored leftForOwner entry that names a no-outcome Minor or Nit repeat another card now holds is matched to that card-shaped finding, so the record stays readable and the finding is still asked for; a listed finding still is not. First run at `a9018a79` (one card-shaped match); re-run at `78243aa1`, where the card-shaped match is the fallback after the waiting match, and the captures below are that re-run.
 - **Detector:** `test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check`.
-- **Neutralization:** `review_record.card_shaped(f)` became `review_record.waits_for_owner(f, findings)`, the base's form.
+- **Neutralization:** the fallback's guard `if not held:` became `if False:`, so only the base's waiting match runs.
 - **Selection:** `-k "stays_readable_to_the_acceptance"`.
 
 **Raw red:**
@@ -426,7 +426,7 @@ _ test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_
 
 <worktree>/plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py:141: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-<worktree>/plugins/superheroes/lib/leftover_accepting.py:631: in missing
+<worktree>/plugins/superheroes/lib/leftover_accepting.py:634: in missing
     leftovers = _leftovers(record)
                 ^^^^^^^^^^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
@@ -446,17 +446,20 @@ record = {'ok': True, 'findings': [{'id': 'k1', 'findingKey': 'k1', 'outcome': '
         out = []
         for name in left:
             # axis: a leftForOwner entry is matched to a finding that waits for the owner, by the record's one predicate; a listed finding is never asked for, a no-outcome risk-area Minor is — see bite-proof record i2493_wo1_record (E-accept)
-            # axis: a stored entry may name a no-outcome Minor or Nit repeat another card now holds (an earlier record listed it as waiting); it stays readable and asked for — see bite-proof record i2531_cards (e7)
             held = [f for f in findings if review_record.waits_for_owner(f, findings) and review_record._name(f) == name]
+            # axis: a stored entry no waiting finding carries may name a no-outcome Minor or Nit repeat another card now holds (an earlier record listed it as waiting); it stays readable and asked for — see bite-proof record i2531_cards (e7)
+            # axis: only then: an entry a waiting finding carries never pulls in a held repeat that shares its display id — see bite-proof record i2531_cards (e8)
+            if False:
+                held = [f for f in findings if review_record.card_shaped(f) and review_record._name(f) == name]
             # axis: a leftForOwner entry that is not a non-empty string, or names no left-for-owner finding, is unreadable
             if not (isinstance(name, str) and name.strip() and held):
 >               raise Unreadable("leftForOwner entry %r names no finding left for the owner" % (name,))
 E               leftover_accepting.Unreadable: leftForOwner entry 'k2' names no finding left for the owner
 
-<worktree>/plugins/superheroes/lib/leftover_accepting.py:83: Unreadable
+<worktree>/plugins/superheroes/lib/leftover_accepting.py:86: Unreadable
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py::test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check
-1 failed, 14 deselected in 10.09s
+1 failed, 15 deselected in 0.47s
 exit=1
 ```
 
@@ -466,6 +469,50 @@ exit=1
 
 ```
 .                                                                        [100%]
-1 passed, 14 deselected in 7.00s
+1 passed, 15 deselected in 0.41s
+exit=0
+```
+
+## e8. The fallback runs only when no waiting finding carries the entry (`leftover_accepting._leftovers`; review session 2, round 2 finding)
+
+- **Axis:** an entry a waiting finding carries never pulls in a held repeat that shares its display id, so accepting the one card passes. Run at `78243aa1`.
+- **Detector:** `test_a_held_repeat_sharing_the_waiting_cards_display_id_is_not_asked_for`.
+- **Neutralization:** the fallback's guard `if not held:` became `if True:`, so every card-shaped finding with the name is matched.
+- **Selection:** `-k "sharing_the_waiting_cards_display_id"`.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_a_held_repeat_sharing_the_waiting_cards_display_id_is_not_asked_for ___
+
+    def test_a_held_repeat_sharing_the_waiting_cards_display_id_is_not_asked_for():
+        import leftover_accepting as la
+    
+        holder = dict(_f("k1"), id="code-001", title="Slow retry")
+        again = dict(_repeat(_f("k2", outcome=None), "k1"), id="code-001", title="Slow retry again")
+        rec = {"ok": True, "findings": [holder, again], "leftForOwner": ["code-001"]}
+        # break-it: matching the entry to every card-shaped finding asks for the held repeat too, so accepting the one card fails handback
+>       assert la.missing(rec, "") == [{"id": "code-001", "title": "Slow retry"}]
+E       AssertionError: assert [{'id': 'code...retry again'}] == [{'id': 'code...'Slow retry'}]
+E         
+E         Left contains one more item: {'id': 'code-001', 'title': 'Slow retry again'}
+E         Use -v to get more diff
+
+<worktree>/plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py:154: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py::test_a_held_repeat_sharing_the_waiting_cards_display_id_is_not_asked_for
+1 failed, 15 deselected in 10.37s
+exit=1
+```
+
+**Restore:** the inverse edit put the line back; `git status --porcelain` printed nothing.
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed, 15 deselected in 38.12s
 exit=0
 ```
