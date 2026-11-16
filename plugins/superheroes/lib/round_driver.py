@@ -9820,7 +9820,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # the breaker's canonical class key collapses to a title-less `dim::tax::` alias that merges two
     # DISTINCT classKeys sharing dimension/taxonomy into a false stall (#507 R2 v2).
     audit_round = {"round": state["round"], "outcomes": [
-        {"identity": a.get("identity"), "ruling": a.get("ruling"),
+        {"identity": a.get("identity"), "ruling": a.get("ruling"), "id": a.get("id"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
         for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
@@ -18343,13 +18343,30 @@ def _attest_roster(session_dir, state):
     if reason is not None or not isinstance(roster, (list, tuple)):
         return {}
     roster = [s for s in roster if isinstance(s, str)]
-    superseded = set(e.get("seat") for e in read_journal(session_dir) if e.get("superseded"))
+    # axis: a superseded row labels only its own slot (phase, round, attempt, seat, occurrence) — see bite-proof record i2443_identity_match
+    superseded = []
+    for e in read_journal(session_dir):
+        if not isinstance(e, dict) or not e.get("superseded"):
+            continue
+        # a bool is not an int here: `True` must never read as round/attempt/occurrence 1; a row
+        # whose `occurrence` is absent or not an int names occurrence 0
+        row_round, row_attempt, row_occ = e.get("round"), e.get("attempt"), e.get("occurrence")
+        superseded.append({"phase": e.get("phase"), "seat": e.get("seat"),
+                           "round": row_round if type(row_round) is int else None,
+                           "attempt": row_attempt if type(row_attempt) is int else None,
+                           "occurrence": row_occ if type(row_occ) is int else 0})
     out = {}
     for seat, occurrence, env in _seat_slot_records(session_dir, rnd, phase, attempt, roster):
         label = _slot_label(seat, occurrence)
         if env is None:
             out[label] = "absent"
-        elif seat in superseded:
+        elif any(type(rnd) is int and type(attempt) is int
+                 and row["phase"] == phase
+                 and row["round"] == rnd
+                 and row["attempt"] == attempt
+                 and row["seat"] == seat
+                 and row["occurrence"] == occurrence
+                 for row in superseded):
             out[label] = "superseded"
         elif env.get("schema") == round_records.SEAT_MISSING_SCHEMA:
             out[label] = "missing"
