@@ -15,7 +15,7 @@ from review_memory import canonical_class_key, class_key_aliases
 from finding_identity import (
     clamp_title, normalize_title, finding_label, finding_identity,
 )
-from audits import AUDIT_RULINGS
+from audits import AUDIT_RULINGS, NON_STRIKE_REASON_KINDS
 
 BLOCKING = {"Critical", "Important"}
 # The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
@@ -279,6 +279,13 @@ def _round_not_discharged_findings(round_rec):
     """[(finding key, display name, alias set)] for every NOT-DISCHARGED outcome in one audit round
     — the one home of that classification; `_round_not_discharged` returns its alias sets.
 
+    Which outcomes count: a not-discharged outcome counts toward the stall only when its `reasonKind`
+    is `wrong`, or when it carries no recognised kind (a legacy round, a malformed entry, a value
+    outside `audits.AUDIT_REASON_KINDS`: fail closed). A not-discharged outcome of kind `unanswered`
+    (the auditor never answered) or `reopened-merged` (a merged finding reopened before its own fix
+    was audited) does not count, and neither does a cleared one (`discharged`,
+    `discharged-but-new-issue`, which includes a scope-only hold).
+
     The finding key is the outcome's `id` (the audit target's per-location id) when that is a
     non-empty string, so outcomes sharing an id are one finding. An outcome with no usable `id` (a
     round recorded before `id` rode the outcome) and every malformed entry is its OWN finding, keyed
@@ -305,6 +312,10 @@ def _round_not_discharged_findings(round_rec):
             continue
         if ruling in ("discharged", "discharged-but-new-issue"):
             continue
+        # axis: an unanswered or reopened-merged outcome never counts toward the stall; a wrong one, one with no kind and one with an unknown kind still do — see bite-proof record i2495_strike_kinds
+        kind = o.get("reasonKind")
+        if isinstance(kind, str) and kind in NON_STRIKE_REASON_KINDS:
+            continue
         aliases = _audit_outcome_aliases(o)
         if not aliases:
             out.append((entry_key, _MALFORMED_OUTCOME, {_MALFORMED_OUTCOME}))
@@ -323,7 +334,10 @@ def check_audit_breaker(audit_rounds):
     `audit_rounds` — chronological list of {"round": N, "outcomes": [{identity, ruling}]}, the
     effective rulings from `audits.apply_audit_results`. It detects only `audit-stall`: some
     identity is not-discharged in the last two audit rounds only (alias-tolerant, so a
-    retitled-but-same-class finding still stalls). An honestly-folded clean round resets the
+    retitled-but-same-class finding still stalls). Only an outcome the auditor answered wrong counts:
+    one whose `reasonKind` is `wrong`, or that carries no recognised kind (fail closed). An
+    `unanswered` or `reopened-merged` outcome, and a cleared one, never counts
+    (see `_round_not_discharged_findings`). An honestly-folded clean round resets the
     window — historical pairs do not permanently halt later rounds. The round cap is not a
     criterion here: it is the driver's boundary on the round about to begin.
 

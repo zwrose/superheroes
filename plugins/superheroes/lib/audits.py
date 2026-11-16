@@ -18,6 +18,19 @@ from finding_identity import finding_identity, place_pair as _place_key
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
+# Why an audit entry ended as it did, for the audit-stall (#2495). Every not-discharged entry the fold
+# emits carries one of `wrong`, `unanswered` or `reopened-merged`; a scope-held clear carries
+# `scope-only`; a plain clear carries none. Only a `wrong` answer, or an entry with no recognised
+# kind (fail closed), counts toward the stall (`circuit_breaker._round_not_discharged_findings`).
+AUDIT_REASON_KIND_FIELD = "reasonKind"
+REASON_KIND_WRONG = "wrong"
+REASON_KIND_UNANSWERED = "unanswered"
+REASON_KIND_SCOPE_ONLY = "scope-only"
+REASON_KIND_REOPENED_MERGED = "reopened-merged"
+AUDIT_REASON_KINDS = (REASON_KIND_WRONG, REASON_KIND_UNANSWERED, REASON_KIND_SCOPE_ONLY,
+                      REASON_KIND_REOPENED_MERGED)
+NON_STRIKE_REASON_KINDS = frozenset({REASON_KIND_UNANSWERED, REASON_KIND_REOPENED_MERGED})
+
 UNAUTHENTICATED_NO_AUDITOR_RECORDED = "no-auditor-recorded"
 UNAUTHENTICATED_MANIFEST_ENTRY_MISSING = "manifest-entry-missing"
 UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH = "manifest-vendor-mismatch"
@@ -774,6 +787,7 @@ class _AuditFold:
         self.unauthenticated = []
         self.echo_mismatch = []
         self.unnamed_change = []
+        self.scope_held = []
         self.attributed_change = []
         self.test_mismatch = []
         self.places_unfixed = []
@@ -790,18 +804,29 @@ class _AuditFold:
         not-discharged, disclosed as `unauthenticated`."""
         self.unauthenticated.append(fid)
         self.not_discharged.append(fid)
-        base.update(ruling="not-discharged", reason=reason, unauthenticatedCause=cause)
+        base.update(ruling="not-discharged", reason=reason, unauthenticatedCause=cause,
+                    reasonKind=REASON_KIND_UNANSWERED)
         self.audits.append(base)
 
     def refuse_unnamed_change(self, base, fid, text, candidates):
-        """A clearing result that states behaviour its finding does not name, with no ruling that
-        allows it: not-discharged, disclosed as `unnamedChange`; any new issues it carried stay."""
+        """A clearing result that states behaviour its finding does not name, on a target whose own
+        carried decision forbids that change: not-discharged (a wrong fix), disclosed as
+        `unnamedChange`; any new issues it carried stay."""
         self.unnamed_change.append(fid)
         self.not_discharged.append(fid)
         self.new_issues.extend(candidates)
         base.update(ruling="not-discharged",
-                    reason=UNNAMED_CHANGE_REASON_PREFIX + text)
+                    reason=UNNAMED_CHANGE_REASON_PREFIX + text,
+                    reasonKind=REASON_KIND_WRONG)
         self.audits.append(base)
+
+    def hold_scope(self, base, fid, text):
+        """A clearing result that states behaviour its finding does not name, with no ruling that
+        allows it and none that forbids it: the fix reads cleared, and the change rides the entry as
+        `scopeNote` for the vet. Listed in `scopeHeld`; never `allowedChange` or `attributedChange`."""
+        base["scopeNote"] = text
+        base[AUDIT_REASON_KIND_FIELD] = REASON_KIND_SCOPE_ONLY
+        self.scope_held.append(fid)
 
     def credit_attribution(self, base, fid, text, fixes, reverts):
         """A clearing result whose unnamed change is attributed, by claims the driver's record
@@ -901,13 +926,19 @@ class _AuditFold:
                           and _claims_verify(f, fixes, reverts))
         if unnamed_text:
             base["reportedUnnamedChange"] = unnamed_text
+        # Only a change the target's OWN carried decision forbids is refused; any other unallowed,
+        # unattributed change is a scope-only hold that clears with a note. A target with no
+        # `ownerRuling`, or one that is not a dict, forbids nothing.
+        owner_ruling = f.get("ownerRuling")
+        forbids_change = isinstance(owner_ruling, dict) and owner_ruling.get("allowsChange") is False
 
         if ruling == "discharged":
             self._fold_discharged(base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                                  fixes, reverts, guarded, removal)
+                                  fixes, reverts, guarded, removal, forbids_change)
         elif ruling == "discharged-but-new-issue":
             self._fold_discharged_new_issue(base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                            attributed, fixes, reverts, guarded, removal)
+                                            attributed, fixes, reverts, guarded, removal,
+                                            forbids_change)
         elif ruling == "not-discharged":
             self._fold_not_discharged(base, fid, r, reason, has_reason, unnamed_text, expected_auditor,
                                       keeps_new_issues)
@@ -915,17 +946,21 @@ class _AuditFold:
             self._fold_unrecognized(base, fid, ruling)
 
     def _fold_silence(self, base, fid):
+        # axis: an auditor that never answered reads unanswered, which never counts toward the stall — see bite-proof record i2495_strike_kinds
         if fid is not None and fid in self.duplicate_target_ids:
             base.update(ruling="not-discharged",
-                        reason="duplicate audit target id — honoring none")
+                        reason="duplicate audit target id — honoring none",
+                        reasonKind=REASON_KIND_UNANSWERED)
         elif fid is not None and fid in self.ambiguous_ids:
             base.update(ruling="not-discharged",
-                        reason="more than one audit result claimed this finding — honoring none")
+                        reason="more than one audit result claimed this finding — honoring none",
+                        reasonKind=REASON_KIND_UNANSWERED)
         else:
             if fid is not None:
                 self.unaudited.append(fid)
             base.update(ruling="not-discharged",
-                        reason=NO_AUDIT_RESULT_REASON)
+                        reason=NO_AUDIT_RESULT_REASON,
+                        reasonKind=REASON_KIND_UNANSWERED)
         self.audits.append(base)
         if fid is not None:
             self.not_discharged.append(fid)
@@ -933,7 +968,8 @@ class _AuditFold:
     def _fold_duplicate_target(self, base, fid):
         if fid in self.duplicate_target_ids:
             base.update(ruling="not-discharged",
-                        reason="duplicate audit target id — honoring none")
+                        reason="duplicate audit target id — honoring none",
+                        reasonKind=REASON_KIND_UNANSWERED)
             self.audits.append(base)
             self.not_discharged.append(fid)
             return True
@@ -1008,7 +1044,8 @@ class _AuditFold:
             base.update(ruling="not-discharged",
                         reason=("break-it test %s: the committed test at %s is not the test role's "
                                 "version (or the build session's explained change of it)"
-                                % (match, (f.get("breakIt") or {}).get("path"))))
+                                % (match, (f.get("breakIt") or {}).get("path"))),
+                        reasonKind=REASON_KIND_WRONG)
             # axis: a blocking test mismatch keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
             if keeps_new_issues:
                 self.new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
@@ -1023,7 +1060,9 @@ class _AuditFold:
         if checks_fault is not None:
             self.malformed.append(fid)
             self.not_discharged.append(fid)
-            base.update(ruling="not-discharged", reason="audit refused: %s" % checks_fault)
+            # axis: an audit that refused (a checks fault) never answered, so it reads unanswered — see bite-proof record i2495_strike_kinds
+            base.update(ruling="not-discharged", reason="audit refused: %s" % checks_fault,
+                        reasonKind=REASON_KIND_UNANSWERED)
             self.audits.append(base)
             return True
         return False
@@ -1065,7 +1104,8 @@ class _AuditFold:
                 self.test_mismatch.append(fid)
                 self.not_discharged.append(fid)
                 base.update(ruling="not-discharged",
-                            reason="break-it test weakened: %s" % test_match["why"].strip())
+                            reason="break-it test weakened: %s" % test_match["why"].strip(),
+                            reasonKind=REASON_KIND_WRONG)
                 # axis: a weakened-test return keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
                 if keeps_new_issues:
                     self.new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
@@ -1094,7 +1134,8 @@ class _AuditFold:
                 if has_usable_unnamed_change(reported_unnamed):
                     base["reportedUnnamedChange"] = reported_unnamed.strip()
                     reason_text += ". Unnamed change: %s" % reported_unnamed.strip()
-                base.update(ruling="not-discharged", reason=reason_text)
+                base.update(ruling="not-discharged", reason=reason_text,
+                            reasonKind=REASON_KIND_WRONG)
                 self.audits.append(base)
                 return True
         return False
@@ -1107,8 +1148,10 @@ class _AuditFold:
             candidates = (_valid_new_issues(r.get("newIssues"), fid)
                           if ruling == "discharged-but-new-issue" else [])
             self.new_issues.extend(candidates)
+            # axis: a fix the auditor answered wrong (a failed check) reads wrong, which counts toward the stall — see bite-proof record i2495_strike_kinds
             base.update(ruling="not-discharged",
-                        reason="audit check failed: %s: %s" % failed)
+                        reason="audit check failed: %s: %s" % failed,
+                        reasonKind=REASON_KIND_WRONG)
             self.audits.append(base)
             return True
         return False
@@ -1130,7 +1173,8 @@ class _AuditFold:
                 base.update(ruling="not-discharged",
                             reason=("audit check failed: testWouldFail: review-guarded clears only a fix "
                                     "whose whole delta is prose; this fix's delta touches %s"
-                                    % (", ".join(others) if others else "no recorded delta")))
+                                    % (", ".join(others) if others else "no recorded delta")),
+                            reasonKind=REASON_KIND_WRONG)
                 self.audits.append(base)
                 return True, guarded
             guarded = {"answer": REVIEW_GUARDED, "why": r["checks"]["testWouldFail"]["why"].strip()}
@@ -1154,7 +1198,8 @@ class _AuditFold:
                 base.update(ruling="not-discharged",
                             reason=("audit check failed: testWouldFail: worthless-test-removed clears only a "
                                     "fix that removes test lines a worthless-test finding cites; %s: %s"
-                                    % (failing, detail)))
+                                    % (failing, detail)),
+                            reasonKind=REASON_KIND_WRONG)
                 self.audits.append(base)
                 return True, removal
             evidence["finding"] = fid
@@ -1166,7 +1211,8 @@ class _AuditFold:
         if ruling in _CLEARS and unnamed is not None and not isinstance(unnamed, str):
             self.malformed.append(fid)
             base.update(ruling="not-discharged",
-                        reason="`unnamedChange` is not a string — treated as not-discharged")
+                        reason="`unnamedChange` is not a string — treated as not-discharged",
+                        reasonKind=REASON_KIND_UNANSWERED)
             self.audits.append(base)
             self.not_discharged.append(fid)
             return True
@@ -1174,7 +1220,8 @@ class _AuditFold:
         if ruling in _CLEARS and named_seq is not None and not is_decision_seq(named_seq):
             self.malformed.append(fid)
             base.update(ruling="not-discharged",
-                        reason="`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged")
+                        reason="`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged",
+                        reasonKind=REASON_KIND_UNANSWERED)
             self.audits.append(base)
             self.not_discharged.append(fid)
             return True
@@ -1186,20 +1233,26 @@ class _AuditFold:
             self.malformed.append(fid)
             base.update(ruling="not-discharged",
                         reason="`%s` is not a list of non-blank strings — treated as not-discharged"
-                        % claim_fault)
+                        % claim_fault,
+                        reasonKind=REASON_KIND_UNANSWERED)
             self.audits.append(base)
             self.not_discharged.append(fid)
             return True
         return False
 
     def _fold_discharged(self, base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                         fixes, reverts, guarded, removal=None):
-        if has_reason and unnamed_text and fid not in self.allowed_ids and not attributed:
+                         fixes, reverts, guarded, removal=None, forbids_change=False):
+        scope_only = bool(has_reason and unnamed_text and fid not in self.allowed_ids and not attributed)
+        # axis: a change the finding's own decision forbids stays a wrong, refused fix — see bite-proof record i2495_strike_kinds
+        if scope_only and forbids_change:
             self.refuse_unnamed_change(base, fid, unnamed_text, [])
             return
         if has_reason:
             if attributed:
                 self.credit_attribution(base, fid, unnamed_text, fixes, reverts)
+            elif scope_only:
+                # axis: a scope-only hold reads cleared and carries a scope note — see bite-proof record i2495_strike_kinds
+                self.hold_scope(base, fid, unnamed_text)
             elif unnamed_text:
                 base["allowedChange"] = unnamed_text
             base.update(ruling="discharged", reason=reason.strip())
@@ -1220,20 +1273,25 @@ class _AuditFold:
         # this fold exists to reject.
         self.malformed.append(fid)
         base.update(ruling="not-discharged",
-                    reason="`discharged` with no reason — treated as not-discharged")
+                    reason="`discharged` with no reason — treated as not-discharged",
+                    reasonKind=REASON_KIND_UNANSWERED)
         self.audits.append(base)
         self.not_discharged.append(fid)
         return
 
     def _fold_discharged_new_issue(self, base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                   attributed, fixes, reverts, guarded, removal=None):
+                                   attributed, fixes, reverts, guarded, removal=None,
+                                   forbids_change=False):
         candidates = _valid_new_issues(r.get("newIssues"), fid)
-        if candidates and unnamed_text and fid not in self.allowed_ids and not attributed:
+        scope_only = bool(candidates and unnamed_text and fid not in self.allowed_ids and not attributed)
+        if scope_only and forbids_change:
             self.refuse_unnamed_change(base, fid, unnamed_text, candidates)
             return
         if candidates:
             if attributed:
                 self.credit_attribution(base, fid, unnamed_text, fixes, reverts)
+            elif scope_only:
+                self.hold_scope(base, fid, unnamed_text)
             elif unnamed_text:
                 base["allowedChange"] = unnamed_text
             base.update(ruling="discharged-but-new-issue",
@@ -1253,7 +1311,8 @@ class _AuditFold:
         # a discharged-but-new-issue with no usable candidate is an unusable claim.
         self.malformed.append(fid)
         base.update(ruling="not-discharged",
-                    reason="`discharged-but-new-issue` with no usable newIssues — treated as not-discharged")
+                    reason="`discharged-but-new-issue` with no usable newIssues — treated as not-discharged",
+                    reasonKind=REASON_KIND_UNANSWERED)
         self.audits.append(base)
         self.not_discharged.append(fid)
         return
@@ -1268,7 +1327,7 @@ class _AuditFold:
             # keep the auditor's account of the unnamed change: the next fixer reads it from
             # the recorded reason (priorAudit.reason), so it knows what to undo.
             kept_reason += " Unnamed change: " + unnamed_text
-        base.update(ruling="not-discharged", reason=kept_reason)
+        base.update(ruling="not-discharged", reason=kept_reason, reasonKind=REASON_KIND_WRONG)
         # axis: a not-discharged arm keeps the new issues its result raised, as a cleared audit's are kept — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
         if keeps_new_issues:
             self.new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
@@ -1280,7 +1339,8 @@ class _AuditFold:
         # Unknown ruling string (or a non-str) → fail-closed not-discharged + malformed.
         self.malformed.append(fid)
         base.update(ruling="not-discharged",
-                    reason="unrecognized ruling %r — treated as not-discharged" % (ruling,))
+                    reason="unrecognized ruling %r — treated as not-discharged" % (ruling,),
+                    reasonKind=REASON_KIND_UNANSWERED)
         self.audits.append(base)
         self.not_discharged.append(fid)
 
@@ -1298,6 +1358,7 @@ class _AuditFold:
             "unauthenticated": self.unauthenticated,
             "echoMismatch": self.echo_mismatch,
             "unnamedChange": self.unnamed_change,
+            "scopeHeld": self.scope_held,
             "attributedChange": self.attributed_change,
             "testMismatch": self.test_mismatch,
             "placesUnfixed": self.places_unfixed,
@@ -1333,8 +1394,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     `change_allowed_ids` — target ids whose finding carries a ruling that allows the fix to change
                  behaviour the finding does not name. A clearing result that states such a change
                  (`unnamedChange`) stays discharged only for these ids (its audit entry records
-                 `allowedChange`); for any other id it is `not-discharged` and listed in
-                 `unnamedChange`. A non-string, non-null `unnamedChange` is malformed, and so is a
+                 `allowedChange`). For any other id the change is a scope-only hold, unless the
+                 target's own carried `ownerRuling.allowsChange` is `False`: the fix then reads
+                 cleared (the ruling the auditor gave, with its reason, evidence and new issues), its
+                 entry records `scopeNote` (the change) and `reasonKind: "scope-only"`, and the id is
+                 listed in `discharged` and `scopeHeld`; a `review-guarded` or `worthless-test-removed`
+                 answer accepted by its guard is recorded as for a plain clear. A change the target's own
+                 decision forbids is `not-discharged` (kind `wrong`) and listed in `unnamedChange`. A non-string, non-null `unnamedChange` is malformed, and so is a
                  non-integer, non-null `unnamedChangeAllowedBySeq` (the fold, not this function,
                  verifies the named decision before an id is listed here).
                  A clearing result with an `unnamedChange` is also discharged, for an id not in
@@ -1365,9 +1431,11 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     result is listed in `testMismatch`.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch,
+    unmatched, unauthenticated, echoMismatch, unnamedChange, scopeHeld, attributedChange, testMismatch,
     placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused, testRemovalCleared, testRemovalRefused}. Each `audits` entry
-    carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
+    carries the EFFECTIVE (post-fail-closed) ruling. Every not-discharged entry also carries a `reasonKind`
+    (`wrong`, `unanswered`; the driver adds `reopened-merged`) and a scope-held clear carries `scope-only`
+    (`AUDIT_REASON_KINDS`); only `wrong`, or no recognised kind, counts toward the audit-stall. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
     orchestrator's manifest could not authenticate (missing entry, or manifest ≠ the selected

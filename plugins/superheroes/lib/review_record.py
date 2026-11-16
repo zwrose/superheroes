@@ -78,6 +78,10 @@ PARTS_SCHEMA = "review-record-parts/1"
 EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
 _RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
+# Why a reviewer run with a runner nonce has no bound run folder (`unboundRuns`): `not-in-extras` — no listed folder names
+# the nonce and every listed folder read and named a run of this session; `unmatched` — two listed folders claim the nonce,
+# or no folder names it while some listed folder could not be read or named no nonce of this session's runs.
+UNBOUND_RUN_CASES = ("not-in-extras", "unmatched")
 CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
 RECORD_SCHEMA = "review-record/1"
@@ -497,20 +501,22 @@ def _withheld_paths(repo_root, head_sha, paths):
     return sanitized_view.withheld_review_paths(repo_root, head_sha, paths)
 
 
-def _finding_risk(repo_root, file):
+def _finding_risk(repo_root, file, stored=None):
     """Whether a finding's file lies in a declared risk area, as the one risk-area reader (`risk_areas.touched`) reads
     it: True when an area covers the file; False when risk areas are declared and none covers it, or the project's
     core.md declares none (no `riskAreas` key or an empty list); None when it cannot be told (no repository root,
     no usable file path, a calibration file that cannot be found, an unreadable or malformed store, any fault).
     Only the exact False lets a Minor or Nit be listed for the merge verdict.
     A core.md with no risk areas has no declared risk area to be in (the lane floor reads that as unclear: that is
-    its question, `risk_areas.touched` still answers not-set, and only this reader maps it)."""
+    its question, `risk_areas.touched` still answers not-set, and only this reader maps it).
+    `stored`, when a dict, is the risk-area read a session pinned at its start; it is read in place of the live core.md."""
     try:
         if not repo_root or not isinstance(file, str) or not file.strip():
             return None
         if risk_areas.normalize_change_path(file) is None:
             return None
-        got = risk_areas.touched(repo_root, [file])
+        got = (risk_areas.touched(repo_root, [file], stored=stored) if isinstance(stored, dict)
+               else risk_areas.touched(repo_root, [file]))
         if got["riskAreas"] == "not-set":
             # "core-md-absent" is the detail `core_md.read_risk_areas` gives when no core.md is found
             # axis: a calibration file that cannot be found reads unknown, so the finding stays a card, never "declares none" — see bite-proof record i2493_wo1_record (E-absent)
@@ -563,8 +569,9 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     findings = prior.get("findings")
     # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
     # axis: the one exception is a no-outcome finding the record lists or holds as a card (a Minor or Nit), never an Important, Critical or unknown severity — see bite-proof record i2493_wo1_record (E-carry)
+    # axis: a no-outcome Minor or Nit card another card holds is admitted like the card that holds it — see bite-proof record i2531_cards (e5)
     if not (isinstance(findings, list) and all(
-            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or waits_for_owner(f, findings))
+            isinstance(f, dict) and (f.get("outcome") is not None or listed_for_merge(f) or card_shaped(f))
             for f in findings)):
         return "an earlier finding is still open"
     try:
@@ -1048,11 +1055,16 @@ def _validate(a):
     if "sessionCost" in a:
         c, num = a["sessionCost"], lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0  # noqa: E731
         cnt = lambda v: _is_int(v) and v >= 0  # noqa: E731
-        chk(isinstance(c, dict) and set(c) == {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}, "sessionCost")
+        base_keys = {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}
+        chk(isinstance(c, dict) and set(c) in (base_keys, base_keys | {"runsPartial"}), "sessionCost")
         chk(cnt(c["tokens"]) and cnt(c["runs"]) and cnt(c["runsWithoutFigure"]) and num(c["minutes"]), "sessionCost")
         chk(c["runsWithoutFigure"] <= c["runs"], "sessionCost.runsWithoutFigure")
+        # axis: `runsPartial`, when written, is an int of one or more that with the runs lacking a figure fits the runs — see bite-proof record i2514_partial_cost
+        chk("runsPartial" not in c or (_is_int(c["runsPartial"]) and c["runsPartial"] >= 1
+                                      and c["runsWithoutFigure"] + c["runsPartial"] <= c["runs"]), "sessionCost.runsPartial")
         # axis: complete is true exactly when every run had a figure — see bite-proof record i2307_session_cost
-        chk(c["complete"] is (c["runsWithoutFigure"] == 0), "sessionCost.complete")
+        # axis: complete is also false when any run is partial — see bite-proof record i2514_partial_cost
+        chk(c["complete"] is (c["runsWithoutFigure"] == 0 and c.get("runsPartial", 0) == 0), "sessionCost.complete")
         seats = c["bySeat"]
         chk(isinstance(seats, dict) and all(_nb(k) and isinstance(v, dict) and set(v) == {"tokens", "minutes", "runs"}
                                            and cnt(v["tokens"]) and cnt(v["runs"]) and num(v["minutes"])
@@ -1067,6 +1079,14 @@ def _validate(a):
             and _is_int(e["attempt"]) and e["attempt"] >= 1
             and isinstance(e["silentSeconds"], (int, float)) and not isinstance(e["silentSeconds"], bool)
             and math.isfinite(e["silentSeconds"]) and e["silentSeconds"] >= 0 for e in ends), "silenceWatchdogEnds")
+    if "unboundRuns" in a:
+        unbound = a["unboundRuns"]
+        # axis: an unbound run names its seat, its nonce and one of the two case tokens, exactly those keys — see bite-proof record i2516_unbound_runs
+        chk(isinstance(unbound, list) and all(
+            isinstance(e, dict) and set(e) == {"seat", "nonce", "case"} and ne(e["seat"]) and ne(e["nonce"]) and bool(e["seat"].strip())
+            and bool(e["nonce"].strip())
+            # axis: the case is one of UNBOUND_RUN_CASES, never another word — see bite-proof record i2516_unbound_runs
+            and e["case"] in UNBOUND_RUN_CASES for e in unbound), "unboundRuns")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -1648,26 +1668,33 @@ def listed_for_merge(f):
             and (f.get("outcome") == _LEFT_FOR_OWNER or f.get("outcome") not in rfs.OUTCOMES))
 
 
+def card_shaped(f):
+    """True when `f` would hold an owner card were no other finding to hold it: not listed for the merge verdict, and
+    left for the owner or a Minor or Nit with no outcome. `waits_for_owner` and `repeat_held_elsewhere` both read it."""
+    return (isinstance(f, dict) and not listed_for_merge(f)
+            and (f.get("outcome") == _LEFT_FOR_OWNER
+                 or (f.get("outcome") not in rfs.OUTCOMES and f.get("severity") in LISTED_SEVERITIES)))
+
+
 def waits_for_owner(f, findings):
     """True when `f` holds an owner card in the record: it is not listed for the merge verdict, no other finding of the
     record holds its card (`repeat_held_elsewhere`), and it is left for the owner, or is a Minor or Nit with no outcome
     (a no-outcome Minor or Nit in a risk area, or of unknown risk, is a card; an Important, Critical or unknown
     severity with no outcome is a missing outcome, not a card). The one reader of that rule."""
-    return (isinstance(f, dict) and not listed_for_merge(f) and not repeat_held_elsewhere(f, findings)
-            and (f.get("outcome") == _LEFT_FOR_OWNER
-                 or (f.get("outcome") not in rfs.OUTCOMES and f.get("severity") in LISTED_SEVERITIES)))
+    return card_shaped(f) and not repeat_held_elsewhere(f, findings)
 
 
 def repeat_held_elsewhere(f, findings):
-    """True when `f` is left for the owner and repeats another left-for-owner finding of the same record, which holds
-    the owner's one card. The one reader of that rule: the leftover line, the leftForOwner list and the sheet's card
-    all ask it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no
-    owner decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
+    """True when `f` would hold a card (`card_shaped`: left for the owner, or a no-outcome Minor or Nit card) and
+    repeats another card-shaped finding of the same record, which holds the owner's one card. The one reader of that
+    rule: the leftover line, the leftForOwner list, the sheet's card and the gardening pass's owner-card count all ask
+    it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no owner
+    decision goes missing. A finding listed for the merge verdict holds no card, so a repeat of it keeps its own."""
     # axis: a listed earlier finding holds no card, so a waiting repeat of it keeps its own — see bite-proof record i2493_wo1_record (E-repeat)
-    left = {_key(g): g for g in findings
-            if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER and not listed_for_merge(g)}
+    # axis: a no-outcome Minor or Nit card holds, and is held, like a left-for-owner card — see bite-proof record i2531_cards
+    left = {_key(g): g for g in findings if card_shaped(g)}
     own, held = _key(f), _repeat_key(f)
-    if f.get("outcome") != _LEFT_FOR_OWNER or held is None or held == own or held not in left:
+    if not card_shaped(f) or held is None or held == own or held not in left:
         return False
     seen = set()
     while held is not None and held not in seen:  # a ring of repeats holds nothing: each keeps its card
@@ -2104,13 +2131,17 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         return docs
 
     def sources():
-        # Read once, and only when a cited decision needs it: Canon and residuals as the repository holds them now.
+        # Read once, and only when a cited decision needs it: Canon as the repository holds it now, and residuals as
+        # the session pinned them at its start (as the repository holds them now when the account carries no pin).
         if "sources" not in held:
             try:
                 base = rd["decision_sources"](a.get("repoRoot"), a.get("baseRef"), a.get("sheetAnswers"), a["pr"])
             except Exception:  # noqa: BLE001 — fail toward the owner: no sources means no cited decision is on record
                 base = {}
-            held["sources"] = dict(base if isinstance(base, dict) else {}, repo=a["repo"], ownerRulings=owner_ruling_comments())
+            import calibration_pin
+            # axis: a session's record settles cited residuals on the read the session pinned, never the live store
+            base = calibration_pin.overlay_residuals(dict(base if isinstance(base, dict) else {}), a.get("pinnedResiduals"))
+            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments())
         return held["sources"]
 
     def canon_on_record(g):
@@ -2137,9 +2168,12 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     # axis: a kept repeat follows its earlier finding only after the carried re-check has settled it, so a carried fix reaches the repeat — see bite-proof record i2438_repeat_follows
     findings = _follow_repeats(findings, a["carriedChecks"], sources)
     findings = _drop_stale_open_marker(findings)
+    pinned_risk = a.get("pinnedRiskAreas")
     # axis: every finding is stamped with the writer's own reading of its file's risk; an account's inRiskArea is overwritten, never trusted — see bite-proof record i2493_wo1_record (E-stamp)
+    # axis: a session's record reads each finding's risk from the risk areas the session pinned at its start, never the live core.md — see bite-proof record wo7_2502_finding_risk_pin
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome")),
-                     inRiskArea=rd["finding_risk"](a.get("repoRoot"), f.get("file"))) for f in findings]
+                     inRiskArea=(rd["finding_risk"](a.get("repoRoot"), f.get("file"), pinned_risk) if isinstance(pinned_risk, dict)
+                                 else rd["finding_risk"](a.get("repoRoot"), f.get("file")))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
@@ -2179,6 +2213,9 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         # axis: a codex seat the watchdog ended is named in the record whenever the account lists an end — see bite-proof record i2375_c_watchdog_ends
         **({"silenceWatchdogEnds": [dict(e, seat=_shown_seat(e["seat"])) for e in a["silenceWatchdogEnds"]]}
            if a.get("silenceWatchdogEnds") else {}),
+        # axis: a reviewer run with a nonce and no bound run folder is named in the record whenever the account lists one — see bite-proof record i2516_unbound_runs
+        **({"unboundRuns": [dict(e, seat=_shown_seat(e["seat"]), nonce="[REDACTED NONCE]" if _seat_hidden(e["nonce"]) else e["nonce"])
+                            for e in a["unboundRuns"]]} if a.get("unboundRuns") else {}),
         "unreadFiles": unread, "rawOutputs": [],
         # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
         "leftForOwner": [_name(f) for f in findings if waits_for_owner(f, findings)],
@@ -2911,6 +2948,18 @@ def _watchdog_line(ends, level):
         f"{e['seat']} attempt {e['attempt']} after {e['silentSeconds']} s silent" for e in ends) + "."
 
 
+def _unbound_line(runs, level):
+    """The summary line for the reviewer runs that carry a nonce no single run folder claims; None when the record carries
+    none. Level 0 names each run; the compact levels give their count, and the record's JSON keeps the list."""
+    if not (isinstance(runs, list) and runs):
+        return None
+    if level >= 1:
+        # axis: the compact levels give the count only, so the line stays bounded however many runs there are — see bite-proof record i2516_unbound_runs
+        return f"Unbound runs: {_plural(len(runs), 'run', 'runs')} {LISTED}."
+    # axis: level 0 names every run (seat, nonce, case) in list order — see bite-proof record i2516_unbound_runs
+    return "Unbound runs: " + "; ".join(f"{e['seat']} nonce {e['nonce']} ({e['case']})" for e in runs) + "."
+
+
 def _test_lens_line(r):
     """The one `Test lens:` line. A record with no usable `testLens` part reads unmeasured."""
     part = r.get("testLens")
@@ -3017,6 +3066,7 @@ def _summary(r, level):
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
+    unbound_line = _unbound_line(r.get("unboundRuns"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
@@ -3031,6 +3081,7 @@ def _summary(r, level):
         # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
         *([transit_line] if transit_line else []),
         *([watchdog_line] if watchdog_line else []),
+        *([unbound_line] if unbound_line else []),
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         *([rounds_line] if rounds_line else []),
         *([extra_audit_line] if extra_audit_line else []),
@@ -3072,7 +3123,7 @@ def _summary(r, level):
             checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
     checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
                              if l is not floor_line and l is not withheld_line and l is not refusals_line
-                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+                             and l is not transit_line and l is not watchdog_line and l is not unbound_line and l not in wider_lines and all(l is not q for q in quoted_lines))
     _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 

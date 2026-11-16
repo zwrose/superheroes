@@ -444,7 +444,7 @@ def test_native_vendor_on_the_stdout_fallback_contract_authenticates_from_the_ma
     art, why = _assemble_finder(state, phase, seat, None, "claude", wrapped=True)
     assert why is None and art["findings"] == [], (art, why)
     art, why = _assemble_finder(state, phase, seat, None, "cursor", wrapped=True)
-    assert art is None and "executed=None:recorded=cursor" in why, (art, why)
+    assert art is None and "no-runner-evidence:recorded=cursor" in why, (art, why)
 
 
 def test_journal_only_emission_still_binds_the_fold_to_the_ordered_vendor(tmp_path):

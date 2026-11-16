@@ -455,9 +455,16 @@ def test_negative_discuss_open_missing_append_before_propose():
 def test_negative_discuss_open_inverted_append_before_propose_one_clause():
     base = _read_plugin(_DISCUSS_OPEN)
     lines = base.splitlines()
+    clause_start = "For each owner call that will be delivered in batch 1 or batch 2"
+    matching = [line for line in lines if line.startswith(clause_start)]
+    assert len(matching) == 1, (
+        "expected exactly one line of %s to start with the append-before-propose "
+        "clause %r, found %d (clause missing or duplicated)"
+        % (_DISCUSS_OPEN, clause_start, len(matching))
+    )
     inverted = []
-    for i, line in enumerate(lines, 1):
-        if i == 47:
+    for line in lines:
+        if line.startswith(clause_start):
             inverted.append(line.replace("**before**", "**after**"))
         else:
             inverted.append(line)
