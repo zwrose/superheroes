@@ -202,3 +202,73 @@ The red is on the claimed axis: the record reads `reviewed` although no planned 
 ```
 
 **restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `25 passed in 2.96s`.
+
+---
+
+## Added at layer 2's review, rework 1: E-review-base (2026-11-16, typed and run by the build session)
+
+Three elements, three neutralizations, three reds. Each red ran the one detector alone, with
+`scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest <file> -k <test> -q -p no:cacheprovider`.
+
+### E-review-base-read — `review_record._lane_basis`, the base given to `commit_paths`
+
+**guarded element:** `got = rd["commit_paths"](repo_root, a.get("reviewBase") or a.get("carryBase"), final_sha)`. **Axis:** a
+moved head reads the certified commit's paths from git against the session's own pinned review base on any session, not only
+a carry session.
+
+**neutralization:** `a.get("reviewBase") or ` removed, so only `carryBase` is read.
+
+**raw red** (`test_review_record_certifies_commit_2496.py -k review_base_and_no_carry_base`):
+```
+F                                                                        [100%]
+_ test_a_moved_head_with_a_review_base_and_no_carry_base_reads_the_certified_commits_paths_from_git _
+test_review_record_certifies_commit_2496.py:210: in test_a_moved_head_with_a_review_base_and_no_carry_base_reads_the_certified_commits_paths_from_git
+    assert basis["source"] == "lane rule over the certified commit's changed files (git)"
+E   AssertionError: assert 'unavailable' == 'lane rule ov...d files (git)'
+1 failed, 31 deselected in 4.67s
+```
+The red is on the claimed axis: with no `carryBase` and the `reviewBase` unread, the moved-head basis reads unavailable.
+
+**restore:** the inverse Edit. **restore receipt** (`review_record.py:1355`):
+`    got = rd["commit_paths"](repo_root, a.get("reviewBase") or a.get("carryBase"), final_sha)`
+**raw green** (same command): `1 passed, 31 deselected in 4.49s`.
+
+### E-review-base-validate — `review_record._validate`, the `reviewBase` check
+
+**guarded element:** `chk(a.get("reviewBase") is None or _full_sha(a["reviewBase"]), "reviewBase")`. **Axis:** the optional
+review base is None or a full sha; anything else is refused `review-account-invalid` naming `reviewBase`, never handed to git.
+
+**neutralization:** the check became `chk(True, "reviewBase")`.
+
+**raw red** (`test_review_record_certifies_commit_2496.py -k review_base_that_is_not`, `--tb=line`):
+```
+FFFFFF                                                                   [100%]
+E   Failed: DID NOT RAISE Refusal (six times, one per case: symbolic, short, not hex, empty, not a string, a list)
+6 failed, 26 deselected in 3.87s
+```
+The red is on the claimed axis: each malformed base is accepted where the test requires the refusal.
+
+**restore:** the inverse Edit. **restore receipt** (`review_record.py:961`):
+`    chk(a.get("reviewBase") is None or _full_sha(a["reviewBase"]), "reviewBase")`
+**raw green:** the five-file run after both restores, `651 passed in 39.10s`.
+
+### E-review-base-set — `review_record_session.account_from_session`, the `reviewBase` key
+
+**guarded element:** `"reviewBase": cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None`. **Axis:** every
+account carries the session's pinned base as `reviewBase` when the config's `baseRef` is a full sha, else None.
+
+**neutralization:** the value became `None`.
+
+**raw red** (`test_review_record_session.py -k review_base`, `--tb=line`):
+```
+F...                                                                     [100%]
+E   AssertionError: assert None == 'cccccccccccccccccccccccccccccccccccccccc'
+1 failed, 3 passed, 98 deselected in 0.35s
+```
+The red is on the claimed axis: the full-sha case loses its base. The three non-sha cases (symbolic, short, absent) stay
+green by design, since None is their right answer; they pin the fail-closed edge against a guessed base, and a neutralization
+that guessed one (for example `cfg.get("baseRef")` unchecked) was not run, so that half is pinned but not proven to bite.
+
+**restore:** the inverse Edit. **restore receipt** (`review_record_session.py:1703`):
+`            "reviewBase": cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None,`
+**raw green:** the five-file run after both restores, `651 passed in 39.10s`.

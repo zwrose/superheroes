@@ -197,6 +197,36 @@ def test_a_moved_head_reads_the_certified_commits_paths_from_git_not_the_heads_f
     assert seen == [(x, ["docs/guide.md"])]
 
 
+def test_a_moved_head_with_a_review_base_and_no_carry_base_reads_the_certified_commits_paths_from_git(tmp_path):
+    # axis: the session's own pinned review base is the base of the moved-head path read on any session, not only a carry session — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    repo, base, x, later = history(tmp_path)
+    seen = []
+    fake = Fake(meta={"head": later, "body": "", "issues": []}, runs=engine_on(x))
+    readers = {**fake.readers(), "changed_paths": boom, "withheld_paths": recorder(seen)}
+    acct = account(finalCommit=x, reviewBase=base, repoRoot=repo, lane="light")
+    assert "carryBase" not in acct
+    rec = rr.build_record(acct, readers)
+    basis = rec["laneBasis"]
+    assert basis["source"] == "lane rule over the certified commit's changed files (git)"
+    assert basis["floor"] is None and basis["touched"] == [] and "headMoved" not in basis
+    assert rec["finalCommit"] == {"sha": x, "source": rr.HEAD_MOVED_SOURCE} and rec["headAtWrite"] == later
+    assert (rec["status"], rec["whatIsMissing"]) == ("reviewed", [])
+    assert seen == [(x, ["docs/guide.md"])]
+
+
+@pytest.mark.parametrize("bad", ["main", "a" * 7, "g" * 40, "", 5, ["a" * 40]],
+                         ids=["symbolic", "short", "not hex", "empty", "not a string", "a list"])
+def test_a_review_base_that_is_not_a_full_sha_is_refused_never_used(tmp_path, bad):
+    # axis: the optional review base is None or a full sha; anything else is refused review-account-invalid naming reviewBase, never handed to git — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    repo, base, x, later = history(tmp_path)
+    calls = []
+    readers = {**Fake(runs=engine_on(x)).readers(), "commit_paths": lambda root, b, sha: calls.append(b) or None}
+    with pytest.raises(rr.Refusal) as caught:
+        rr.build_record(account(finalCommit=x, reviewBase=bad, repoRoot=repo, lane="light"), readers)
+    assert (caught.value.reason, caught.value.detail) == ("review-account-invalid", "reviewBase")
+    assert calls == []
+
+
 def test_a_head_that_moves_during_the_files_read_reads_the_certified_commits_paths_from_git(tmp_path):
     # axis: the PR's files are the lane basis only when the head read before and after them equals the certified commit — see bite-proof record i2496_wo_b_record_commit (E-paths)
     repo, base, x, later = history(tmp_path)

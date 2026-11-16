@@ -1699,6 +1699,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             **({"silenceWatchdogEnds": watchdog_ends} if watchdog_ends else {}),
             "reviewers": reviewers, "sessionCost": session_cost, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
+            # axis: every account names the session's own pinned review base (a full sha), else None, so a moved head reads the certified commit's paths from git on any session, not only a carry session — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+            "reviewBase": cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None,
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked,
             **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {}),

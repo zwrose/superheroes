@@ -957,6 +957,8 @@ def _validate(a):
             and _full_sha(carried_review["lastReviewed"]) and _nb(carried_review["why"]), "carriedReview")
     # axis: a carried account names the session's pinned review base as a full sha for the carry check, never the residual-lookup baseRef — see bite-proof record c1l11d_wo_c_fold
     chk("carriedReview" not in a or _full_sha(a.get("carryBase")), "carryBase")
+    # axis: the optional review base is absent, None or a full sha, never a symbolic ref, a short sha or another type — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    chk(a.get("reviewBase") is None or _full_sha(a["reviewBase"]), "reviewBase")
     from_shas = {r["carriedFrom"] for r in a["reviewers"] if "carriedFrom" in r}
     # axis: a carried row and the account's carriedReview name each other and the same commit, never one without the other — see bite-proof record c1l11d_wo_a_carried_review
     chk(bool(from_shas) == ("carriedReview" in a)
@@ -1349,7 +1351,8 @@ def _lane_basis(a, rd, lane_value, fc):
                 source="unavailable"), None
         moved = isinstance(head, str)
     # axis: the path list of a head that is not the certified commit is read from git for the certified commit itself, with the session's pinned base, and a failed read is unavailable, never a partial list — see bite-proof record i2496_wo_b_record_commit (E-paths)
-    got = rd["commit_paths"](repo_root, a.get("carryBase"), final_sha)
+    # axis: the base is the session's own pinned review base on any session, the carry base only where no review base is named — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    got = rd["commit_paths"](repo_root, a.get("reviewBase") or a.get("carryBase"), final_sha)
     if isinstance(got, list):
         return dict(_bound_basis(lane_call.call(repo_root, got, proposed=lane_value)),
                     source=LANE_BASIS_GIT_SOURCE), got

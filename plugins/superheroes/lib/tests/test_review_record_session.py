@@ -259,6 +259,18 @@ def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_in
     assert "code-reviewer (round 1)" in {v["name"] for v in rec["reviewers"]}
 
 
+@pytest.mark.parametrize("base_ref, want", [(THIRD, THIRD), ("main", None), (THIRD[:7], None), (None, None)],
+                         ids=["full sha", "symbolic", "short", "absent"])
+def test_an_ordinary_session_names_its_full_sha_base_as_the_accounts_review_base(tmp_path, base_ref, want):
+    # axis: every account, carry or not, carries the session's pinned base as reviewBase when it is a full sha, else None, never a guessed or symbolic base — see bite-proof record i2496_wo_b_record_commit (E-review-base)
+    config = {"maxRounds": 7} if base_ref is None else {"maxRounds": 7, "baseRef": base_ref}
+    s = Session(tmp_path, config=config)
+    s.seat("code-reviewer")
+    account = rs.account_from_session(s.save(), extras(baseRef="origin/main"), Fake().readers())
+    assert "carriedReview" not in account and "carryBase" not in account
+    assert account["reviewBase"] == want
+
+
 UNFILLED_SEAT = {"vendor": None, "model": None, "effort": None, "tier": "deep", "family": None, "source": "unfilled"}
 
 
