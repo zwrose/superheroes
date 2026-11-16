@@ -205,3 +205,18 @@ repository sweep raised. Each red and green is one run of one exact node id with
 - **Restore:** the fix added. **Added lines quoted:** `    for item in items:` and
   `        _sync_reviewer_test(state, item["findingKey"], item["content"])`
 - **Raw green:** `1 passed in 3.17s`
+
+## E-merge-places (review session 2, round 1 of PR 2558)
+
+- **Guarded element:** `round_driver.py` `_begin_bounded_fix`, the line
+  `rows = _union_open_blockers(targets, issue_rows)`. **Axis:** B1's reports of one finding merge with each other and
+  with its open target, every place they name kept, so B2's audit owes them all.
+- **Detector (expected red):** `plugins/superheroes/lib/tests/test_bounded_pass_b2_2554.py::test_t3_two_b1_reports_of_one_finding_reach_b2_as_one_row_owing_every_place_either_names`
+- **Neutralization:** the line replaced by `rows = list(targets) + issue_rows`, the append before the fix.
+- **Raw red:**
+  ```
+  E       AssertionError: [[{'title': 'unchecked retry', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}, {'title': 'unchecked retry', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}]]
+  E       assert (1 == 1 and 2 == 1)
+  ```
+- **Restore:** the inverse edit. **Restored line quoted:** `    rows = _union_open_blockers(targets, issue_rows)`
+- **Raw green:** `1 passed in 7.60s`

@@ -730,6 +730,39 @@ def test_t10_a_ruling_that_leaves_b2s_pending_step_no_target_settles_the_pass_an
     assert again["ok"] and again["action"] == RD.P_TERMINAL, again
 
 
+_PLACES_DIFF = (
+    "diff --git a/src/a.py b/src/a.py\n"
+    "index 1111111..2222222 100644\n"
+    "--- a/src/a.py\n"
+    "+++ b/src/a.py\n"
+    "@@ -1,7 +1,5 @@\n"
+    " l1\n l2\n-d3\n-d4\n l5\n l6\n l7\n"
+    "@@ -20,3 +18,4 @@\n"
+    " c18\n+add19\n c20\n c21\n")
+
+
+def test_t3_two_b1_reports_of_one_finding_reach_b2_as_one_row_owing_every_place_either_names(monkeypatch):
+    # axis: B1's reports of one finding merge with each other and with its open target, every place they name kept,
+    # so B2's audit owes them all — see bite-proof record i2554_bounded_pass_b2 (E-merge-places)
+    state = RD.new_state(TRD._cfg(maxRounds=CAP))
+    state["round"] = CAP + 1
+    state["reviewedDiff"] = _PLACES_DIFF
+    state["boundedPass"] = {"trigger": "round-cap", "step": "audit", "rounds": [CAP + 1]}
+    state["_auditTargets"] = []
+    queued = []
+    monkeypatch.setattr(RD, "_queue_bounded_fix", lambda st, cfg, rows, session_dir=None: queued.append(rows))
+
+    def issue(line):
+        return {"title": "unchecked retry", "file": "src/a.py", "line": 2, "severity": "Important",
+                "consequence": TRD._CONSEQUENCE, "body": "the body",
+                "kindOfMistake": {"kind": "unchecked retry", "places": [{"file": "src/a.py", "line": line}]}}
+
+    RD._begin_bounded_fix(state, state["config"], set(), [issue(3), issue(19)])
+    assert len(queued) == 1 and len(queued[0]) == 1, queued
+    places = sorted(p["line"] for p in queued[0][0]["kindOfMistake"]["places"])
+    assert places == [3, 19], queued[0][0]["kindOfMistake"]
+
+
 def test_t10_the_b1_only_pass_and_the_ordinary_session_are_unchanged(tmp_path):
     d, terminal, trace, final = _b2_run(tmp_path, {})
     assert final["certification"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1]}

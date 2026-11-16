@@ -10814,13 +10814,15 @@ def _begin_bounded_fix(state, config, open_ids, held, session_dir=None):
     (an open id with no audit target, an issue that compiles to no finding) hands back `bounded-pass-open`."""
     targets = [dict(t) for t in state.get("_auditTargets") or [] if isinstance(t, dict) and t.get("id") in open_ids]
     missing = sorted(open_ids - {t["id"] for t in targets})
-    rows, unbound = list(targets), []
+    issue_rows, unbound = [], []
     for issue in held:
         compiled, _drops = mechanical_compile([dict(issue)], state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
         keyed = [f for f in compiled if isinstance(f, dict) and not f.get("summaryEntry") and _finding_identity_key(f)]
-        rows += keyed
+        issue_rows += keyed
         if not keyed:
             unbound.append(str(issue.get("title")))
+    # axis: B1's reports of one finding merge with each other and with its open target, every place they name kept, so B2's audit owes them all — see bite-proof record i2554_bounded_pass_b2 (E-merge-places)
+    rows = _union_open_blockers(targets, issue_rows)
     if missing or unbound:
         _bounded_hand_back(state, "The bounded pass could not begin its fix step (%s). The PR is handed back with "
                                   "its findings still open; certification is withheld."
