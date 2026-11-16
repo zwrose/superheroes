@@ -9,9 +9,11 @@ L3  a comment in a language with no lexer here (YAML) reads needs-review;
 M3  a mode read git failed is not an absent file: a copy proof never drops a file whose mode could not be read;
 L4  every line inside an f-string, debug or not, is significant: a blank line added inside one reads needs-review;
 R1  a rename after review, even to a prose name, reads needs-review; a rename the review already read does not block
-    a later prose edit.
+    a later prose edit;
+R2  one rule for rename sources: a source path is read exactly when a changed file names it and no copy proof settled
+    it, so a copy proof on a rename's destination proves, and a move that deletes code is never hidden by one.
 
-Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex, E-mode-read, E-fstring, E-rename)
+Bite-proof record: i2496_wo_a_head_coverage (E-mode, E-lex, E-mode-read, E-fstring, E-rename, E-rename-one-rule)
 """
 import hashlib
 import os
@@ -201,6 +203,75 @@ def test_a_move_after_review_into_a_reviewed_prose_path_still_reads_the_source_d
     head = repo.commit("move the shared module over the reviewed notes")
     got = HC.check(repo.root, base, earlier, head)
     assert got["answer"] == "needs-review", got
+
+
+def _reviewed_rename_then_copy_proven_update(tmp_path):
+    """A reviewed rename of the shared module to ``src/core.py``, then an update of ``src/core.py`` at the head that a
+    copy proof covers; returns ``(repo, base, earlier, head, proof)``."""
+    repo = TR.Repo(tmp_path)
+    core = "src/core.py"
+    base = repo.git("rev-parse", "main")
+    repo.git("mv", SHARED, core)
+    reviewed = repo.commit("first leg: the reviewed rename")
+    earlier = TR.earlier_record(reviewed)
+    updated = repo.read(core) + "core_extra = 1\n"
+    repo.write(core, updated)
+    head = repo.commit("update the core module from upstream")
+    proof = [{"file": core, "source": "upstream/core.py", "sha256": hashlib.sha256(updated.encode()).hexdigest()}]
+    return repo, base, earlier, head, proof
+
+
+def test_a_copy_proven_update_of_a_reviewed_renames_destination_reads_proven(tmp_path):
+    # axis: a copy proof is judged on the file's own bytes and mode alone, so a rename the review already read never blocks it — see bite-proof record i2496_wo_a_head_coverage (E-rename-one-rule)
+    repo, base, earlier, head, proof = _reviewed_rename_then_copy_proven_update(tmp_path)
+    got = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert got["answer"] == "proven", got
+    assert [c["file"] for c in got["copies"]] == ["src/core.py"] and got["files"] == [], got
+
+
+def test_a_failed_read_of_the_outstanding_sources_reads_needs_review(tmp_path):
+    # axis: a git failure reading the outstanding rename sources is a review owed, never a proven answer — see bite-proof record i2496_wo_a_head_coverage (E-rename-one-rule)
+    repo, base, earlier, head, proof = _reviewed_rename_then_copy_proven_update(tmp_path)
+    real = R.production_git(repo.root)
+    calls = []
+
+    def no_source_diff(argv):
+        if argv[0] == "diff" and argv[-1] == SHARED:
+            calls.append(argv)
+            return 128, ""
+        return real(argv)
+
+    got = HC.check(repo.root, base, earlier, head, proof=proof, git=no_source_diff)
+    assert calls, "the check never read the outstanding source through the seam"
+    assert got["answer"] == "needs-review" and got["why"][0].startswith("diff-unreadable"), got
+    assert [c["file"] for c in got["copies"]] == ["src/core.py"], got
+
+
+def test_a_move_after_review_over_a_reviewed_prose_path_with_a_copy_proof_reads_the_source_deletion(tmp_path):
+    # axis: a move that deletes code is never hidden by a copy proof on its destination — see bite-proof record i2496_wo_a_head_coverage (E-rename-one-rule)
+    repo = TR.Repo(tmp_path)
+    doc = "docs/shared.md"
+    base, reviewed, earlier = TR.returning(repo, first={"src/app.py": TR.numbered("app", 10), doc: "notes\n"})
+    repo.git("mv", "-f", SHARED, doc)
+    head = repo.commit("move the shared module over the reviewed notes")
+    proof = [{"file": doc, "source": "upstream/shared.md", "sha256": hashlib.sha256(repo.read(doc).encode()).hexdigest()}]
+    got = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert got["answer"] == "needs-review", got
+
+
+def test_a_move_over_a_reviewed_prose_path_that_a_copy_proof_settles_reads_the_source_deletion(tmp_path):
+    # axis: a move that deletes code is never hidden by a copy proof on its destination, even a proof git re-validates — see bite-proof record i2496_wo_a_head_coverage (E-rename-one-rule)
+    repo = TR.Repo(tmp_path)
+    doc = "docs/shared.md"
+    base, reviewed, earlier = TR.returning(repo, first={"src/app.py": TR.numbered("app", 10), doc: "notes\n"})
+    repo.git("mv", "-f", SHARED, doc)
+    # a pure move has no blob line in git's section, so a proof on it is dropped; an edit beside the move makes git show one
+    repo.write(doc, repo.read(doc) + "more_notes = 1\n")
+    head = repo.commit("move the shared module over the reviewed notes, with an edit")
+    proof = [{"file": doc, "source": "upstream/shared.md", "sha256": hashlib.sha256(repo.read(doc).encode()).hexdigest()}]
+    got = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert [c["file"] for c in got["copies"]] == [doc], "the proof must be one git re-validates: %r" % (got,)
+    assert got["answer"] == "needs-review" and got["files"] == [], got
 
 
 def test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement(tmp_path):

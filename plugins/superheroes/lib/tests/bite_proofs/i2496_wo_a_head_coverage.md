@@ -517,3 +517,36 @@ E       assert 'judgement' == 'needs-review'
 ```
 
 **restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `15 passed in 4.73s`.
+
+## Added at the second review session, round 4: E-rename-one-rule (2026-11-16, implementer order `wo-j-2543`)
+
+### E-rename-one-rule — one rule for rename sources: read exactly when named and not settled by a copy proof
+
+**guard:** `head_coverage.py` `_check`, the `outstanding` line, `sorted(all_sources - {c["file"] for c in result["copies"]} - set(remaining))`, with `all_sources` the union of the sources of every changed file. Axis: a source path is read exactly when some changed file names it as a rename or copy source and that path is not itself a file a copy proof settled (a `copies` entry's `file`; an entry's `source` field plays no part); a copy proof is judged on the file's own bytes and mode alone. Step 7 answers proven only when no file remains and `git diff X head -- <outstanding>` exits 0 with empty output; a non-zero exit reads needs-review (`diff-unreadable`); a non-empty diff goes to step 8, where `_qualification` reads it (also with no remaining file).
+
+**neutralization:** `outstanding = sorted(all_sources - {c["file"] for c in result["copies"]} - set(remaining))` replaced by `outstanding = []` (no source is read).
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo-j-pyc -m pytest plugins/superheroes/lib/tests/test_head_coverage_lexical_modes_2496.py -k "source_deletion or outstanding" -q -p no:cacheprovider`
+```
+FFFF                                                                     [100%]
+E       assert 'judgement' == 'needs-review'       (test_a_move_after_review_into_a_reviewed_prose_path_still_reads_the_source_deletion)
+E       AssertionError: the check never read the outstanding source through the seam   (test_a_failed_read_of_the_outstanding_sources_reads_needs_review)
+E       assert 'judgement' == 'needs-review'       (test_a_move_after_review_over_a_reviewed_prose_path_with_a_copy_proof_reads_the_source_deletion)
+E       assert ('proven' == 'needs-review'         (test_a_move_over_a_reviewed_prose_path_that_a_copy_proof_settles_reads_the_source_deletion)
+4 failed, 15 deselected in 2.52s
+```
+(The `E` lines are the decisive assertion line of each failure, quoted from the full output; the tracebacks between them are elided.)
+
+**restore:** the inverse Edit, `outstanding = []` back to the `sorted(...)` expression; the line was read back from the file after it.
+
+**green:** the same command, `4 passed, 15 deselected in 0.59s`.
+
+**What each test pins:** the last test is the proof that bites on the step-7 path (a copy proof git re-validates settles the destination, nothing remains, the source's deletion is the only difference, and the answer reads needs-review instead of proven). The test beside it is the order's literal pure move: git's section for a pure move carries no blob line, so the copy proof is dropped and the file stays remaining; it bites on the step-8 path (judgement instead of needs-review). `test_a_copy_proven_update_of_a_reviewed_renames_destination_reads_proven` pins the opposite edge (a reviewed rename never blocks a copy proof); the neutralization leaves it green by design, because the rule that keeps it green is the removal of the round-3 copy exclusion, which the next paragraph records.
+
+**Retired: the round-3 copy exclusion.** `wanted` in step 6 no longer carries `and not sources.get(path)`. That exclusion refused every copy proof on a file that carries sources, so a valid proof on the destination of a rename the review already read (a rename to a core module, then a copy-proven update of it) read needs-review instead of proven. It was also redundant for safety: a proof is judged on the file's own bytes and mode, and the source a move leaves behind is read by the `outstanding` rule whether or not the destination is copy-proven, so the exclusion closed no hole the rule leaves open. `path not in moved` and the mode conditions stay. Putting the exclusion back (`... if path not in moved and not sources.get(path) and (...)`) turns `test_a_copy_proven_update_of_a_reviewed_renames_destination_reads_proven` red; run with `-k copy_proven_update`:
+```
+E       AssertionError: {'answer': 'needs-review', 'why': ['behaviour-change: not only prose or comment lines: src/core.py'], ...
+E       assert 'needs-review' == 'proven'
+1 failed, 18 deselected in 2.36s
+```
+Restored by the inverse Edit; green is the full run of the six order files, `221 passed` (see the order's receipts).
