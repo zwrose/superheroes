@@ -1,6 +1,6 @@
 # Bite-proof record — the owner-card count and repeat suppression read the certified-review rule (#2531)
 
-**Provenance:** light lane, orchestrator-typed (maker family claude). Detector file: `plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py`, unedited between each red and its green. Every entry is a targeted, reversible edit made and undone with the edit tool at committed head `91eabf4d (e1 to e4; e5 and e6 name their own)` (no `git checkout`, `restore`, `reset` or `stash`); after every restore, `git status --porcelain` printed nothing. Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py -q -p no:randomly -k "<expr>"`; the last line of each capture is the run's exit status. Redaction: the worktree path is shown as `<worktree>` and the `UV_NATIVE_TLS` deprecation line `uv` prints first is dropped; no secret, token, URL or personal data appears, so nothing else is redacted.
+**Provenance:** light lane, orchestrator-typed (maker family claude). Detector file: `plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py`, unedited between each red and its green. Every entry is a targeted, reversible edit made and undone with the edit tool at committed head `91eabf4d (e1 to e4; e5 to e7 name their own)` (no `git checkout`, `restore`, `reset` or `stash`); after every restore, `git status --porcelain` printed nothing. Runs: `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py -q -p no:randomly -k "<expr>"`; the last line of each capture is the run's exit status. Redaction: the worktree path is shown as `<worktree>` and the `UV_NATIVE_TLS` deprecation line `uv` prints first is dropped; no secret, token, URL or personal data appears, so nothing else is redacted.
 
 ## e1. The owner-card count reads the waiting set (`review_measures._release_measures`, the `cards` predicate)
 
@@ -396,5 +396,76 @@ exit=1
 ```
 .                                                                        [100%]
 1 passed, 13 deselected in 1.00s
+exit=0
+```
+
+## e7. The acceptance check reads an earlier record's held repeat (`leftover_accepting._leftovers`; review session 2, finding v0)
+
+- **Axis:** a stored leftForOwner entry that names a no-outcome Minor or Nit repeat another card now holds is matched to that card-shaped finding, so the record stays readable and the finding is still asked for; a listed finding still is not. Run at `a9018a79`.
+- **Detector:** `test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check`.
+- **Neutralization:** `review_record.card_shaped(f)` became `review_record.waits_for_owner(f, findings)`, the base's form.
+- **Selection:** `-k "stays_readable_to_the_acceptance"`.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check _
+
+    def test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check():
+        import leftover_accepting as la
+    
+        holder = dict(_f("k1"), title="Slow retry")
+        again = dict(_repeat(_f("k2", outcome=None), "k1"), title="Slow retry again")
+        # an earlier writer listed both as waiting; the repeat is held now, but the stored list still names it
+        rec = {"ok": True, "findings": [holder, again], "leftForOwner": ["k1", "k2"]}
+        # break-it: matching a stored entry only to a waiting finding raises Unreadable here, so handback is refused
+>       assert la.missing(rec, "") == [{"id": "k1", "title": "Slow retry"}, {"id": "k2", "title": "Slow retry again"}]
+               ^^^^^^^^^^^^^^^^^^^
+
+<worktree>/plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py:141: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<worktree>/plugins/superheroes/lib/leftover_accepting.py:631: in missing
+    leftovers = _leftovers(record)
+                ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+record = {'ok': True, 'findings': [{'id': 'k1', 'findingKey': 'k1', 'outcome': 'left-for-owner', 'severity': 'Minor', ...}, {'id': 'k2', 'findingKey': 'k2', 'outcome': None, 'severity': 'Minor', ...}], 'leftForOwner': ['k1', 'k2']}
+
+    def _leftovers(record):
+        """(id, title or None) for each leftForOwner entry, in the record's order; Unreadable for anything malformed."""
+        # axis: a read that did not succeed (missing, unreadable, gh failed) is unreadable, never a pass
+        if not isinstance(record, dict) or record.get("ok") is not True:
+            detail = record.get("detail") or record.get("reason") if isinstance(record, dict) else None
+            raise Unreadable(detail or "the review record read did not succeed")
+        left, findings = record.get("leftForOwner"), record.get("findings")
+        # axis: a leftForOwner or findings field that is not a list (or holds a non-dict finding) is unreadable
+        if not isinstance(left, list) or not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
+            raise Unreadable("the record's leftForOwner or findings list is missing or malformed")
+        out = []
+        for name in left:
+            # axis: a leftForOwner entry is matched to a finding that waits for the owner, by the record's one predicate; a listed finding is never asked for, a no-outcome risk-area Minor is — see bite-proof record i2493_wo1_record (E-accept)
+            # axis: a stored entry may name a no-outcome Minor or Nit repeat another card now holds (an earlier record listed it as waiting); it stays readable and asked for — see bite-proof record i2531_cards (e7)
+            held = [f for f in findings if review_record.waits_for_owner(f, findings) and review_record._name(f) == name]
+            # axis: a leftForOwner entry that is not a non-empty string, or names no left-for-owner finding, is unreadable
+            if not (isinstance(name, str) and name.strip() and held):
+>               raise Unreadable("leftForOwner entry %r names no finding left for the owner" % (name,))
+E               leftover_accepting.Unreadable: leftForOwner entry 'k2' names no finding left for the owner
+
+<worktree>/plugins/superheroes/lib/leftover_accepting.py:83: Unreadable
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_owner_cards_read_certified_rule_2531.py::test_an_earlier_record_listing_a_now_held_no_outcome_repeat_stays_readable_to_the_acceptance_check
+1 failed, 14 deselected in 10.09s
+exit=1
+```
+
+**Restore:** the inverse edit put the line back; `git status --porcelain` printed nothing.
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed, 14 deselected in 7.00s
 exit=0
 ```
