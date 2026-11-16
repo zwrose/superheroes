@@ -186,7 +186,7 @@ def test_t2_a_pass_whose_audits_all_discharge_converges_bounded_pass(tmp_path):
     assert terminal["payload"]["verdict"] == "converged"
     final = X._state(d)
     assert final["terminal"] == "converged" and final["round"] == CAP + 1
-    assert final["certification"]["shape"].startswith("bounded-pass")
+    assert final["certification"]["shape"] == "bounded-pass"
     assert final["certification"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1]}
     assert final["boundedPass"]["step"] == "done"
     kinds = _kinds(final)
@@ -229,9 +229,10 @@ def test_t4_a_minor_or_nit_new_issue_does_not_hold_the_pass_open_and_is_settled(
     d, terminal, _trace = _session(tmp_path, _respond(new_issue=_issue(severity)))
     assert terminal["payload"]["verdict"] == "converged"
     final = X._state(d)
-    assert final["certification"]["shape"].startswith("bounded-pass")
+    assert final["certification"]["shape"] == "bounded-pass"
     raised = X._rows(final, "raised-by-the-audit")
-    assert len(raised) == 1 and raised[0]["disposition"], raised
+    # the Minor or Nit new issue does not hold the pass open: the issue stays open for the owner
+    assert len(raised) == 1 and raised[0]["disposition"] == "left-for-owner", raised
     assert "_newIssues" not in final
 
 
@@ -424,7 +425,7 @@ def test_a_guidance_ruling_no_fixer_received_hands_the_bounded_pass_back_round_c
 def test_the_same_bounded_pass_without_the_ruling_converges(tmp_path):
     _n, final = _guided_bounded_pass(tmp_path, ruled=False)
     assert final["terminal"] == "converged", final.get("certification")
-    assert final["certification"]["shape"].startswith("bounded-pass")
+    assert final["certification"]["shape"] == "bounded-pass"
 
 
 # --- the state holding both post-cap rounds ----------------------------------------------------------
@@ -453,6 +454,56 @@ def test_a_state_holding_both_rounds_never_converges_at_the_audit_settle(tmp_pat
     RD._after_audits(state, state["config"], session_dir=d)
     assert state["terminal"] == "handed-back" and state["decisions"][-1]["kind"] == "bounded-pass-open"
     assert state["decisions"][-1]["detail"] == BOTH
+
+
+# --- a bounded audit round composes no panel (PR 2555 FU3, FU5; vet 969 P2) --------------------------------
+
+def _at_cap_verify(tmp_path, respond=None):
+    """A session stopped where the cap round's verify gate is emitted, its fix folded and not yet verified."""
+    fixed = []
+
+    def stop(n):  # the verify gate that follows the cap round's apply-fixes, not the round's opening gate
+        fixed.extend([1] if (n["action"], n["round"]) == (RD.P_APPLY_FIXES, CAP) else [])
+        return bool(fixed) and (n["action"], n["round"]) == (RD.P_VERIFY, CAP)
+
+    d, n, _trace = _session(tmp_path, respond or _respond(), stop=stop)
+    assert (n["action"], n["round"]) == (RD.P_VERIFY, CAP) and fixed, n
+    return d
+
+
+def test_a_surface_the_bounded_round_cannot_derive_hands_back_bounded_pass_open_instead_of_scheduling_a_panel(tmp_path):
+    # axis: the bounded round's unknown fix surface hands back `bounded-pass-open` with no panel — see bite-proof
+    # record i2552_bounded_pass_b1; modelled on `test_c1l4b_extra_audit.py::test_t11_*`
+    d = _at_cap_verify(tmp_path)
+    state = X._state(d)
+    state["_headDiffUnknown"] = True  # the cap round's post-fix head diff could not be resolved
+    RD.save_state(d, state)
+    n, trace = _run(d, None, _respond())
+    final = X._state(d)
+    assert final["terminal"] == "handed-back" and final["decisions"][-1]["kind"] == "bounded-pass-open"
+    assert "could not derive the surface" in final["decisions"][-1]["detail"], final["decisions"][-1]
+    assert final["round"] == CAP + 1 and final["step"] == RD.P_TERMINAL and final["boundedPass"]["step"] == "done"
+    assert (n["action"], n["round"]) == (RD.P_TERMINAL, CAP + 1)
+    assert [a for a, r in trace if r > CAP] == [RD.P_TERMINAL], trace  # no audits, panel or scoped round past the cap
+
+
+def test_a_lane_that_would_need_a_panel_hands_the_bounded_round_back_instead_of_halting_for_a_recompose(
+        tmp_path, monkeypatch):
+    # axis: a lane that now calls for a panel hands the bounded round back `bounded-pass-open` — see bite-proof
+    # record i2552_bounded_pass_b1; modelled on `test_c1l4b_extra_audit.py::test_t12_*`
+    import lane_call
+    d = _at_cap_verify(tmp_path)
+    monkeypatch.setattr(lane_call, "call", lambda root, paths, proposed=None: {"floor": "full"})
+    state = X._state(d)
+    state["config"]["seatMap"] = {"laneBasis": {"floor": None}}
+    RD.save_state(d, state)
+    n, trace = _run(d, None, _respond())
+    final = X._state(d)
+    assert final["terminal"] == "handed-back" and final["decisions"][-1]["kind"] == "bounded-pass-open"
+    assert "composes no panel" in final["decisions"][-1]["detail"], final["decisions"][-1]
+    assert not any(dec["kind"] == RD.LANE_EXPANDED_RECOMPOSE for dec in final["decisions"])
+    assert final["round"] == CAP + 1 and final["boundedPass"]["step"] == "done"
+    assert [a for a, r in trace if r > CAP] == [RD.P_TERMINAL], trace  # no audits, panel or recompose past the cap
 
 
 # --- the settle's own faults ---------------------------------------------------------------------------
@@ -484,7 +535,7 @@ def test_a_new_issue_entry_that_is_not_a_record_hands_back_bounded_pass_open(tmp
 
 def test_a_clean_outcome_with_a_minor_issue_the_settle_converges(tmp_path):
     state = _settled(tmp_path, {"notDischarged": []}, [_issue("Minor")])
-    assert state["terminal"] == "converged" and state["certification"]["shape"].startswith("bounded-pass")
+    assert state["terminal"] == "converged" and state["certification"]["shape"] == "bounded-pass"
     assert _kinds(state)[-2:] == ["bounded-pass-settled", "converged"]
 
 
@@ -505,23 +556,23 @@ def _rounds(**bounded):
     return {"count": 3, "cap": 4, "stoppedAtCap": True, "boundedPass": bounded}
 
 
-@pytest.mark.parametrize("bounded", [{"trigger": "round-cap", "rounds": [5]},
-                                     {"trigger": "fix-keeps-failing", "rounds": [3, 4]}])
+@pytest.mark.parametrize("bounded", [{"trigger": "round-cap", "rounds": [5], "auditedRounds": [5]},
+                                     {"trigger": "fix-keeps-failing", "rounds": [3, 4], "auditedRounds": []}])
 def test_t8_the_validator_accepts_a_bounded_pass_with_the_fixed_keys(bounded):
-    # axis: `rounds.boundedPass` is a fixed-key record of a known trigger and a non-empty list of ints — see bite-proof record i2552_bounded_pass_b1
+    # axis: `rounds.boundedPass` is a fixed-key record of a known trigger, a non-empty list of ints and the audited ones (issue 2554 adds `auditedRounds`) — see bite-proof record i2552_bounded_pass_b1
     RR._validate(TRR.account(rounds=_rounds(**bounded)))
 
 
 @pytest.mark.parametrize("bounded", [
-    {"trigger": "round-cap", "rounds": [5], "why": "x"},
-    {"trigger": "round-cap"},
-    {"rounds": [5]},
-    {"trigger": "advisor", "rounds": [5]},
-    {"trigger": None, "rounds": [5]},
-    {"trigger": "round-cap", "rounds": []},
-    {"trigger": "round-cap", "rounds": [True]},
-    {"trigger": "round-cap", "rounds": ["5"]},
-    {"trigger": "round-cap", "rounds": 5},
+    {"trigger": "round-cap", "rounds": [5], "auditedRounds": [5], "why": "x"},
+    {"trigger": "round-cap", "auditedRounds": []},
+    {"rounds": [5], "auditedRounds": []},
+    {"trigger": "advisor", "rounds": [5], "auditedRounds": []},
+    {"trigger": None, "rounds": [5], "auditedRounds": []},
+    {"trigger": "round-cap", "rounds": [], "auditedRounds": []},
+    {"trigger": "round-cap", "rounds": [True], "auditedRounds": []},
+    {"trigger": "round-cap", "rounds": ["5"], "auditedRounds": []},
+    {"trigger": "round-cap", "rounds": 5, "auditedRounds": []},
 ], ids=["extra-key", "no-rounds", "no-trigger", "bad-trigger", "null-trigger", "empty-rounds", "bool-round",
         "string-round", "rounds-not-a-list"])
 def test_t8_the_validator_refuses_a_bounded_pass_that_is_not_the_fixed_shape(bounded):
@@ -543,7 +594,7 @@ def test_t8_a_converged_bounded_pass_session_is_labelled_not_counted_and_stopped
     final = X._state(d)
     account = X._account(tmp_path, final)
     assert account["rounds"]["count"] == CAP and account["rounds"]["stoppedAtCap"] is True
-    assert account["rounds"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1]}
+    assert account["rounds"]["boundedPass"] == {"trigger": "round-cap", "rounds": [CAP + 1], "auditedRounds": [CAP + 1]}
     RR._validate(account)
     line = RR._bounded_pass_line(account["rounds"])
     assert "audited in round %d" % (CAP + 1) in line and "not counted" in line
@@ -615,6 +666,9 @@ def test_t10_a_cap_round_that_committed_a_fix_but_reported_no_fixes_enters_the_p
     # a fix and reported an empty fixes list still gets its audit — see bite-proof record i2552_bounded_pass_b1
     # (E-applied-work). The submit chokepoint records a commit only beside a `fixes` binding, so the cap round's
     # verified commit facts are injected at `_apply_fixes_commit_fault`; the session answers an empty `fixes`.
+    # The cap round's fixer leaves the head diff as the round's reviewed diff (`_headf_ns(CAP - 1)`, as in t9), so
+    # the commit is in the fix record only: the pass begins on the record facts, and narrowing `_bounded_pass_applies`
+    # to the head-diff signal hands back — see bite-proof record i2554_bounded_pass_record (E-record-facts)
     real = RD._apply_fixes_commit_fault
 
     def committed_in_the_cap_round(state, config, artifact, commit_seam=None):
@@ -622,8 +676,19 @@ def test_t10_a_cap_round_that_committed_a_fix_but_reported_no_fixes_enters_the_p
             return None, [{"finding": "open-important", "commit": "abc1234"}]
         return real(state, config, artifact, commit_seam=commit_seam)
 
+    base = X._respond(cap=CAP)
+
+    def head_stays_put(phase, payload, rnd):
+        answer = base(phase, payload, rnd)
+        if phase == RD.P_APPLY_FIXES and rnd == CAP:
+            answer = dict(answer, headDiff=TRD._headf_ns(CAP - 1))
+        return answer
+
     monkeypatch.setattr(RD, "_apply_fixes_commit_fault", committed_in_the_cap_round)
-    d, n, trace = _session(tmp_path, X._respond(cap=CAP), stop=lambda n: n["round"] > CAP)
+    d = _at_cap_verify(tmp_path, head_stays_put)  # the cap round's fix folded, its gate not yet answered
+    before = X._state(d)
+    assert before["headDiff"] == before["reviewedDiff"] and RD._head_diff_changed(before) is False, "the head stayed put"
+    n, trace = _run(d, None, head_stays_put, stop=lambda n: n["round"] > CAP)
     state = X._state(d)
     cap_fix = state["rounds"][str(CAP)]["fix"]
     assert cap_fix["fixes"] == [] and cap_fix["commits"], cap_fix

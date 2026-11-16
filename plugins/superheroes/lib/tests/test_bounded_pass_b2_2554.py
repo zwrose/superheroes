@@ -95,7 +95,7 @@ def test_t1_b1_leaves_a_fix_open_then_b2_runs_one_apply_fixes_a_verify_and_the_a
     assert B1._after_cap_verify(trace) == [(RD.P_AUDITS, CAP + 1), (RD.P_APPLY_FIXES, CAP + 1), (RD.P_VERIFY, CAP + 1),
                                            (RD.P_AUDITS, CAP + 2), (RD.P_TERMINAL, CAP + 2)], trace
     assert terminal["payload"]["verdict"] == "converged" and final["terminal"] == "converged"
-    assert final["certification"]["shape"].startswith("bounded-pass")
+    assert final["certification"]["shape"] == "bounded-pass"
     bounded = final["boundedPass"]
     assert (bounded["trigger"], bounded["step"], bounded["rounds"]) == ("round-cap", "done", [CAP + 1, CAP + 2])
     assert isinstance(final["rounds"][str(CAP + 1)]["fix"], dict), "B2's fix leg is round cap + 1's fix leg"
@@ -118,7 +118,7 @@ def test_t2_b2_leaves_the_finding_open_and_it_is_left_for_the_owner_with_its_evi
     # and the session still converges — see bite-proof record i2554_bounded_pass_b2 (E-early-settle)
     d, terminal, trace, final = _b2_run(tmp_path, {CAP + 1: ("not-discharged", None), CAP + 2: ("not-discharged", None)})
     assert terminal["payload"]["verdict"] == "converged" and final["terminal"] == "converged"
-    assert final["certification"]["shape"].startswith("bounded-pass")
+    assert final["certification"]["shape"] == "bounded-pass"
     row = _fixed_row(final)
     assert row["disposition"] == "left-for-owner" and row["openAtLoopEnd"] is True, row
     evidence = row["boundedPassEvidence"]

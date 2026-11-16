@@ -986,6 +986,23 @@ def _section(title, block, text):
     return {"title": title, "blocks": [{block: text}]}
 
 
+def _loop_tried(words, finding):
+    """The leftover card's "What the loop tried" section, read from the record finding's bounded-pass evidence alone,
+    or [] when the finding carries none. A null or blank audit reason drops the "its audit said" clause, never the
+    commit."""
+    evidence = finding.get(review_record.session_contract.BOUNDED_PASS_EVIDENCE_FIELD)
+    if not isinstance(evidence, dict):
+        return []
+    audit = evidence.get("audit") if isinstance(evidence.get("audit"), dict) else {}
+    reason, commit = audit.get("reason"), _short(evidence.get("fixCommit"))
+    said = isinstance(reason, str) and reason.strip() != ""
+    if evidence.get("raisedByFinalAudit") is True:
+        text = words["loopRaised"]
+    else:
+        text = _fill(words["loopTried" + ("At" if commit else "") + ("Said" if said else "")], commit=commit, reason=reason)
+    return [_section(words["loopTriedTitle"], "paragraph", text)]
+
+
 def _card(prefix, pr, identity, call_kind, question, context, options, recommendation):
     card = {"callKind": call_kind, "warning": False, "question": question, "context": context, "images": [],
             "options": copy.deepcopy(options)}
@@ -1436,6 +1453,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                words["leftoverKind"] + (f" · #{r['pr']}" if stack else ""), _title(f),
                                [_section(words["whyYours"], "paragraph", call["why"]),
                                 _section(words["whatHappened"], "paragraph", call["context"]),
+                                # axis: the card shows what the bounded pass tried from the record finding's evidence, never from the advisor's text — see bite-proof record i2554_bounded_pass_record (E-card)
+                                *_loop_tried(words, f),
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))

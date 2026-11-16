@@ -155,7 +155,7 @@ def test_t2_a_fix_that_keeps_failing_gets_one_recovery_then_the_bounded_pass(mon
     assert len(stuck_rows) == 1 and stuck_rows[0]["auditFailures"], batches[-1]
     assert [a for a in seen if a.startswith("present-")] == []
     assert [a for a in seen if not _is_allowed(a)] == []
-    assert state["certification"]["shape"].startswith("bounded-pass"), state["certification"]  # `-degraded` here
+    assert state["certification"]["shape"] == "bounded-pass-degraded", state["certification"]  # this seat config gives `-degraded`
     ledger = _ledger(state)
     assert ledger and all(row.get("disposition") for row in ledger.values()), ledger  # every finding has an outcome
     last_round = max(state["rounds"], key=int)
