@@ -67,7 +67,7 @@ Check these in a consuming project when it adopts the next release. Each step na
 - `ownerCardsPerMergedPr` (the review-loop measures row) counts, per merged PR, the distinct finding keys that hold owner cards (`review_record.waits_for_owner`), where it counted every left-for-owner finding. A Minor or Nit listed for the merge verdict is no longer counted, and a Minor or Nit card with no outcome (in a risk area, or of unknown risk) now is. A window that holds listed findings reads a lower figure than the same window read before.
 - Repeat suppression (`review_record.repeat_held_elsewhere`): a no-outcome Minor or Nit card that repeats another card of the same record is held like a left-for-owner repeat, and a no-outcome Minor or Nit card holds a repeat's card. Such a repeat leaves `leftForOwner`, adds no leftover line to `whatIsMissing`, and shows no card on the merge sheet; the card it repeats still does.
 - `vetSendBacksOnCleanLoops` and the cap-choice outcomes: a listed Minor or Nit leaves nothing open, so a `reviewed` record that holds one is a clean loop, and a cap choice whose finding is listed reads `settled`.
-- `review_measures.RAISED_BY` is removed. It had no reader; `session_contract.RAISED_BY_FIELD` is the field's one name.
+- `review_measures.RAISED_BY` is removed. It had no reader; the `raisedBy` field keeps its one name in the session-contract module.
 - Replacement. None: no result key, token or input key changes; the figures above read the new rule.
 
 ### Review record: control characters post as visible stand-ins, and a write that does not read back refuses
