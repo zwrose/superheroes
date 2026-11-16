@@ -435,12 +435,9 @@ def test_t6_a_b1_mismatch_takes_no_restore_step_and_no_second_test_the_restore_r
     assert state["_auditOutcome"]["notDischarged"] == [w.key]
 
 
-def test_t6_b2s_fold_records_the_restore_once_and_runs_the_gate_before_its_audits(tmp_path):
-    # axis: B2's report that commits a source repair beside the restored test passes the live submission check, so
-    # the restore the pass carries can be submitted at all — see bite-proof record i2554_bounded_pass_b2
-    # (E-restore-submits)
-    w = _bounded_world(tmp_path, "audit", CAP + 1)
-    w.audit()
+def _submit_bounded_restore(w):
+    """B2's one fix step as a real submission makes it: a commit holding a source repair beside the restored test, a
+    report binding the finding to it, checked by the live submission check before it folds."""
     assert w.state["step"] == RD.P_APPLY_FIXES and w.state.get("_fixStepHead"), w.state.get("step")
     w.write("src/repair.py", "def repaired():\n    return True\n")
     w.write(TR.TEST_PATH, TR.ROLE_TEST)
@@ -448,7 +445,16 @@ def test_t6_b2s_fold_records_the_restore_once_and_runs_the_gate_before_its_audit
     report = {"fixes": [{"finding": w.key, "commit": sha}]}
     detail, commits = RD._apply_fixes_commit_fault(w.state, w.cfg, report)
     assert detail is None and commits == [{"finding": w.key, "commit": sha}], detail
-    w.fold(RD.P_APPLY_FIXES, report)  # the one apply-fixes step; its fold is the ordinary fix fold
+    w.fold(RD.P_APPLY_FIXES, report)
+
+
+def test_t6_b2s_fold_records_the_restore_once_and_runs_the_gate_before_its_audits(tmp_path):
+    # axis: B2's report that commits a source repair beside the restored test passes the live submission check, so
+    # the restore the pass carries can be submitted at all — see bite-proof record i2554_bounded_pass_b2
+    # (E-restore-submits)
+    w = _bounded_world(tmp_path, "audit", CAP + 1)
+    w.audit()
+    _submit_bounded_restore(w)  # the one apply-fixes step; its fold is the ordinary fix fold
     state = w.state
     assert state["step"] == RD.P_VERIFY and state["_verifyThen"] == RD.VERIFY_THEN_BOUNDED
     assert state["round"] == CAP + 1 and "restores" not in state["boundedPass"]
@@ -568,7 +574,7 @@ def test_t8_a_b2_mismatch_and_a_b1_mismatch_dispatch_no_second_test_and_no_secon
     w = _bounded_world(tmp_path / "b1", "audit", CAP + 1)
     w.audit()
     steps = [w.state["step"]]
-    w.restore()
+    _submit_bounded_restore(w)
     steps.append(w.state["step"])
     assert steps == [RD.P_APPLY_FIXES, RD.P_VERIFY] and RD.P_SECOND_TEST not in steps
     final = _bounded_world(tmp_path / "b2", "final-audit", CAP + 2)
