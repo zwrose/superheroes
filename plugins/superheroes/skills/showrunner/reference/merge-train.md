@@ -291,10 +291,14 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    layer below's head. A layer is judged on its own diff and never waits on the layer below. Run
    `lib/head_coverage.py check` and then `outcome` as the final-commit row of
    `skills/showrunner/reference/vet-receipt.md` § The review record checks says, with `--sheet held`
-   when the published sheet carries `prSheet.held` and `--sheet live` otherwise, and `--sheet-commit`
-   the commit the published sheet describes. A carry is judged from that commit, as
+   when the published sheet carries `prSheet.held` and `--sheet live` otherwise, `--sheet-commit`
+   the commit the published sheet describes and `--head` the new head, both full 40-hex shas. A carry
+   is judged from that commit: run `check` a second time with `--record` a file naming the sheet's
+   commit as its final commit (the record to check with, as
    `skills/showrunner/reference/owner-decisions.md` § When a PR's head moves after its sheet was
-   published says. The outcome's `sheet` action decides what happens to the sheet:
+   published gives it), and pass that answer to `outcome` as `--carry-answer`, adding
+   `--carry-judged-clear` when it is a judgement you cleared. A live sheet whose head moved, with no
+   `--carry-answer`, is a usage error. The outcome's `sheet` action decides what happens to the sheet:
 
    - `republish-carried`: republish the stack's single sheet with `carriedForward.fromSheet` naming its
      previous revision and `heads` giving the new head of every PR the sheet covers. The answers and
@@ -302,9 +306,10 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    - `take-down`: take the sheet down with `lib/pr_sheet.py hold --sheet <published sheet.json> --out
      <file>` and publish that file. The word covers nothing while the sheet is held, and the PR goes
      back for a returning-round review of the files the check lists.
-   - `republish-unsigned`: the sheet is held and the outcome is `READY` again. Republish an ordinary
-     sheet with `previousCommit` (the held sheet's commit): it shows "This PR changed", keeps the
-     answers to unchanged items, and asks for the verdict again.
+   - `republish-unsigned`: the sheet is held and the outcome is `READY` again, or the sheet is live and
+     the outcome is `READY` but the `--carry-answer` does not cover the head from the sheet's commit.
+     Republish an ordinary sheet with `previousCommit` (the earlier sheet's commit): it shows "This PR
+     changed", keeps the answers to unchanged items, and asks for the verdict again.
 
    A layer whose action is `take-down` takes down the stack's sheet.
 

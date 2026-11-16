@@ -230,16 +230,28 @@ def test_hold_writes_the_same_sheet_held_with_no_cards(case, capsys, tmp_path):
     assert sheet_prose.check_sheet(held) == []
 
 
+THEME = LIB.parent / "theme"
+
+
 @pytest.mark.parametrize("sheet", [
-    {"schema": "superheroes-sheet/1", "kind": "final", "title": "T", "final": {}, "cards": []},
-    {"schema": "superheroes-sheet/1", "kind": "index", "title": "T", "index": {}, "cards": []},
-    {"schema": "superheroes-sheet/1", "kind": "remainder", "title": "T", "cards": []},
-    [],
-    "{not json",
-], ids=["final", "index", "remainder", "not-an-object", "not-json"])
-def test_hold_refuses_any_sheet_that_is_not_a_pr_or_stack_sheet(sheet, capsys, tmp_path):
-    # Bites on: hold taking down a final, remainder or index sheet (or a file that is no sheet), or writing a file when it refuses.
-    # Axis: hold refuses any other kind: exit 1, {"ok": false, "problems": [...]}, and nothing written.
+    json.loads((THEME / "sample-final-sheet.json").read_text(encoding="utf-8")),
+    {"schema": "superheroes-sheet/1", "kind": "index", "title": "T", "index": {"rows": []}, "cards": []},
+    json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8")),
+], ids=["final", "index", "remainder"])
+def test_hold_refuses_a_valid_sheet_that_is_not_a_pr_or_stack_sheet(sheet, capsys, tmp_path):
+    # Bites on: hold taking down a final, remainder or index sheet, or writing a file when it refuses.
+    # Axis: a sheet every reader accepts, of any kind but pr or stack, is refused by hold's kind check itself (its own
+    # problem, not a schema one): exit 1, {"ok": false, "problems": [...]}, and nothing written.
+    assert sheet_prose.check_sheet(sheet) == [], "the fixture is a valid sheet, so only the kind check can refuse it"
+    source = write(tmp_path / "sheet.json", sheet)
+    code, said = hold_cli(capsys, source, tmp_path)
+    assert code == 1 and said["ok"] is False and not (tmp_path / "held.json").exists()
+    assert said["problems"] == [f"hold takes a pr or stack sheet, but this sheet's kind is {sheet['kind']!r}"]
+
+
+@pytest.mark.parametrize("sheet", [[], "{not json"], ids=["not-an-object", "not-json"])
+def test_hold_refuses_a_file_that_is_no_sheet(sheet, capsys, tmp_path):
+    # Axis: a file that is no sheet object is refused, and nothing is written.
     source = write(tmp_path / "sheet.json", sheet)
     code, said = hold_cli(capsys, source, tmp_path)
     assert code == 1 and said["ok"] is False and said["problems"] and not (tmp_path / "held.json").exists()
