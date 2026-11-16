@@ -272,23 +272,48 @@ def _round_not_discharged(round_rec):
     outcomes = round_rec.get("outcomes")
     if not isinstance(outcomes, list):
         return [{_MALFORMED_ROUND}]
+    return [aliases for _key, _name, aliases in _round_not_discharged_findings(round_rec)]
+
+
+def _round_not_discharged_findings(round_rec):
+    """[(finding key, display name, alias set)] for every NOT-DISCHARGED outcome in one audit round
+    — the one home of that classification; `_round_not_discharged` returns its alias sets.
+
+    The finding key is the outcome's `id` (the audit target's per-location id) when that is a
+    non-empty string, so outcomes sharing an id are one finding. An outcome with no usable `id` (a
+    round recorded before `id` rode the outcome) and every malformed entry is its OWN finding, keyed
+    by its position — fail-closed: count more, never fewer. The display name is the `id`; with no
+    `id`, the `identity`; for a malformed entry, the marker."""
+    if not isinstance(round_rec, dict):
+        return [(("entry", 0), _MALFORMED_ROUND, {_MALFORMED_ROUND})]
+    outcomes = round_rec.get("outcomes")
+    if not isinstance(outcomes, list):
+        return [(("entry", 0), _MALFORMED_ROUND, {_MALFORMED_ROUND})]
     out = []
-    for o in outcomes:
+    for index, o in enumerate(outcomes):
+        entry_key = ("entry", index)
         if not isinstance(o, dict):
-            out.append({_MALFORMED_OUTCOME})
+            out.append((entry_key, _MALFORMED_OUTCOME, {_MALFORMED_OUTCOME}))
             continue
         ident = o.get("identity")
         if not isinstance(ident, str) or not ident:
-            out.append({_MALFORMED_OUTCOME})
+            out.append((entry_key, _MALFORMED_OUTCOME, {_MALFORMED_OUTCOME}))
             continue
         ruling = o.get("ruling")
         if ruling not in AUDIT_RULINGS:
-            out.append({_MALFORMED_OUTCOME})
+            out.append((entry_key, _MALFORMED_OUTCOME, {_MALFORMED_OUTCOME}))
             continue
         if ruling in ("discharged", "discharged-but-new-issue"):
             continue
         aliases = _audit_outcome_aliases(o)
-        out.append(aliases or {_MALFORMED_OUTCOME})
+        if not aliases:
+            out.append((entry_key, _MALFORMED_OUTCOME, {_MALFORMED_OUTCOME}))
+            continue
+        target_id = o.get("id")
+        if isinstance(target_id, str) and target_id:
+            out.append((("id", target_id), target_id, aliases))
+        else:
+            out.append((entry_key, ident, aliases))
     return out
 
 
@@ -308,28 +333,29 @@ def check_audit_breaker(audit_rounds):
         return {"halt": False, "reason": None, "detail": "no audit rounds yet",
                 "stalledIdentities": []}
 
-    per_round = [_round_not_discharged(r) for r in audit_rounds]
-    n = len(per_round)
+    n = len(audit_rounds)
 
     # The same finding failing audit in two consecutive rounds — last two only.
+    stalled = set()
+    counted = {}  # finding key -> display name, one entry per distinct stalled finding
     if n >= 2:
-        prev = per_round[-2]
-        cur = per_round[-1]
-        stalled = set()
-        for cur_aliases in cur:
-            for prev_aliases in prev:
+        prev = _round_not_discharged_findings(audit_rounds[-2])
+        cur = _round_not_discharged_findings(audit_rounds[-1])
+        for key, name, cur_aliases in cur:
+            for _prev_key, _prev_name, prev_aliases in prev:
                 shared = cur_aliases & prev_aliases
                 if shared:
                     stalled |= shared
-    else:
-        stalled = set()
+                    counted[key] = name
     if stalled:
         ids = sorted(stalled)
+        # axis: the stall line counts distinct findings by target id, never their aliases — see bite-proof record i2443_identity_match
+        names = sorted(counted.values())
         return {
             "halt": True,
             "reason": "audit-stall",
             "detail": ("%d finding(s) failed audit in two consecutive rounds: %s"
-                       % (len(ids), "; ".join(ids))),
+                       % (len(counted), "; ".join(names))),
             "stalledIdentities": ids,
         }
 
