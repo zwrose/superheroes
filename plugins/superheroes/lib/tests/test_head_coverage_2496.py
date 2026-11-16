@@ -304,7 +304,7 @@ def test_row_12_ci_still_running_on_the_head_waits_with_no_sheet():
     for ci in ("pending", "none"):
         assert HC.outcome("proven", ci) == {"outcome": "WAIT", "why": "ci-not-green", "review": "none", "sheet": "none"}
     assert HC.outcome("judgement", "pending", judged_clear=True)["outcome"] == "WAIT"
-    assert HC.outcome("proven", "pending", sheet="held")["sheet"] == "keep"
+    assert HC.outcome("proven", "pending", sheet="held", sheet_commit="a" * 40, head="a" * 40)["sheet"] == "keep"
     assert HC.outcome("proven", "pending", sheet="live", sheet_commit="a" * 40, head="a" * 40)["sheet"] == "keep"
     # an uncovered head is owed a review whatever CI is doing
     assert HC.outcome("needs-review", "pending")["outcome"] == "NOT-READY"
@@ -315,7 +315,7 @@ def test_row_13_ci_red_on_the_head_is_not_ready_and_owes_no_review():
         got = HC.outcome(answer, "red", judged_clear=True)
         assert got == {"outcome": "NOT-READY", "why": "ci-red", "review": "none", "sheet": "none"}
     assert HC.outcome("proven", "red", sheet="live", sheet_commit="a" * 40, head="a" * 40)["sheet"] == "take-down"
-    assert HC.outcome("proven", "red", sheet="held")["sheet"] == "keep"
+    assert HC.outcome("proven", "red", sheet="held", sheet_commit="a" * 40, head="a" * 40)["sheet"] == "keep"
 
 
 # --- row 14: someone other than the builder pushes ---------------------------------------------------------------------
@@ -387,10 +387,12 @@ def test_row_15_a_head_that_moves_without_changing_what_the_owner_approved_repub
     head = repo.merge_main()
     got = run_check(repo, moved, earlier, head)
     assert got["answer"] == "proven"
-    moved_on = HC.outcome(got["answer"], "green", sheet="live", sheet_commit=reviewed, head=head)
+    # the sheet was published at the reviewed commit, so the check from the sheet's commit is this same check
+    moved_on = HC.outcome(got["answer"], "green", sheet="live", sheet_commit=reviewed, head=head, carry_answer=got["answer"])
     assert moved_on == {"outcome": "READY", "why": "covered", "review": "none", "sheet": "republish-carried"}
     assert HC.outcome(got["answer"], "green", sheet="live", sheet_commit=head, head=head)["sheet"] == "keep"
-    judged = HC.outcome("judgement", "green", judged_clear=True, sheet="live", sheet_commit=reviewed, head=head)
+    judged = HC.outcome("judgement", "green", judged_clear=True, sheet="live", sheet_commit=reviewed, head=head,
+                        carry_answer="judgement", carry_judged_clear=True)
     assert judged["sheet"] == "republish-carried"
 
 
@@ -401,12 +403,13 @@ def test_row_16_a_head_that_moves_and_matters_takes_the_sheet_down_and_republish
     head = repo.commit("add code")
     got = run_check(repo, base, earlier, head)
     assert got["answer"] == "needs-review"
-    down = HC.outcome(got["answer"], "green", sheet="live", sheet_commit=reviewed, head=head)
+    down = HC.outcome(got["answer"], "green", sheet="live", sheet_commit=reviewed, head=head, carry_answer=got["answer"])
     assert down == {"outcome": "NOT-READY", "why": "needs-review", "review": "returning", "sheet": "take-down"}
-    assert HC.outcome("judgement", "green", sheet="live", sheet_commit=reviewed, head=head)["sheet"] == "take-down"
+    assert HC.outcome("judgement", "green", sheet="live", sheet_commit=reviewed, head=head,
+                      carry_answer="judgement")["sheet"] == "take-down"
     back = HC.outcome("proven", "green", sheet="held", sheet_commit=reviewed, head=head)
     assert back == {"outcome": "READY", "why": "covered", "review": "none", "sheet": "republish-unsigned"}
-    assert HC.outcome("needs-review", "green", sheet="held")["sheet"] == "keep"
+    assert HC.outcome("needs-review", "green", sheet="held", sheet_commit=reviewed, head=head)["sheet"] == "keep"
 
 
 def test_outcome_rejects_values_outside_its_sets():
@@ -500,7 +503,8 @@ def test_the_cli_exits_0_for_an_answer_and_2_for_a_usage_error(tmp_path):
     assert set(printed) == KEYS and printed["answer"] == "needs-review" and printed["files"] == [APP]
     same = _cli("check", "--repo-root", repo.root, "--base", base, "--record", str(record), "--head", reviewed)
     assert same.returncode == 0 and json.loads(same.stdout)["answer"] == "proven"
-    ok = _cli("outcome", "--answer", "proven", "--ci", "green", "--sheet", "live", "--sheet-commit", reviewed, "--head", head)
+    ok = _cli("outcome", "--answer", "proven", "--ci", "green", "--sheet", "live", "--sheet-commit", reviewed, "--head", head,
+              "--carry-answer", "proven")
     assert ok.returncode == 0 and json.loads(ok.stdout)["sheet"] == "republish-carried"
     cleared = _cli("outcome", "--answer", "judgement", "--ci", "green", "--judged-clear")
     assert cleared.returncode == 0 and json.loads(cleared.stdout)["outcome"] == "READY"

@@ -1058,17 +1058,21 @@ def _carried(sheet):
     return sheet
 
 
-# Bites on: the chat prose drawing the changed heading and text for a carried sheet, or drawing the carried text without filling its date, commit, what moved or why.
+# Bites on: the chat prose drawing the carried heading or text for a carried sheet (or the carry's date, what moved or why), or drawing the changed heading and text in its place.
 @pytest.mark.parametrize("kind", ["pr", "stack"])
-def test_prose_shows_the_carried_text_in_place_of_the_changed_text(tmp_path, kind):
-    # Axis: a sheet with carriedForward prints the carried heading and text (date, first 7 of previousCommit, moved, why) after What changed and before the walk, and prints no changed heading or text.
+def test_a_carried_sheet_shows_neither_the_carried_nor_the_changed_text(tmp_path, kind):
+    # Axis: a sheet with carriedForward prints no carried heading, no carried text (even unfilled), none of the carry's date, moved or whyNotMaterial, and no changed heading or text; its prose still runs from What changed to the walk.
     out = _prose_of(tmp_path, _carried(_sample(kind)))
-    paragraph = PR_WORDS["carried"].replace("{date}", "2026-09-30").replace("{previous}", "0123456").replace("{moved}", CARRIED["moved"]).replace("{why}", CARRIED["whyNotMaterial"])
-    heading = "**%s**" % PR_WORDS["carriedHeading"]
-    assert out.index("Describes commit") < out.index(heading) < out.index(paragraph) < out.index("**%s**" % PR_WORDS["walkHeading"])
-    assert "{" not in paragraph
+    assert PR_WORDS["carriedHeading"] not in out
+    fragments = [piece for piece in re.split(r"\{\w+\}", PR_WORDS["carried"]) if len(piece) >= 10]
+    assert len(fragments) >= 2
+    for piece in fragments:
+        assert piece not in out, piece
+    for text in (CARRIED["date"], CARRIED["moved"], CARRIED["whyNotMaterial"]):
+        assert text not in out, text
     assert PR_WORDS["changedHeading"] not in out
     assert PR_WORDS["changed"].split("{previous}")[0] not in out
+    assert out.index("Describes commit") < out.index("**%s**" % PR_WORDS["walkHeading"])
 
 
 # Bites on: the changed text being replaced for every republish, so a material move (previousCommit alone) loses its heading.

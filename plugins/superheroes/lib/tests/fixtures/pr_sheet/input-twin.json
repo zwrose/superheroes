@@ -2,6 +2,10 @@
   "schema": "pr-sheet-input/1",
   "kind": "stack",
   "number": 240,
+  "headNow": {
+    "241": {"commit": "4444444ddddddd4444444ddddddd4444444ddddd", "ci": "green"},
+    "242": {"commit": "5555555eeeeeee5555555eeeeeee5555555eeeee", "ci": "green"}
+  },
   "title": "Saved cards",
   "summary": "Customers can save a card and remove it again.",
   "prs": [

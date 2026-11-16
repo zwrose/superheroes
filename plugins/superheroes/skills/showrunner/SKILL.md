@@ -510,13 +510,13 @@ above).
    per `owner-decisions.md`) records it on the PR.
    **How long it lasts, and what puts a PR back outside the word.** The word covers the PR at the
    commit its sheet describes. When the PR's head commit moves after its sheet was published, you
-   judge the move by the material-consequence line, and doubt counts as material. A move with no
-   material consequence (a base update with no conflict, a mechanical bring-current, a craft fix)
-   keeps the word: you republish the sheet for the new commit carrying the answers and the verdict
-   forward, with a dated note saying what moved and why it is not material. A move that is material,
-   or in doubt, is republished unsigned: the sheet shows "This PR changed", keeps the answers to
-   unchanged items, and starts the verdict over, and a verdict saved on the old sheet never counts.
-   How you judge and publish it is in `owner-decisions.md`. A PR opened after the word gets its own
+   run the head-coverage check (`lib/head_coverage.py`, as `vet-receipt.md` says). A move the check
+   covers from the commit the sheet describes keeps the word: you republish the sheet for the new commit carrying the answers and the
+   verdict forward, with no note. A move it does not cover takes the sheet down
+   (`lib/pr_sheet.py hold`) until the PR is READY again, when you republish it unsigned: the sheet
+   shows "This PR changed", keeps the answers to unchanged items, and starts the verdict over, and a
+   verdict saved on the old sheet never counts.
+   How you publish it is in `owner-decisions.md`. A PR opened after the word gets its own
    sheet. The owner may withdraw the word at any time, by changing the verdict or saying so in
    the chat, and a withdrawn word covers nothing from that moment.
    **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see

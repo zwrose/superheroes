@@ -43,13 +43,15 @@ with ``judged_clear``. CI red is NOT-READY (``ci-red``, no review owed: the fix 
 is NOT-READY (``needs-review``, or ``judged-meaningful`` for an uncleared judgement) with a returning review owed;
 covered with CI pending or none is WAIT (``ci-not-green``); otherwise READY (``covered``). The sheet action is
 ``none`` with no sheet; a held sheet is ``republish-unsigned`` when READY, else ``keep``; a live sheet is
-``take-down`` when NOT-READY, ``republish-carried`` when READY on a head other than the sheet's commit, else
-``keep``.
+``take-down`` when NOT-READY; READY on a head other than the sheet's commit is ``republish-carried`` only when the
+carry answer (the check run from the sheet's own commit to the head) is proven, or judgement with
+``carry_judged_clear``, else ``republish-unsigned``; otherwise ``keep``. With a sheet, the sheet's commit and the head
+must be full 40-hex shas, and a live sheet whose head moved needs a carry answer; either missing is a usage error.
 
 CLI:
   head_coverage.py check --repo-root DIR --base SHA --record FILE --head SHA [--proof FILE] [--builder-author EMAIL]
   head_coverage.py outcome --answer A --ci C [--judged-clear] [--sheet none|live|held] [--sheet-commit SHA]
-                           [--head SHA]
+                           [--head SHA] [--carry-answer A] [--carry-judged-clear]
 prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record or proof
 file, a bad value)."""
 import argparse
@@ -88,6 +90,8 @@ WHY_TOKENS = (WHY_RECORD_UNUSABLE, WHY_SAME_COMMIT, WHY_INPUT_INVALID, WHY_DIFF_
 
 CI_STATES = ("green", "pending", "red", "none")
 SHEETS = ("none", "live", "held")
+# The sheet's commit and the head, whenever outcome is given a sheet.
+_FULL_SHA_40 = re.compile(r"[0-9a-f]{40}")
 READY = "READY"
 WAIT = "WAIT"
 NOT_READY = "NOT-READY"
@@ -481,15 +485,30 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     return result
 
 
-def outcome(answer, ci, judged_clear=False, sheet="none", sheet_commit=None, head=None):
+def outcome(answer, ci, judged_clear=False, sheet="none", sheet_commit=None, head=None, carry_answer=None,
+            carry_judged_clear=False):
     """``{"outcome", "why", "review", "sheet"}`` from the check's ``answer``, CI on the head, whether the vet cleared a
-    judgement, and the merge sheet's state. Pure; a value outside its set raises ``ValueError``."""
+    judgement, the merge sheet's state, and the second check's answer (``carry_answer``, run from the sheet's own commit
+    to the head, with ``carry_judged_clear``). Pure; a value outside its set raises ``ValueError``."""
     if answer not in ANSWERS:
         raise ValueError("answer must be one of %s" % ", ".join(ANSWERS))
     if ci not in CI_STATES:
         raise ValueError("ci must be one of %s" % ", ".join(CI_STATES))
     if sheet not in SHEETS:
         raise ValueError("sheet must be one of %s" % ", ".join(SHEETS))
+    if carry_answer is not None and carry_answer not in ANSWERS:
+        raise ValueError("carry answer must be one of %s" % ", ".join(ANSWERS))
+    if sheet != "none":
+        # axis: with a sheet, the sheet's commit and the head are full 40-hex shas, never an abbreviation, a ref or
+        # nothing, so "the head moved past the sheet" is a comparison of two commits — see bite-proof record
+        # i2496_v962_carry_answer (E-sha)
+        for name, value in (("sheet commit", sheet_commit), ("head", head)):
+            if not (isinstance(value, str) and _FULL_SHA_40.fullmatch(value)):
+                raise ValueError("%s must be a full 40-hex sha when a sheet is given" % name)
+    moved = sheet == "live" and sheet_commit != head
+    if moved and carry_answer is None:
+        raise ValueError("a live sheet whose head moved needs the carry answer: the check run from the sheet's commit "
+                         "to the head")
     covered = answer == PROVEN or (answer == JUDGEMENT and judged_clear is True)
     if ci == "red":
         verdict, why, review = NOT_READY, "ci-red", "none"
@@ -506,8 +525,12 @@ def outcome(answer, ci, judged_clear=False, sheet="none", sheet_commit=None, hea
         action = "republish-unsigned" if verdict == READY else "keep"
     elif verdict == NOT_READY:
         action = "take-down"
-    elif verdict == READY and sheet_commit != head:
-        action = "republish-carried"
+    elif verdict == READY and moved:
+        # axis: a verdict carries onto the moved head only when the check from the sheet's own commit covers it
+        # (proven, or a judgement the vet cleared); a head whose record proves it but whose sheet saw other code is
+        # republished unsigned — see bite-proof record i2496_v962_carry_answer (E-carry)
+        carried = carry_answer == PROVEN or (carry_answer == JUDGEMENT and carry_judged_clear is True)
+        action = "republish-carried" if carried else "republish-unsigned"
     else:
         action = "keep"
     return {"outcome": verdict, "why": why, "review": review, "sheet": action}
@@ -558,7 +581,8 @@ def _check_cli(args):
 def _outcome_cli(args):
     try:
         result = outcome(args.answer, args.ci, judged_clear=args.judged_clear, sheet=args.sheet,
-                         sheet_commit=args.sheet_commit, head=args.head)
+                         sheet_commit=args.sheet_commit, head=args.head, carry_answer=args.carry_answer,
+                         carry_judged_clear=args.carry_judged_clear)
     except ValueError as exc:
         return _usage_error(str(exc))
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -582,6 +606,8 @@ def main(argv):
     op.add_argument("--sheet", default="none")
     op.add_argument("--sheet-commit", default=None)
     op.add_argument("--head", default=None)
+    op.add_argument("--carry-answer", default=None)
+    op.add_argument("--carry-judged-clear", action="store_true")
     args = ap.parse_args(argv)
     return _check_cli(args) if args.cmd == "check" else _outcome_cli(args)
 
