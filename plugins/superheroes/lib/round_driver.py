@@ -10476,18 +10476,46 @@ def _cap_round_holds_fix_batch(state, cap):
     return isinstance(rec, dict) and isinstance(rec.get("fix"), dict) and bool(_fix_batch_keys(state))
 
 
+def _round_applied_work(rec):
+    """True when a round record shows applied work: its `fix.fixes` or `fix.commits` is truthy, or its
+    `prBodyFix` has a non-empty `after` that differs from its `before` (a body-only fix has empty
+    fixes and no commits). Truthiness, so a malformed truthy value counts as work."""
+    if not isinstance(rec, dict):
+        return False
+    fix = rec.get("fix")
+    if isinstance(fix, dict) and (fix.get("fixes") or fix.get("commits")):
+        return True
+    body = rec.get("prBodyFix")
+    return (isinstance(body, dict) and _nonempty_str(body.get("after"))
+            and body.get("after") != body.get("before"))
+
+
 def _bounded_pass_applies(state, config):
-    """True when the cap round applied a fix batch no audit has checked and the session holds neither
-    pass: at most one pass, and the extra audit round counts as one. The fixer must have reported
-    applying a fix: the cap round's `fix.fixes` is a non-empty list, else there is nothing to audit."""
+    """True when the session holds neither pass (at most one pass, and the extra audit round counts as
+    one), the cap round queued a fix batch, and the cap round applied work: its fixes, its fix commits
+    or a changed PR-body fix, read as `_vendor_did_fix_work` reads a round, or a post-fix head diff that
+    differs from the round's reviewed diff, read as `_enter_delta_round` reads its fix surface (a fix
+    committed with no `fixes` binding leaves the record lists empty and only the head diff shows it).
+    A queued batch with none of the four applied hands back; a head or reviewed diff that is not text
+    gives no head-diff signal, and the record facts alone decide."""
     if "boundedPass" in state or "extraAudit" in state:
         return False
     cap = _round_cap(config)
     if not _cap_round_holds_fix_batch(state, cap):
         return False
-    # axis: the pass begins only on fixes the fixer reported applying; a queued batch with none applied hands back — see bite-proof record i2552_bounded_pass_b1
-    applied = state["rounds"][str(cap)]["fix"].get("fixes")
-    return isinstance(applied, list) and bool(applied)
+    # axis: the pass begins on the cap round's applied work (fixes, fix commits, a changed PR-body fix or a head diff that changed); a queued batch with none applied hands back — see bite-proof record i2552_bounded_pass_b1
+    return bool(_round_applied_work(state["rounds"][str(cap)]) or _head_diff_changed(state))
+
+
+def _head_diff_changed(state):
+    """True when the post-fix `headDiff` and the round's `reviewedDiff` are both text and differ, read
+    through `_changed_sections_only` as `_enter_delta_round` reads them for its fix surface. A diff that
+    is missing or not text gives False: no signal."""
+    reviewed, head = state.get("reviewedDiff"), state.get("headDiff")
+    if not isinstance(reviewed, str) or not isinstance(head, str):
+        return False
+    cut_reviewed, cut_head = _changed_sections_only(reviewed, head)
+    return cut_reviewed != cut_head
 
 
 def _begin_bounded_pass(state, config, trigger):
@@ -10702,12 +10730,7 @@ def _vendor_did_fix_work(state, config, vendor):
     for rec in (rounds.values() if isinstance(rounds, dict) else ()):
         if not isinstance(rec, dict) or rec.get("fixerVendor") != vendor:
             continue
-        fix = rec.get("fix")
-        if isinstance(fix, dict) and (fix.get("fixes") or fix.get("commits")):
-            return True
-        body = rec.get("prBodyFix")
-        if (isinstance(body, dict) and _nonempty_str(body.get("after"))
-                and body.get("after") != body.get("before")):
+        if _round_applied_work(rec):
             return True
     return _step_has_new_commits(state, config)
 

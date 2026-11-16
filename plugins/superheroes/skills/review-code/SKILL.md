@@ -315,7 +315,7 @@ python3 -B <plugin root>/lib/round_driver.py submit --session-dir <session dir> 
 
 **Terminals to surface honestly:** scoped certifying finish (`audited-chain` / `audited-chain-degraded` — say so, never imply a pristine fresh pass); the bounded-pass finish (`bounded-pass` / `bounded-pass-degraded`: the cap round's fixes audited in round `cap + 1`); the one recovery attempt when the same fix fails its audit in two rounds in a row (journaled; the fix step is set again, and none runs when the second failure is in the cap round); the handback at the cap (`handed-back` / `round-cap` — every open finding, Important and Critical alike, with its outcome); the `handed-back` / `fix-keeps-failing` handback (the fix still fails after the recovery attempt); the `handed-back` / `owner-choice-open` handback (a finding only the owner's choice settles is still open; it reaches the owner as a leftover at the vet).
 
-**The extra audit round.** The [extra audit round](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#extra-audit-round) is retired: the `extra-audit` verb refuses `extra-audit-retired`, and a cap with unaudited fixes enters the bounded pass on its own (`reference/round-driver.md` § The bounded pass).
+**The extra audit round.** The [extra audit round](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#extra-audit-round) is retired: the `extra-audit` verb refuses `extra-audit-retired`, and a cap round with applied work (reported fixes, fix commits, a changed PR-body fix or a head diff that changed in the cap round) enters the bounded pass on its own (`reference/round-driver.md` § The bounded pass).
 
 **Red flags** — if you catch yourself thinking "trivial fix / obviously clean / save tokens / offer another round as optional", call `next` and obey the driver instead.
 
