@@ -665,6 +665,14 @@ def _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest, is
         if not isinstance(expected, str) or not expected or executed != expected or ineligible:
             disclosures["unauthenticatedFinder"] = {"seat": seat, "executed": executed,
                                                      "recorded": expected}
+            if executed is None:
+                # axis: a landing with no runner evidence is named for what is missing, not as a wrong vendor — see bite-proof record wo_a_2527_nothing_to_group
+                recorded_barred = (isinstance(expected, str) and bool(expected)
+                                   and callable(is_barred) and bool(is_barred(expected)))
+                if not recorded_barred:
+                    return "missing-seat-refuse-fold:%s:no-runner-evidence:recorded=%s" % (
+                        seat, expected)
+                ineligible = True
             return "missing-seat-refuse-fold:%s:unauthenticated-vendor:executed=%s:recorded=%s%s" % (
                 seat, executed, expected, ":vendor-ineligible" if ineligible else "")
     return None

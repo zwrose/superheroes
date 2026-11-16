@@ -81,8 +81,11 @@ def test_claude_implemented_build():
 def test_single_vendor_floor():
     m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0)
     assert len(m["seats"]) == len(SM.PANEL_ROSTER)
+    # #2530: an all-claude panel is outside the author's (xai) family, so sharing one vendor is not a
+    # critical-diversity breach and is not degraded for it
     constraints = {d["constraint"] for d in m["degradations"]}
-    assert "critical-diversity" in constraints
+    assert "critical-diversity" not in constraints
+    assert {"constraint": "critical-diversity"} not in SM.verify(m, "xai")
 
 
 def test_pin_honored():
@@ -320,6 +323,18 @@ def _seats_without_maker_collision(maker_family):
     elif maker_family == "openai":
         overrides["architecture-reviewer"] = dict(anthropic_cfg)
     return _full_seats_template(**overrides)
+
+
+def _seating_an_extra_maker(seat_map, seat):
+    """#2530: the same map with the family seated at ``seat`` also named a maker family.
+
+    The panel is then no longer outside every maker's family, so ``critical-diversity`` applies exactly
+    as it did before the exemption. For tests whose subject is the excusal / liveness machinery, not the
+    exemption itself."""
+    family = SM._seat_family(seat, seat_map["seats"][seat])
+    assert family, seat
+    makers = set(seat_map.get("makerFamilies") or []) | {family}
+    return dict(seat_map, makerFamilies=sorted(makers))
 
 
 def test_verify_critical_maker_family_violation():
@@ -942,7 +957,8 @@ def test_build_empty_live_cells_source_fail_closed():
     seat = "security-reviewer"
     cfg = m["seats"][seat]
     assert SM._resolvable_families_for_seat(m, seat, cfg) is None
-    receipt = {**m, "violations": [{"constraint": "critical-diversity"}]}
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
+    receipt = _seating_an_extra_maker({**m, "violations": [{"constraint": "critical-diversity"}]}, seat)
     assert SM.unexcused_violations(receipt) == [
         {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
     ]
@@ -960,8 +976,11 @@ def test_to_receipt_empty_live_cells_source_not_laundered():
     )
     receipt = SM.to_receipt(m, "xai")
     assert receipt["liveCellsSource"] == ""
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
     assert SM.unexcused_violations(
-        {**receipt, "violations": [{"constraint": "critical-diversity"}]}
+        _seating_an_extra_maker(
+            {**receipt, "violations": [{"constraint": "critical-diversity"}]}, "security-reviewer",
+        )
     ) == [
         {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
     ]
@@ -1334,8 +1353,26 @@ def test_unexcused_maker_family_violation_is_unexcused():
 def test_unexcused_critical_diversity_claude_codex_is_excused():
     m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0)
     receipt = SM.to_receipt(m, "anthropic")
+    # #2530: the panel is all codex, outside the author's anthropic family — it carries no
+    # critical-diversity record at all, so there is nothing to excuse
+    assert not any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
+    classified = SM.classify_violations(receipt)
+    assert SM.unexcused_violations(receipt) == []
+    assert not any(
+        v.get("constraint") == "critical-diversity" for bucket in classified.values() for v in bucket
+    )
+
+
+def test_unexcused_critical_diversity_claude_codex_with_an_extra_maker_is_excused():
+    # the excusal-by-liveness path itself: the one family the panel shares (openai) is also a maker's
+    m = _seating_an_extra_maker(SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0), "code-reviewer")
+    receipt = SM.to_receipt(m, "anthropic")
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
     assert SM.unexcused_violations(receipt) == []
+    assert any(
+        v.get("constraint") == "critical-diversity"
+        for v in SM.classify_violations(receipt)["excusedByLiveness"]
+    )
 
 
 def test_unexcused_critical_diversity_pinned_critical_seats_excused_by_pin():
@@ -1345,6 +1382,8 @@ def test_unexcused_critical_diversity_pinned_critical_seats_excused_by_pin():
         "premortem-reviewer": {"vendor": "claude"},
     }
     m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins=pins)
+    # #2530: the subject is the pin excusal, so the pinned family (anthropic) must also be a maker's
+    m = _seating_an_extra_maker(m, "code-reviewer")
     receipt = SM.to_receipt(m, "xai")
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
     classified = SM.classify_violations(receipt)
@@ -1492,7 +1531,9 @@ def test_unexcused_critical_diversity_missing_author_family_fail_closed():
     _assert_no_unexpected_maker_family(absent)
     assert SM.unexcused_violations(absent) == breach
 
-    xai_receipt = dict(base, authorFamily="xai")
+    # #2530: with a known author the panel must hold a seat in the author's family, else it is outside
+    # the makers and carries no critical-diversity record — the template seats three seats at xai
+    xai_receipt = dict(base, authorFamily="xai", seats=_full_seats_template())
     xai_unexcused = SM.unexcused_violations(xai_receipt)
     assert any(
         u.get("constraint") == "critical-diversity"
@@ -1511,7 +1552,12 @@ def test_unexcused_critical_diversity_missing_author_family_fail_closed():
     ],
 )
 def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker, excused):
-    seats = _seats_without_maker_collision(maker)
+    # #2530: critical-diversity applies only when a seat is in a maker's family, so this fixture seats
+    # the maker deliberately (the template holds an anthropic seat and three xai seats). The seated
+    # maker seats can read as maker-family violations; the subject here is the critical-diversity record.
+    seats = _full_seats_template()
+    maker_seats = {s for s, cfg in seats.items() if SM._seat_family(s, cfg) == maker}
+    assert maker_seats
     receipt = {
         "seats": seats,
         "liveVendors": live,
@@ -1521,12 +1567,14 @@ def test_unexcused_critical_diversity_availability_not_pin_presence(live, maker,
         "degradations": [{"constraint": "critical-diversity"}],
         "violations": [{"constraint": "critical-diversity"}],
     }
-    _assert_no_unexpected_maker_family(receipt)
     unexcused = SM.unexcused_violations(receipt)
+    others = [u for u in unexcused if u.get("constraint") != "critical-diversity"]
+    assert all(u.get("constraint") == "maker-family" and u.get("seat") in maker_seats for u in others)
+    diversity = [u for u in unexcused if u.get("constraint") == "critical-diversity"]
     if excused:
-        assert unexcused == []
+        assert diversity == []
     else:
-        assert unexcused == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
+        assert diversity == [{"constraint": "critical-diversity", "evidence": "alternative-live"}]
 
 
 def test_unexcused_strong_tier_excused_when_reviewer_deep_unavailable(monkeypatch):
@@ -1616,6 +1664,9 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
         "degradations": [{"constraint": "critical-diversity"}],
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the pin-causality evidence, so the pinned family (anthropic) must also be
+    # a maker's — else the all-anthropic panel is outside the author's family and carries no record
+    receipt = _seating_an_extra_maker(receipt, "code-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     assert SM.unexcused_violations(receipt) == [
         {"constraint": "critical-diversity", "evidence": "alternative-live"},
@@ -1697,6 +1748,8 @@ def test_classify_unproven_liveness_liveness_pin_scoped_absent():
         "authorFamily": "anthropic",
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
+    receipt = _seating_an_extra_maker(receipt, "security-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     unexcused = SM.unexcused_violations(receipt)
     assert unexcused == [
@@ -1714,6 +1767,8 @@ def test_classify_unproven_liveness_preflight_cache_only_degradation():
         "degradations": [{"constraint": "preflight-cache-only"}],
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
+    receipt = _seating_an_extra_maker(receipt, "security-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     unexcused = SM.unexcused_violations(receipt)
     assert unexcused == [
@@ -1730,6 +1785,8 @@ def test_classify_truthy_non_list_degradations_do_not_raise():
         "degradations": 42,
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
+    receipt = _seating_an_extra_maker(receipt, "security-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     assert SM.unexcused_violations(receipt) == [
         {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
@@ -1751,6 +1808,8 @@ def test_classify_pin_excuses_critical_diversity_collapsed_seats():
         "authorFamily": "xai",
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the pin excusal, so the pinned family (anthropic) must also be a maker's
+    receipt = _seating_an_extra_maker(receipt, "code-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     classified = SM.classify_violations(receipt)
     assert classified["excusedByPin"]
@@ -2001,6 +2060,8 @@ def test_unexcused_critical_diversity_corrupted_live_cells_source_fail_closed():
         "degradations": [{"constraint": "critical-diversity"}],
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the liveness evidence, so the panel must not be outside every maker's family
+    receipt = _seating_an_extra_maker(receipt, "security-reviewer")
     _assert_no_unexpected_maker_family(receipt)
     assert SM.unexcused_violations(receipt) == [
         {"constraint": "critical-diversity", "evidence": "unproven-liveness"},
@@ -2428,7 +2489,8 @@ def test_inv3_canonical_families():
         }
         for i, seat in enumerate(SM.PANEL_ROSTER)
     }
-    seat_map = {"seats": seats, "authorFamily": "xai"}
+    # #2530: the registry family (anthropic) is also a maker's, so the panel is not outside the makers
+    seat_map = _seating_an_extra_maker({"seats": seats, "authorFamily": "xai"}, "code-reviewer")
     derived = SM.derived_violations(seat_map)
     assert any(v.get("constraint") == "critical-diversity" for v in derived)
 
@@ -2559,9 +2621,15 @@ def test_inv7_effective_author_family_in_classify():
         "livenessPinScoped": False,
         "violations": [{"constraint": "critical-diversity"}],
     }
+    # #2530: the subject is the effective author family, so the panel must not be outside every maker's
+    # family — else both sides classify nothing and the equality below proves nothing
+    base = _seating_an_extra_maker(base, "security-reviewer")
     with_driver = SM.classify_violations(base, "anthropic")
     with_map = SM.classify_violations({**base, "authorFamily": "anthropic"})
     assert with_driver == with_map
+    assert any(
+        v.get("constraint") == "critical-diversity" for bucket in with_driver.values() for v in bucket
+    )
 
 
 def test_author_family_mismatch_derived_unexcused():
@@ -2613,6 +2681,8 @@ def test_to_receipt_malformed_codex_role_pins_cannot_excuse_critical_diversity()
         "livenessPinScoped": False,
         "codexRolePins": {"bad-role": "gpt-6-astra"},
     }
+    # #2530: the subject is the malformed role pins, so the all-anthropic panel must also be a maker's
+    seat_map = _seating_an_extra_maker(seat_map, "code-reviewer")
     before = SM.classify_violations(seat_map, "xai")
     assert any(
         v.get("constraint") == "critical-diversity" for v in before["unexcused"]
@@ -4432,32 +4502,288 @@ def test_a_valid_no_floor_panel_has_no_critical_diversity_degradation_or_violati
         classified = SM.classify_violations(m)
         assert classified["unexcused"] == [] and classified["excusedByLiveness"] == [], live
         assert m["roster"] == list(NO_FLOOR_ROSTER)
+        # #2530: these panels are outside the xai author's family, so the exemption alone would keep the
+        # checks above clean whatever the bar is. With the code-reviewer's family also named a maker the
+        # exemption lapses, and the bar of ONE critical family (not two) is what keeps the map clean.
+        held = _seating_an_extra_maker(m, "code-reviewer")
+        assert SM.verify(held, "xai") == [], live
+        held_classified = SM.classify_violations(held)
+        assert held_classified["unexcused"] == [] and held_classified["excusedByLiveness"] == [], live
 
 
 def test_the_risky_roster_still_needs_two_critical_families():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0)
-    assert any(d["constraint"] == "critical-diversity" for d in m["degradations"])
+    # #2530: an all-claude panel is outside the xai author's family, so it is exempt from the bar; the
+    # bar of two still binds once the one family the panel shares is also a maker's
+    exempt = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0)
+    assert not any(d["constraint"] == "critical-diversity" for d in exempt["degradations"])
+    m = _seating_an_extra_maker(exempt, "code-reviewer")
     assert {"constraint": "critical-diversity"} in SM.verify(m, "xai")
     broken = dict(m, roster=[])
     assert {"constraint": "critical-diversity"} in SM.verify(broken, "xai")
+    # and build still records the relaxation when the only option for the seats is the maker's family
+    only_maker = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", 0)
+    assert any(d["constraint"] == "critical-diversity" for d in only_maker["degradations"])
+    assert {"constraint": "critical-diversity"} in SM.verify(only_maker, "anthropic")
 
 
 def test_classify_violations_holds_the_critical_family_bar_of_the_roster():
     # axis: the classifier reads the roster's critical-family requirement, not a fixed two — see bite-proof record wo_a_1797_roster
     viol = [{"constraint": "critical-diversity"}]
     stands = {"constraint": "critical-diversity", "evidence": "alternative-live"}
+    # #2530: each map below seats one non-critical seat in a maker's family, so the panel is not outside
+    # the makers and the critical-diversity record is classified rather than dropped. The claude-only
+    # maps seat a codex (openai) seat named a maker — a family their claude-only liveness cannot reach.
+    codex_seat = _full_seats_template()["architecture-reviewer"]
+    xai_seat = _full_seats_template()["code-reviewer"]
+
+    def _with_test_role(m, cfg, makers):
+        return dict(m, seats={**m["seats"], "test-role": dict(cfg)}, makerFamilies=makers)
+
     # requirement 1: one reachable family meets the bar, so the violation stands (a fixed two would excuse it)
-    reduced = dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", 0),
-                   laneBasis={"floor": None}, violations=list(viol))
+    reduced = _with_test_role(
+        dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", 0), laneBasis={"floor": None}, violations=list(viol)),
+        codex_seat, ["openai", "xai"],
+    )
     assert SM.required_critical_families(NO_FLOOR_ROSTER) == 1
     got = SM.classify_violations(reduced)
     assert got["unexcused"] == [stands] and got["excusedByLiveness"] == []
     # requirement 2: one reachable family cannot meet the bar (excused); two can (stands)
-    one = dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0), violations=list(viol))
+    one = _with_test_role(
+        dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0), violations=list(viol)),
+        codex_seat, ["openai", "xai"],
+    )
     got = SM.classify_violations(one)
     assert stands not in got["unexcused"] and got["excusedByLiveness"]
-    two = dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0), violations=list(viol))
+    two = _with_test_role(
+        dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0), violations=list(viol)),
+        xai_seat, ["xai"],
+    )
     assert stands in SM.classify_violations(two)["unexcused"]
+
+
+# --- a panel outside every maker's family is not a critical-diversity breach (#2530) -------------
+
+
+def _seat_cfg(vendor, tier="reviewer-deep", source="rotated"):
+    model, effort = MR.matrix_config(tier, vendor)
+    return {
+        "vendor": vendor, "model": model, "effort": effort, "tier": tier,
+        "family": MR.family_for(tier, vendor), "source": source,
+    }
+
+
+def _outside_panel(vendor="codex", **seat_overrides):
+    """A PANEL_ROSTER map with every seat on ``vendor`` (default codex) — outside an anthropic author's family."""
+    seats = {seat: _seat_cfg(vendor) for seat in SM.PANEL_ROSTER}
+    seats.update(seat_overrides)
+    return {"seats": seats, "roster": list(SM.PANEL_ROSTER), "authorFamily": "anthropic"}
+
+
+def _legacy_stored_outside_panel():
+    """A map stored before #2530: every critical seat pinned to codex, no maker seated, with a
+    `critical-diversity` violation and degradation submitted with it."""
+    pins = {seat: {"vendor": "codex"} for seat in sorted(SM.CRITICAL_SEATS)}
+    built = SM.build(SM.PANEL_ROSTER, ["codex"], "anthropic", 0, pins=pins)
+    stored = SM.to_receipt(built, "anthropic")
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["degradations"] = [d for d in stored["degradations"] if d.get("constraint") != "critical-diversity"] + [
+        {"constraint": "critical-diversity", "reason": "relaxed critical-diversity — no assignment spanned ≥2 families"},
+    ]
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+def _has_critical_diversity(records):
+    return any(isinstance(r, dict) and r.get("constraint") == "critical-diversity" for r in records)
+
+
+def test_a_fresh_panel_outside_the_makers_records_no_critical_diversity_degradation():
+    # axis: build records the critical-diversity relaxation only for a chosen panel that is not outside the makers — see bite-proof record wo_a_2530_single_vendor_panel
+    for live, author in ((["claude"], "xai"), (["claude", "codex"], "anthropic")):
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        assert len({m["seats"][s]["family"] for s in SM.CRITICAL_SEATS}) == 1, (live, author)
+        assert not _has_critical_diversity(m["degradations"]), (live, author)
+        assert not _has_critical_diversity(SM.to_receipt(m, author)["degradations"]), (live, author)
+
+
+def test_a_build_whose_only_option_is_a_maker_family_keeps_todays_records():
+    # measured on base bbb344cf: the same records as after #2530 — a maker family is the only option for
+    # every seat, so the seats are recorded unfilled and the critical-diversity relaxation stays recorded
+    unfilled = ["seat-unfilled"] * len(SM.PANEL_ROSTER)
+    for live, author, extra in (
+        (["claude"], "anthropic", None),
+        (THREE_VENDORS, "xai", frozenset({"anthropic", "openai"})),
+    ):
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0, extra_maker_families=extra)
+        assert [d["constraint"] for d in m["degradations"]] == unfilled + ["critical-diversity"], (live, author)
+        assert {"constraint": "critical-diversity"} in SM.verify(m, author), (live, author)
+        assert _has_critical_diversity(SM.derived_violations(m)), (live, author)
+    # an unknown author leaves the makers unprovable, so a single-family panel keeps its record too
+    unknown = SM.build(SM.PANEL_ROSTER, ["claude"], None, 0)
+    assert _has_critical_diversity(unknown["degradations"])
+    assert {"constraint": "critical-diversity"} in SM.verify(unknown, None)
+
+
+def test_verify_reports_no_critical_diversity_for_a_panel_outside_the_makers():
+    # axis: verify reports critical-diversity only when the panel is not outside the makers — see bite-proof record wo_a_2530_single_vendor_panel
+    for live, author in ((["claude"], "xai"), (["claude", "codex"], "anthropic")):
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        assert SM.verify(m, author) == [], (live, author)
+    assert SM.verify(_outside_panel(), "anthropic") == []
+
+
+def test_derived_violations_drops_a_submitted_critical_diversity_on_a_panel_outside_the_makers():
+    # axis: derived_violations drops a stored critical-diversity record for a panel outside the makers — see bite-proof record wo_a_2530_single_vendor_panel
+    stored = _legacy_stored_outside_panel()
+    assert SM.panel_outside_makers(stored, "anthropic")
+    assert SM.derived_violations(stored) == []
+    assert SM.derived_violations(stored, "anthropic") == []
+    classified = SM.classify_violations(stored, "anthropic")
+    assert classified == {"unexcused": [], "excusedByPin": [], "excusedByLiveness": []}
+    assert SM.unexcused_violations(stored) == []
+
+
+def test_derived_violations_keeps_a_submitted_critical_diversity_when_a_maker_is_seated():
+    stored = _legacy_stored_outside_panel()
+    stored["seats"] = dict(stored["seats"], **{"security-reviewer": _seat_cfg("claude", source="pinned")})
+    assert not SM.panel_outside_makers(stored, "anthropic")
+    assert _has_critical_diversity(SM.derived_violations(stored, "anthropic"))
+
+
+def test_panel_outside_makers_accepts_a_panel_that_shares_one_vendor_or_family():
+    assert SM.panel_outside_makers(_outside_panel(), "anthropic")
+    mixed = _outside_panel(**{"test-role": _seat_cfg("cursor")})
+    assert SM.panel_outside_makers(mixed, "anthropic")
+    # makerFamilies absent or an empty list is the author alone
+    assert SM.panel_outside_makers(dict(_outside_panel(), makerFamilies=[]), "anthropic")
+    # a map with no roster walks every known seat it carries
+    rosterless = {k: v for k, v in _outside_panel().items() if k != "roster"}
+    assert SM.panel_outside_makers(rosterless, "anthropic")
+
+
+def test_panel_outside_makers_edge_a_a_seat_in_the_authors_family_is_not_outside():
+    # axis: a seat in the author's family keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+    for seat in ("security-reviewer", "test-role"):
+        m = _outside_panel(**{seat: _seat_cfg("claude")})
+        assert not SM.panel_outside_makers(m, "anthropic"), seat
+    critical = _outside_panel(**{seat: _seat_cfg("claude") for seat in SM.CRITICAL_SEATS})
+    assert not SM.panel_outside_makers(critical, "anthropic")
+    violations = SM.verify(critical, "anthropic")
+    assert {"constraint": "critical-diversity"} in violations
+    assert any(v.get("constraint") == "maker-family" for v in violations)
+    assert _has_critical_diversity(SM.derived_violations(critical, "anthropic"))
+
+
+def test_panel_outside_makers_edge_b_an_extra_maker_seated_is_not_outside():
+    # axis: a seat in an extra maker's family keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+    m = dict(_outside_panel(**{"test-role": _seat_cfg("cursor")}), makerFamilies=["xai"])
+    assert not SM.panel_outside_makers(m, "anthropic")
+    assert {"constraint": "critical-diversity"} in SM.verify(m, "anthropic")
+    assert _has_critical_diversity(SM.derived_violations(m))
+    # the same map naming an extra maker nobody is seated in is still outside every maker's family
+    assert SM.panel_outside_makers(dict(m, makerFamilies=["google"]), "anthropic")
+
+
+@pytest.mark.parametrize("bad", ["xai", None, 7, {"xai": True}, ["xai", 5], ["xai", None], ["xai", ""], [""], [["xai"]]])
+def test_panel_outside_makers_edge_c_malformed_maker_families_is_not_outside(bad):
+    # axis: a malformed makerFamilies is unusable maker evidence and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+    m = dict(_outside_panel(), makerFamilies=bad)
+    assert not SM.panel_outside_makers(m, "anthropic")
+    assert {"constraint": "critical-diversity"} in SM.verify(m, "anthropic")
+    assert _has_critical_diversity(SM.derived_violations(m))
+
+
+@pytest.mark.parametrize("author", [None, "", 42, ["anthropic"]])
+@pytest.mark.parametrize("makers", ["absent", [], ["xai"]])
+def test_panel_outside_makers_edge_d_an_unknown_author_family_is_not_outside(author, makers):
+    # axis: an unknown author family leaves the maker set unprovable and keeps today's records — see bite-proof record wo_a_2530_single_vendor_panel
+    m = _outside_panel()
+    if makers != "absent":
+        m["makerFamilies"] = makers
+    assert not SM.panel_outside_makers(m, author)
+    if author is None or author == "":
+        assert {"constraint": "critical-diversity"} in SM.verify(m, author)
+        assert _has_critical_diversity(SM.derived_violations(dict(m, authorFamily=author)))
+
+
+def test_panel_outside_makers_edge_e_an_unresolvable_or_malformed_seat_is_not_outside():
+    # axis: a walked seat whose family does not resolve cannot be proven outside the makers — see bite-proof record wo_a_2530_single_vendor_panel
+    unresolvable = {"vendor": "nosuchvendor", "model": "x", "effort": "high", "tier": "reviewer", "source": "rotated"}
+    no_vendor = {"model": "x", "effort": "high", "tier": "reviewer", "source": "rotated"}
+    null_vendor = {"vendor": None, "source": "rotated"}
+    for bad in (unresolvable, no_vendor, null_vendor, "codex", 7, None, ["codex"]):
+        for seat in ("test-role", "security-reviewer"):
+            m = _outside_panel(**{seat: bad})
+            assert not SM.panel_outside_makers(m, "anthropic"), (seat, bad)
+
+
+def test_panel_outside_makers_edge_f_no_filled_critical_seat_is_not_outside():
+    # axis: a map with no filled critical seat is governed by seat-unfilled, never exempt — see bite-proof record wo_a_2530_single_vendor_panel
+    unfilled = SM._unfilled_cfg("reviewer-deep")
+    all_unfilled = _outside_panel(**{seat: dict(unfilled) for seat in SM.CRITICAL_SEATS})
+    assert not SM.panel_outside_makers(all_unfilled, "anthropic")
+    assert {"constraint": "critical-diversity"} in SM.verify(all_unfilled, "anthropic")
+    absent = _outside_panel()
+    for seat in SM.CRITICAL_SEATS:
+        del absent["seats"][seat]
+    absent["roster"] = ["test-role"]
+    assert not SM.panel_outside_makers(absent, "anthropic")
+    assert not SM.panel_outside_makers({"seats": {}}, "anthropic")
+    # a filled critical seat that is not a dict is not a filled critical seat
+    assert not SM.panel_outside_makers({"seats": {"code-reviewer": "codex"}, "roster": ["code-reviewer"]}, "anthropic")
+
+
+def test_panel_outside_makers_edge_g_unreadable_map_or_seats_is_not_outside():
+    for bad_map in (None, [], "map", 7):
+        assert not SM.panel_outside_makers(bad_map, "anthropic"), bad_map
+    for bad_seats in (None, [], "seats", 7):
+        assert not SM.panel_outside_makers(dict(_outside_panel(), seats=bad_seats), "anthropic"), bad_seats
+    no_seats = {k: v for k, v in _outside_panel().items() if k != "seats"}
+    assert not SM.panel_outside_makers(no_seats, "anthropic")
+
+
+def test_panel_outside_makers_edge_h_unfilled_seats_are_skipped():
+    unfilled = SM._unfilled_cfg("reviewer")
+    m = _outside_panel(**{"test-role": dict(unfilled), "premortem-reviewer": dict(unfilled)})
+    assert SM.panel_outside_makers(m, "anthropic")
+    # an unfilled critical seat is skipped too, while another critical seat is filled
+    one_critical = _outside_panel(**{"premortem-reviewer": dict(unfilled), "test-role": dict(unfilled)})
+    one_critical["seats"]["security-reviewer"] = dict(unfilled)
+    assert SM.panel_outside_makers(one_critical, "anthropic")
+    # an unfilled seat does not hide a seated maker
+    with_maker = _outside_panel(**{"test-role": dict(unfilled), "code-reviewer": _seat_cfg("claude")})
+    assert not SM.panel_outside_makers(with_maker, "anthropic")
+
+
+def test_panel_outside_makers_extra_makers_are_makers_of_the_whole_session():
+    # axis: the session's other makers join the maker set — see bite-proof record wo_a_2530_single_vendor_panel
+    m = _outside_panel()
+    assert SM.panel_outside_makers(m, "anthropic")
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers=())
+    assert not SM.panel_outside_makers(m, "anthropic", extra_makers={"openai"})
+    assert not SM.panel_outside_makers(m, "anthropic", extra_makers=frozenset({"google", "openai"}))
+    assert not SM.panel_outside_makers(m, "anthropic", ["openai"])
+    # an extra maker nobody is seated in leaves the panel outside
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers={"google"})
+    # the same set reaches verify, derived_violations, classify_violations and unexcused_violations
+    stored = dict(_legacy_stored_outside_panel())
+    assert SM.verify(m, "anthropic") == []
+    assert {"constraint": "critical-diversity"} in SM.verify(m, "anthropic", {"openai"})
+    assert SM.derived_violations(stored, "anthropic") == []
+    assert _has_critical_diversity(SM.derived_violations(stored, "anthropic", {"openai"}))
+    assert SM.classify_violations(stored, "anthropic")["excusedByPin"] == []
+    assert _has_critical_diversity(SM.classify_violations(stored, "anthropic", {"openai"})["excusedByPin"])
+    assert SM.unexcused_violations(stored, "anthropic") == []
+
+
+def test_panel_outside_makers_ignores_a_non_string_or_empty_extra_maker():
+    # E4: the caller's set is already filtered; a bad member is dropped, never raised on and never a maker
+    m = _outside_panel()
+    for bad in ("", None, 7, ("openai",), ["openai"], {"a": 1}, 1.5, False):
+        assert SM.panel_outside_makers(m, "anthropic", extra_makers=[bad]), bad
+        assert SM.panel_outside_makers(m, "anthropic", extra_makers=[bad, "google"]), bad
+        assert not SM.panel_outside_makers(m, "anthropic", extra_makers=[bad, "openai"]), bad
+    assert SM.panel_outside_makers(m, "anthropic", extra_makers=frozenset({"", "google"}))
 
 
 # --- the maker's family is barred from every known seat -----------------------------------------

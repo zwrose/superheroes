@@ -430,7 +430,11 @@ Any model that built or fixed the product's code under review. The build session
 
 ### Leftover
 
-A finding with a real consequence that the review left unfixed, and that no on-record decision settles. It comes to the owner under "What you're accepting" on the PR's [sheet](#sheet), whatever its severity. Its outcome in the [review record](#review-record) is `left-for-owner`.
+A finding with a real consequence that the review left unfixed, and that no on-record decision settles. It comes to the owner as a card on the PR's [sheet](#sheet) unless the [review record](#review-record) lists it for the merge verdict (the rule is [in the review record reference](../skills/review-code/reference/review-record.md#what-reviewed-means)). Its outcome in the review record is `left-for-owner`.
+
+### Listed finding
+
+A finding the [review record](#review-record) lists for the merge verdict instead of sending it to the owner as a card; the owner accepts it by merging. Which findings the record lists is stated [in the review record reference](../skills/review-code/reference/review-record.md#what-reviewed-means).
 
 ### Test role
 

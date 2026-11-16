@@ -14,6 +14,7 @@ HEADER_VALIDATED = "## Validated findings"
 HEADER_TRACKED = "## Tracked / filed"
 HEADER_VITALS = "## Vitals delta"
 HEADER_REPORT_CARD = "## Report card"
+HEADER_SKIPPED = "## Skipped trees"
 HEADER_FUNNEL = "## Candidate funnel"
 
 _STANDING_BODY = """\
@@ -203,13 +204,18 @@ def _render_report_card(lines, card):
         entry = card[lens]
         if not isinstance(entry, dict):
             continue
-        lines.append("- %s: %d for / %d against (%s actionability, sweeps=%s)" % (
+        line = "- %s: %d for / %d against (%s actionability, sweeps=%s)" % (
             lens,
             entry.get("for", 0),
             entry.get("against", 0),
             _percent(entry.get("actionability")),
             "unknown" if entry.get("sweeps") is None else entry.get("sweeps"),
-        ))
+        )
+        # Axis: findings deferred by policy sit outside the ratio; show their count on the
+        # lens line only when there are some, so a lens without any reads exactly as before.
+        if entry.get("deferred", 0) > 0:
+            line += ", %d deferred by policy" % entry["deferred"]
+        lines.append(line)
         if entry.get("benched"):
             lines.append("  - %s" % (entry.get("reason") or ("%s is benched" % lens)))
         elif entry.get("adjudicated", 0) == 0 or entry.get("sweeps") is None \
@@ -218,6 +224,49 @@ def _render_report_card(lines, card):
             reason = entry.get("reason")
             if reason:
                 lines.append("  - %s" % reason)
+    lines.append("")
+
+
+def _render_skipped_trees(lines, skipped):
+    """The calibrated duplication skip trees: each glob and the files it covered."""
+    lines.append(HEADER_SKIPPED)
+    lines.append("")
+    read = skipped.get("read") if isinstance(skipped, dict) else None
+    read = read if isinstance(read, dict) else {}
+    globs = read.get("globs") or []
+    reason = read.get("reason")
+    if reason:
+        # bite-proof axis: an unreadable value is stated, not silent.
+        line = ("- nothing skipped: the duplication skip trees could not be read (%s)"
+                % reason)
+        if read.get("detail"):
+            line += ": %s" % read["detail"]
+        lines.append(line)
+        lines.append("")
+        return
+    if not globs:
+        lines.append("_None._")
+        lines.append("")
+        return
+    lens_entries = skipped.get("lenses") if isinstance(skipped, dict) else None
+    dup = lens_entries.get("duplication") if isinstance(lens_entries, dict) else None
+    dup = dup if isinstance(dup, dict) else None
+    counts = {}
+    if dup is not None:
+        for item in dup.get("globs") or []:
+            if isinstance(item, dict) and isinstance(item.get("glob"), str):
+                counts[item["glob"]] = item.get("files")
+    for glob in globs:
+        if dup is None:
+            lines.append(
+                "- `%s`: file count not measured (the duplication lens did not reach "
+                "its census)" % glob)
+        else:
+            lines.append(
+                "- `%s`: %s file(s) skipped by the duplication lens"
+                % (glob, counts.get(glob, 0)))
+    if dup is not None:
+        lines.append("- %s file(s) skipped in all" % dup.get("files", 0))
     lines.append("")
 
 
@@ -283,6 +332,9 @@ def render(bundle, dispositions, ledger):
         for note in notes:
             lines.append("- %s" % note)
         lines.append("")
+
+    # Skipped trees
+    _render_skipped_trees(lines, bundle.get("skippedTrees"))
 
     # Candidate funnel
     lines.append(HEADER_FUNNEL)

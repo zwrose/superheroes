@@ -65,13 +65,15 @@ def _result(risk_areas, reason=None, detail=None, areas=None, touched_areas=None
     }
 
 
-def touched(cwd, paths, root=None):
+def touched(cwd, paths, root=None, stored=None):
     """The risk areas that ``paths`` touch. ``riskAreas`` is ``set`` only when core.md holds a
     valid, non-empty list; every other state is ``not-set`` with ``reason`` ``missing``,
-    ``empty`` or ``unreadable`` and ``touched`` empty."""
+    ``empty`` or ``unreadable`` and ``touched`` empty. A ``stored`` dict (a read of
+    ``core_md.read_risk_areas`` taken earlier) stands in for the live read."""
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return _result("not-set", REASON_UNREADABLE, "paths-not-a-list-of-strings")
-    stored = core_md.read_risk_areas(cwd, root=root)
+    if not isinstance(stored, dict):
+        stored = core_md.read_risk_areas(cwd, root=root)
     reason = stored.get("reason")
     # axis: an unreadable or malformed store is never reported as set or as touching none — see bite-proof record wo_a_1712_risk-areas
     if reason in (core_md.RISK_AREAS_REASON_MALFORMED, core_md.RISK_AREAS_REASON_UNREADABLE):

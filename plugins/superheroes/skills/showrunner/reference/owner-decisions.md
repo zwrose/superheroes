@@ -625,9 +625,13 @@ advisor run together to keep calibration honest.
    or more days have passed since the last record and no "gardening pass owed" item is on the
    [collector](../../../rubric/glossary.md#collector), **the advisor appends one, dated, and says so at
    the walk**.
-3. The item **stays on the collector until the pass runs and its record lands**, which closes it.
+3. The item **stays on the collector until the pass is done and its record lands**, which closes it.
+   A record that lists pending items leaves it open (**Every pass is a full pass**, at this
+   section's end).
 4. **The owner picks the sitting.** The advisor may prepare the sweep beforehand so the sitting is
-   short. **A walk opened for one urgent ruling is never turned into a pass by the calendar.**
+   short. **Prep a pass leaves owed is checked at the start of the next pass**: preparing the sweep
+   beforehand, or anything a record marks as prep before the next pass. The next record says whether
+   each was done. **A walk opened for one urgent ruling is never turned into a pass by the calendar.**
 5. **There is no scheduler.** Until the first gardening record exists, **the project's calibration
    date stands in for "the last gardening record"** everywhere this rule is read, so the first pass
    falls on the first walk a week after calibration.
@@ -675,22 +679,23 @@ advisor run together to keep calibration honest.
      escapes seen and left. A loosening: "drop a risk area no escape and no catch has touched in its
      window".
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
-     escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
-     record writer's `read --pr <n>` returns it, and each review escape as its review's date
+     escapes only, and decides nothing. Its input is every review record of each PR, as the
+     record writer reads each (the same records the measures row reads), and each review escape as its review's date
      (`reviewedAt`), its call (`missed` or `seen-and-left`) and its kind (`kind`, spelled as in the
      entry's caught-by line). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
      included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
-     dated by that record and counts only when the date is on or after the adoption day and inside
+     dated by its latest record and counts only when the date is on or after the adoption day and inside
      the condition window. The record keeps no first date for a finding, so a catch carried from a
      review before the adoption day into a later re-review counts by the later date; the advisor
      weighs that before relying on a seat's count. The advisor reads the counts and judges. Missing
      evidence reads unmeasured, never zero: the helper's tally contract says which records and escapes
      it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
-     reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
-     is left out unread. A catch is
-     credited to the seat whose run raised it (the finding's `raisedBy`) when the record shows that
-     seat ran on the PR; when it does not (the record shows only its latest review session), that
+     reading an unmeasured tally as unmeasured rather than as nothing. The latest record places the whole PR
+     in or out of the range, every record of a counted PR is read and checked, and the records of a PR
+     left out are left out unread. A catch is
+     credited to the seat whose run raised it (the finding's `raisedBy`) when any record of the PR
+     shows that seat ran; when none does, that
      seat's `caught` count reads unmeasured. A catch whose raiser names no seat at all counts as
      unattributed. A catch with
      no recorded raiser is credited to no seat, and the `caught` count of every seat that ran on its
@@ -833,9 +838,12 @@ ninth duty.
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
 - **The decisions-asked count comes from the project's own record**, its configuration profile and
   its gardening records, **never from a founding document**.
-- **If the full pass proves overwhelming, the named fallback is a bounded pass**: urgent exceptions
-  plus one or two retirement proposals per pass, the rest carried forward on the queue, the guardian
-  sweep produced before the sitting. **Moving to the bounded pass is the owner's word at a walk.**
+
+**Every pass is a full pass.** No smaller pass stands in for it, whatever the sitting allows. When a
+sitting ends before the pass is done, the record lists what is unfinished as pending items, and **the
+pass stays owed until they are done**, the way guardian staleness works in duty 6: its clock does not
+reset until triage is recorded. The owner's time is already bounded by the draw in duty 2, about five
+proposals per pass with more only on the owner's word, so nothing shortens the pass to bound it.
 
 ## The gardening record
 
@@ -861,6 +869,10 @@ ninth duty.
   `review_measures.py render --cwd <root>` prints them, with each unmeasured measure and its reason;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
+- **the pending items**: what the sitting left unfinished, each of which keeps the pass owed, or
+  **None**;
+- **the owed prep**: for each piece of prep the last record left owed, whether it was done before
+  this pass, or that the last record left none;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
 - the open questions the passes carry until settled;
 - and **the misses-log appends made**, the review escapes among them, the escapes tallied by kind beside the per-seat tally, and the calibration proposals the pass brought.
@@ -937,7 +949,12 @@ say how it changes and what the advisor says when the owner finds a review slow.
   finishes what remains by hand (committing that entry, or writing and reading back the setting)
   instead of running `apply` again, which would append a second entry.
 - **From the next review on.** A Risk and trust change takes effect for every review that starts after
-  the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
+  the setting is written. The advisor runs `apply` as soon as the owner approves, whatever reviews are
+  running: each review session keeps the calibration it read when it started (its risk areas, engine
+  preferences, store-mode ratified residuals, and copies of the calibration files its seats read) for
+  its whole run, so a running review finishes on the calibration it started with and the next one sees
+  the change. A review session whose state carries no capture reads calibration live until it ends, so
+  a change applied while it runs reaches it mid-run. A standing
   ruling about leftovers binds where Canon's own reading rules say it does.
 - **The adoption day.** The project's adoption day is recorded once, with `lib/review_learning.py adopt`,
   when the project adopts the plugin release that carries this learning. It lives in the project's

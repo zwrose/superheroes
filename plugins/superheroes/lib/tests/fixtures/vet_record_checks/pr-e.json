@@ -14,7 +14,6 @@
   "record": {
     "carriedRechecks": [],
     "checked": [
-      "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
@@ -45,6 +44,7 @@
         "file": "a.py",
         "findingKey": "rr1:1b450b736ba4a053a9a8a6d1a4511d8e",
         "id": "code-null-guard",
+        "inRiskArea": null,
         "line": 3,
         "outcome": "fixed",
         "reason": "fixed in 1a2b3c4",
@@ -59,6 +59,7 @@
         "file": "a.py",
         "findingKey": "rr1:3c2e56ec565cd301b53be8156c8b1f5a",
         "id": "code-retry-window",
+        "inRiskArea": null,
         "line": 3,
         "outcome": "left-for-owner",
         "reason": "needs the owner's call on the retry window",
@@ -93,6 +94,7 @@
     "leftForOwner": [
       "code-retry-window"
     ],
+    "listedForMerge": [],
     "makers": [
       {
         "family": "anthropic"

@@ -109,8 +109,8 @@ def _item_by_slug(payload, slug):
 
 
 def test_registry_has_every_item_in_order():
-    assert len(PC.ITEMS) == 18
-    assert [item["number"] for item in PC.ITEMS] == [1, 2, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17, 18, 19, 20]
+    assert len(PC.ITEMS) == 19
+    assert [item["number"] for item in PC.ITEMS] == [1, 2, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",
         "p0Definition",
@@ -129,6 +129,7 @@ def test_registry_has_every_item_in_order():
         "cloudSetupCommands",
         "cloudSetupInputs",
         "cloudDependencyHook",
+        "duplicationSkip",
         "advisorIssues",
     ]
 
@@ -148,12 +149,12 @@ def test_the_items_carrying_a_plugin_default():
 def test_view_lists_every_item_unstamped_profile(tmp_path):
     repo, store = _setup_repo(tmp_path, unstamped=True)
     got = PC.view(repo, root=store)
-    assert len(got["items"]) == 18
+    assert len(got["items"]) == 19
     assert [item["slug"] for item in got["items"]] == [item["slug"] for item in PC.ITEMS]
     plugin_default = [item for item in got["items"] if item["source"] == "plugin-default"]
     unset = [item for item in got["items"] if item["source"] == "unset"]
     assert len(plugin_default) == 4
-    assert len(unset) == 14
+    assert len(unset) == 15
 
 
 def test_retired_dial_and_budget_n_slugs_are_unknown(tmp_path):
@@ -404,7 +405,7 @@ def test_cli_view(tmp_path, capsys):
     rc = PC.main(["view", "--cwd", repo, "--root", store])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["items"]) == 18
+    assert len(payload["items"]) == 19
 
 
 def test_cli_get_and_set(tmp_path, capsys, monkeypatch):
@@ -596,7 +597,7 @@ def test_set_item_16_writes_the_name_to_project_configuration(tmp_path):
 def test_registry_carries_item_17_cloud_setup_commands():
     # axis: item 17 registration; the list item missing, or carrying a default that would run commands nobody listed
     item = next(entry for entry in PC.ITEMS if entry["slug"] == "cloudSetupCommands")
-    assert item["slug"] == "cloudSetupCommands" and item["number"] == 17
+    assert item["number"] == 17
     assert item["name"] == "Cloud setup commands" and item["shape"] == "commandList"
     assert item["plugin_default"] is None and item["home"] == PC.HOME_PROJECT_CONFIGURATION
     assert PC.CLOUD_SETUP_COMMANDS_SLUG == "cloudSetupCommands"

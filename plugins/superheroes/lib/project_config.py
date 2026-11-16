@@ -45,6 +45,9 @@ CI_WORKFLOW_SLUG = "ciWorkflow"
 CLOUD_SETUP_COMMANDS_SLUG = "cloudSetupCommands"
 CLOUD_SETUP_INPUTS_SLUG = "cloudSetupInputs"
 CLOUD_DEPENDENCY_HOOK_SLUG = "cloudDependencyHook"
+DUPLICATION_SKIP_SLUG = "duplicationSkip"
+REASON_DUPLICATION_SKIP_MALFORMED = "duplication-skip-malformed"
+REASON_DUPLICATION_SKIP_UNREADABLE = "duplication-skip-unreadable"
 ADVISOR_ISSUES_SLUG = "advisorIssues"
 ADVISOR_ISSUES_DECLARED = "declared"
 ADVISOR_ISSUES_UNSET = "unset"
@@ -207,6 +210,14 @@ ITEMS = (
     },
     {
         "number": 20,
+        "slug": "duplicationSkip",
+        "name": "Duplication skip trees",
+        "home": HOME_PROJECT_CONFIGURATION,
+        "shape": "globList",
+        "plugin_default": None,
+    },
+    {
+        "number": 21,
         "slug": "advisorIssues",
         "name": "Advisor issues",
         "home": HOME_PROJECT_CONFIGURATION,
@@ -334,6 +345,13 @@ def _validate_inputs_not_secret_shaped(inputs):
     return None
 
 
+def _validate_glob_list(value):
+    # axis: a duplication-skip value that is not a list of non-empty, non-absolute strings is refused at set
+    if core_md.validate_size_exclude(value):
+        return REASON_MALFORMED_VALUE
+    return None
+
+
 def _validate_boolean(value):
     if not isinstance(value, bool):
         return REASON_MALFORMED_VALUE
@@ -414,6 +432,7 @@ _VALIDATORS = {
     "pathList": _validate_path_list,
     "commandList": _validate_command_list,
     "inputPathList": _validate_input_path_list,
+    "globList": _validate_glob_list,
     "boolean": _validate_boolean,
     "conditionWindows": _validate_condition_windows,
     "guardianCadence": _validate_guardian_cadence,
@@ -432,6 +451,78 @@ def validate_item_value(item, value):
 
 def _item_by_slug(slug):
     return _SLUG_INDEX.get(slug)
+
+
+def read_duplication_skip(cwd, root=None):
+    """The globs the guardian duplication lens skips, as ``{"globs", "reason", "detail"}``.
+    Total and read-only: never raises, never writes. An absent core.md or an unset item skips
+    nothing with reason None; a valid value reads back as a copy; a malformed value or an
+    unreadable core.md skips nothing and names why."""
+    # axis: a stored value that cannot be used skips nothing and names why, and the reader never raises
+    def skip_nothing(reason=None, detail=None):
+        return {"globs": [], "reason": reason, "detail": detail}
+
+    try:
+        try:
+            path = core_md._size_exclude_core_path(cwd, root)
+        except core_md.RepoRootUnavailable as exc:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "repo-root-unavailable: %s" % core_md.gate_refusal_detail(exc),
+            )
+        if path is None:
+            return skip_nothing()
+        facts = core_md.read(cwd, root, persist_backfill=False)
+        if facts is None:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-unreadable: core.md could not be read or parsed",
+            )
+        # parse_core replaces a non-object projectConfiguration with {}, so the parsed facts
+        # cannot show it: read the JSON block again, exactly as parse_core does.
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-block-unreadable",
+            )
+        block = None
+        match = core_md._JSON_BLOCK.search(text)
+        if match:
+            try:
+                block = json.loads(match.group(1))
+            except ValueError:
+                block = None
+        if block is None:
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "core-md-block-unreadable",
+            )
+        # axis: a non-object projectConfiguration skips nothing and is named unreadable, never reason None
+        if (isinstance(block, dict)
+                and core_md.PROJECT_CONFIGURATION_KEY in block
+                and block[core_md.PROJECT_CONFIGURATION_KEY] is not None
+                and not isinstance(block[core_md.PROJECT_CONFIGURATION_KEY], dict)):
+            return skip_nothing(
+                REASON_DUPLICATION_SKIP_UNREADABLE,
+                "project-configuration-not-an-object",
+            )
+        mapping = _project_config_mapping(facts)
+        raw = _read_project_config_raw(mapping, DUPLICATION_SKIP_SLUG)
+        if raw is None:
+            return skip_nothing()
+        if validate_item_value(_item_by_slug(DUPLICATION_SKIP_SLUG), raw) is not None:
+            problems = core_md.validate_size_exclude(raw)
+            detail = problems[0]["reason"] if problems else "not a list of globs"
+            return skip_nothing(REASON_DUPLICATION_SKIP_MALFORMED, detail)
+        return {"globs": list(raw), "reason": None, "detail": None}
+    except Exception as exc:
+        return skip_nothing(
+            REASON_DUPLICATION_SKIP_UNREADABLE,
+            "unexpected %s: %s" % (type(exc).__name__, exc),
+        )
 
 
 def _guardian_cadence_raw(cwd, root, *, persist_backfill=True):
@@ -577,7 +668,7 @@ def _resolve_item_entry(item, raw, *, guardian_cfg=None, risk_areas_read=None):
 
 
 def _advisor_issues_resolve(cwd, root=None):
-    """Item 20's one read: the public result and the reader's raw value (None unless a value was
+    """Item 21's one read: the public result and the reader's raw value (None unless a value was
     stored). Total: never raises, never writes."""
     unset = {
         "status": ADVISOR_ISSUES_UNSET, "collector": None, "inboxes": [],
@@ -604,7 +695,7 @@ def _advisor_issues_resolve(cwd, root=None):
 
 
 def advisor_issues(cwd, root=None):
-    """Item 20 through the one total reader: ``status`` is ``declared`` (the collector number and
+    """Item 21 through the one total reader: ``status`` is ``declared`` (the collector number and
     the inbox numbers), ``unset`` (nothing declared, or no core calibration), or ``unreadable``
     (a stored value that cannot be read is never read as nothing declared). Never raises, never
     writes."""
@@ -620,7 +711,7 @@ def _advisor_issues_entry(result, raw):
             "malformed": False,
         }
     if result["status"] == ADVISOR_ISSUES_UNREADABLE:
-        # axis: V1 an unreadable item 20 reads malformed, never as unset — see bite-proof record i2504_wo_a_advisor_issues V1
+        # axis: V1 an unreadable item 21 reads malformed, never as unset — see bite-proof record i2504_wo_a_advisor_issues V1
         return {"raw": raw, "effective": None, "source": "unset", "malformed": True}
     return {"raw": None, "effective": None, "source": "unset", "malformed": False}
 

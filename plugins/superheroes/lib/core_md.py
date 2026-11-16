@@ -2251,13 +2251,14 @@ PROJECT_CONFIG_REASON_UNREADABLE = "project-config-unreadable"
 PROJECT_CONFIG_REASON_CORE_ABSENT = "core-md-absent"
 
 
-def read_project_config_value(cwd, key, root=None):
-    """Read one raw ``projectConfiguration[key]`` value from core.md. Total and read-only: never
-    raises, never writes. Returns ``present`` (the key is in the raw object), ``value`` (a deep
-    copy of the stored value when present, else None; a stored JSON null is present with value
-    None), ``reason`` (None on a successful read, ``core-md-absent`` when there is no core
-    calibration file, ``project-config-unreadable`` for every other failure), ``detail`` (None or
-    a string naming the underlying reason or exception) and ``behind``."""
+def read_project_config_value(cwd, key, root=None, path=None):
+    """Read one raw ``projectConfiguration[key]`` value from core.md (from the file ``path`` when
+    given, as a review session's pinned copy; a given path is never swapped for the live file).
+    Total and read-only: never raises, never writes. Returns ``present`` (the key is in the raw
+    object), ``value`` (a deep copy of the stored value when present, else None; a stored JSON null
+    is present with value None), ``reason`` (None on a successful read, ``core-md-absent`` when
+    there is no core calibration file, ``project-config-unreadable`` for every other failure),
+    ``detail`` (None or a string naming the underlying reason or exception) and ``behind``."""
     base = {
         "present": False,
         "value": None,
@@ -2268,7 +2269,7 @@ def read_project_config_value(cwd, key, root=None):
     unreadable = PROJECT_CONFIG_REASON_UNREADABLE
     try:
         try:
-            path = _size_exclude_core_path(cwd, root)
+            path = path or _size_exclude_core_path(cwd, root)
         except RepoRootUnavailable as exc:
             return dict(base, reason=unreadable,
                         detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
@@ -2321,8 +2322,9 @@ def read_project_config_value(cwd, key, root=None):
         return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
 
 
-def read_risk_areas(cwd, root=None):
-    """Read ``projectConfiguration.riskAreas`` from core.md. Total and read-only: never raises,
+def read_risk_areas(cwd, root=None, path=None):
+    """Read ``projectConfiguration.riskAreas`` from core.md (from the file ``path`` when given, as a
+    review session's pinned copy). Total and read-only: never raises,
     never writes. An absent key (or an absent core.md) reads areas None with no malformed items;
     a valid key reads its areas as stored; a present but invalid key reads declared True, areas
     None, reason ``risk-areas-malformed``; every other failure reads reason
@@ -2337,7 +2339,7 @@ def read_risk_areas(cwd, root=None):
     }
     unreadable = RISK_AREAS_REASON_UNREADABLE
     try:
-        got = read_project_config_value(cwd, RISK_AREAS_KEY, root)
+        got = read_project_config_value(cwd, RISK_AREAS_KEY, root, path=path)
         if got["reason"] == PROJECT_CONFIG_REASON_UNREADABLE:
             return dict(base, reason=unreadable, detail=got["detail"], behind=got["behind"])
         if got["reason"] == PROJECT_CONFIG_REASON_CORE_ABSENT:

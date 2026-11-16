@@ -12,7 +12,8 @@
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
 - §4.9 — Size count exclusions — none by default
-- §4.10 — Advisor issues — the collector and the inboxes
+- §4.10 — Duplication skip trees — none by default
+- §4.11 — Advisor issues — the collector and the inboxes
 - §5 — Secrets stay out of shared calibration (NFR)
 - §6 — Cloud builds: the setup sitting
 - Recovering an interrupted set-up
@@ -481,11 +482,32 @@ size count, and lockfiles are always left out. When a project has generated or v
 should not count, the owner lists them later through the view-and-tune path, which holds the
 commands (`skills/configure/reference/view-and-tune.md` § 2).
 
-## 4.10 — Advisor issues — the collector and the inboxes
+## 4.10 — Duplication skip trees — none by default
+
+Set-up writes nothing for item 20 by default, so the guardian's duplication lens reads every tracked
+file. Set-up asks only when the project has frozen or generated trees (for example a frozen
+snapshot of an earlier design, or generated style files). Then it saves the owner's globs with the
+`project_config.py set --item duplicationSkip` command, stdin a JSON list of repo-relative globs
+(Python `fnmatch`, matched against the path from the repository root, `*` also crosses `/`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item duplicationSkip --cwd . <<'SUPERHEROES_ANSWER'
+["snapshots/**", "styles/generated/*.css"]
+SUPERHEROES_ANSWER
+```
+
+Each skipped glob and the number of files it covered appear in every sweep report, and an
+unreadable value skips nothing and the report says so. This answers a different question from § 4.9:
+size count exclusions decide what counts toward a pull request's size, while this decides which
+duplication is not worth reporting, so neither value is copied into the other. Later changes go
+through the view-and-tune path (`skills/configure/reference/view-and-tune.md` § 2).
+
+## 4.11 — Advisor issues — the collector and the inboxes
 
 Ask the owner for the issue number of the project's collector, and for the issue numbers of any
 inboxes: issues where routines or people post things for the advisor. No inbox is a fine answer.
-Write item 20 (`advisorIssues`) with both:
+Write item 21 (`advisorIssues`) with both:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -497,7 +519,7 @@ SUPERHEROES_ANSWER
 Read the result: only `written` or `noop` means it was saved. Report anything else to the owner with
 its `reason`, and nothing is stored.
 
-Skipping this leaves item 20 unset. The advisor then resolves the collector from its memory and reads
+Skipping this leaves item 21 unset. The advisor then resolves the collector from its memory and reads
 no inbox. What the advisor does with the collector and the inboxes is in
 `skills/showrunner/reference/owner-decisions.md` § Declared inboxes.
 

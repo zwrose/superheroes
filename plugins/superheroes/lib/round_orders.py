@@ -704,8 +704,10 @@ def resolve_base_residuals(
         return "", "git-cat-file-failed:%s" % exc
 
 
-def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, str | None, str | None]:
+def resolve_order_residuals(repo_root: str, base_oid: str | None,
+                            core_path: str | None = None) -> tuple[str, str | None, str | None]:
     """Read ratified residuals for order rendering — base-pinned in-repo, store-direct out-of-repo.
+    In store mode a ``core_path`` (a review session's pinned core copy) is read in place of the live core.
 
     Returns ``(residual_text, provenance_line, failure_reason)``. ``failure_reason`` is set when the
     calibration read failed or is unreadable; never claim 'none recorded' on a failure."""
@@ -725,7 +727,14 @@ def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, 
         provenance = (
             "Residuals below are read from the calibration store file (not base-pinned)."
         )
-        facts = core_md.read(repo_root)
+        if core_path:
+            try:
+                with open(core_path, encoding="utf-8") as fh:
+                    facts = core_md.parse_core(fh.read())
+            except (OSError, UnicodeDecodeError):
+                facts = None
+        else:
+            facts = core_md.read(repo_root)
         if facts is None:
             return "", provenance, "core-unreadable-or-absent"
         text = (facts.get("ratifiedResiduals") or "").strip()
