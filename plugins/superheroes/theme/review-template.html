@@ -1660,6 +1660,8 @@
     let prNumber = 0;
     // The digests of the earlier sheets a pr or stack sheet carries its verdict forward from, newest first (prSheet.carriedForward.sheets); empty when it carries none.
     let carriedSheets = [];
+    // Whether a pr or stack sheet is held (prSheet.held): taken down after a material move. A held page draws one notice and no card, walk, folded part or verdict control, and reads no verdict.
+    let heldSheet = false;
     // Whether the build recorded that every covered PR body lists no acceptance (prSheet.nothingListed); the one question the
     // "nothing to accept" words are shown on, so the app bar and the accepting line cannot answer it differently.
     let nothingListed = false;
@@ -1819,7 +1821,7 @@
             ? answered.length + " of " + total + " answered" + (chatting.length > 0 ? " · " + chatting.length + " open for chat" : "")
             : notLoaded;
       }
-      countHost.hidden = false;
+      countHost.hidden = heldSheet;
 
       // A card folds away only when it is answered, is not the open card and has nothing unsaved.
       const folding = ready && sheetKind === "remainder";
@@ -1870,7 +1872,7 @@
       cardsHost.hidden = !onePage && total === 0;
       whyBox.hidden = sheetKind !== "remainder";
       historyBox.hidden = sheetKind !== "final";
-      finalHost.hidden = sheetKind !== "final" && !revisedKind(sheetKind);
+      finalHost.hidden = heldSheet || (sheetKind !== "final" && !revisedKind(sheetKind));
       // The no-digest caption shows only once the sheet is ready, the schema says what a verdict is and this
       // browser can't work out which revision the sheet is: the last card's controls are then off, and this says why.
       if (digestCaption !== null) digestCaption.hidden = !(ready && verdictShape !== null && sheetDigest === null);
@@ -2050,7 +2052,7 @@
     const PR_WORD_KEYS = [
       "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
       "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
-      "carriedHeading", "carried", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "listedHeading", "reviewHeading",
+      "heldHeading", "held", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "listedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
       "acceptedCount", "nothingToAcceptCount", "acceptingUnchecked", "acceptingUncheckedCount", "acceptingCanon", "acceptingCanonCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
       "walkCount", "advisorWalked", "notWalkedByAdvisor", "expectLabel", "lookForLabel", "optionalBadge", "tapPicture", "pictureMissing", "fixQuestion",
@@ -2223,12 +2225,11 @@
       return box;
     }
 
-    // The box under What changed on a sheet that carries the earlier sheet's answers and Merge forward across a move that is not material; it replaces the changed box.
-    function buildCarried(prSheet) {
-      const carried = prSheet.carriedForward;
-      const box = prSection("section", "pr-carried", "sh-box");
-      box.appendChild(textElement("h2", "", prWords.carriedHeading));
-      box.appendChild(textElement("p", "", fill(prWords.carried, { date: carried.date, previous: shortCommit(prSheet.previousCommit), moved: carried.moved, why: carried.whyNotMaterial })));
+    // The one box a held sheet shows in place of everything else: the sheet was taken down and nothing on it can be answered.
+    function buildHeld() {
+      const box = prSection("section", "pr-held", "sh-box");
+      box.appendChild(textElement("h2", "", prWords.heldHeading));
+      box.appendChild(textElement("p", "", prWords.held));
       return box;
     }
 
@@ -2487,11 +2488,12 @@
     }
 
     // The parts above the cards, in the order the owner reads them: What changed, the box that says the PR moved
-    // (when it did), the walk, and the heading of What you're accepting with its line when there are no cards.
+    // (when it did and the sheet carries no earlier answers: a carried sheet shows no note of the carry), the walk,
+    // and the heading of What you're accepting with its line when there are no cards.
     function prHead(prSheet, hasCards) {
       const parts = [buildWhatChanged(prSheet)];
-      if (prSheet.carriedForward !== undefined) parts.push(buildCarried(prSheet));
-      else if (prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
+      // axis: a carried sheet draws no note of the carry (no carried box, no changed box); only an uncarried sheet with previousCommit draws the changed box — see bite-proof record i2496_wo_c_sheet_head (E-nonote)
+      if (prSheet.carriedForward === undefined && prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
       if (prSheet.walk !== undefined) parts.push(buildWalk(prSheet.walk));
       const accepting = textElement("h2", "", prWords.acceptingHeading);
       accepting.id = "pr-accepting";
@@ -2538,7 +2540,10 @@
       finalHost.replaceChildren();
       // The kind is set before the cards are built: a card's saver reads it to decide whether its answers carry a revision.
       sheetKind = sheet.kind;
-      items = sheet.cards.map(function (card, index) {
+      // axis: a held pr or stack sheet draws no card, walk, folded part or verdict control, whatever else the sheet holds: only its notice — see bite-proof record i2496_wo_c_sheet_head (E-held-page)
+      heldSheet = revisedKind(sheetKind) && sheet.prSheet.held === true;
+      const drawn = heldSheet ? [] : sheet.cards;
+      items = drawn.map(function (card, index) {
         const article = buildCard(card);
         if (sheet.kind !== "index") fragment.appendChild(article);
         return { id: card.id, question: card.question, options: card.options, article: article, row: actionButton("", function () { openAt(index); }) };
@@ -2546,7 +2551,8 @@
       onePage = onePageKind(sheetKind);
       sheetPage.className = onePage ? "sheet-page is-pr" : "sheet-page";
       prNumber = revisedKind(sheetKind) ? sheet.prSheet.number : 0;
-      carriedSheets = revisedKind(sheetKind) && sheet.prSheet.carriedForward !== undefined ? sheet.prSheet.carriedForward.sheets : [];
+      // A held sheet reads no verdict, so the chain it would have carried one through stays empty.
+      carriedSheets = revisedKind(sheetKind) && !heldSheet && sheet.prSheet.carriedForward !== undefined ? sheet.prSheet.carriedForward.sheets : [];
       nothingListed = revisedKind(sheetKind) && sheet.prSheet.nothingListed === true;
       canonAccounted = revisedKind(sheetKind) && sheet.prSheet.canonAccounted !== undefined ? sheet.prSheet.canonAccounted : [];
       indexRows = sheetKind === "index" ? sheet.index.rows : [];
@@ -2554,16 +2560,17 @@
       footerHost.replaceChildren(...(sheetKind === "index" ? [textElement("p", "sh-caption", indexWords.done)] : onePage ? [] : [savesCaption, ...(sheetKind === "final" ? [] : [leavingCaption])]));
       openIndex = 0;
       expanded = false;
-      whyHeading.textContent = "Why only these " + sheet.cards.length;
+      whyHeading.textContent = "Why only these " + drawn.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
       if (sheetKind === "final") buildFinal(sheet.final);
-      if (revisedKind(sheetKind)) finalHost.replaceChildren(...prTail(sheet.prSheet));
+      if (revisedKind(sheetKind)) finalHost.replaceChildren(...(heldSheet ? [] : prTail(sheet.prSheet)));
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
       cardsHost.replaceChildren(...(sheetKind === "index"
         ? [buildIndexBlocks(items.map(function (item) { return item.article; })), ...buildIndexGroups(sheet.index.rows)]
-        : [...(revisedKind(sheetKind) ? prHead(sheet.prSheet, sheet.cards.length > 0) : []), fragment]));
+        : heldSheet ? [buildHeld()]
+        : [...(revisedKind(sheetKind) ? prHead(sheet.prSheet, drawn.length > 0) : []), fragment]));
       status.hidden = true;
       refreshSheet();
     }
@@ -2635,7 +2642,7 @@
       try {
         // A final sheet, a pr sheet and a stack sheet also read their verdict, a sheet with a walk its walk answers; a failed or stalled read of any is a failed read.
         // The verdict lives under this revision's digest, so without a digest there is nothing of this revision to read.
-        const names = ["answers"].concat(verdictKind(sheetKind) && sheetDigest !== null ? ["verdict"] : [], walkStops.length > 0 ? ["walk"] : []);
+        const names = ["answers"].concat(verdictKind(sheetKind) && sheetDigest !== null && !heldSheet ? ["verdict"] : [], walkStops.length > 0 ? ["walk"] : []);
         const read = {};
         await Promise.all(names.map(async function (name) { read[name] = await store.collection(name).get(); }));
         if (ready) return;

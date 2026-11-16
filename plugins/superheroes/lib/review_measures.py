@@ -26,11 +26,11 @@ read it unmeasured, with that reason, never zero:
 Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
   - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
-  - Reviewer cost comes only from each session's latest record's `sessionCost`, and only when it is complete;
-    `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
-    A seat's tokens and minutes are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
-    A session with a partial run (#2514: `runsPartial` of one or more, written when a silence-watchdog-ended attempt left no usage total beside a measured one) is never complete, so its PR stays unmeasured; a `sessionCost` that says `complete` with a partial run is not well-formed. A seat unmeasured only because every session that blanks it is partial-only (no run lacking a figure, one or more partial) reads `cost-partial`; any other blanking keeps `cost-not-recorded`.
-    The window figures are over the measured PRs, and `prsLeftOut` counts the rest (`count`), saying why (`why`) and how many of them hold a session with a partial run (`partial`).
+  - Reviewer cost comes only from each session's latest record's `sessionCost`: its tokens only when it is complete,
+    its minutes when no run lacks a figure (#2545); `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
+    A seat's tokens are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it, and its minutes likewise when every such session's `sessionCost` has no run lacking a figure (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
+    A session with a partial run (#2514: `runsPartial` of one or more, written when a silence-watchdog-ended attempt left no usage total beside a measured one) is never complete, so its PR stays out of the tokens figures; but a partial run's minutes are every attempt's wall time, so a PR whose only shortfall is partial runs counts in the minutes figures. A `sessionCost` that says `complete` with a partial run is not well-formed. A seat unmeasured only because every session that blanks it is partial-only (no run lacking a figure, one or more partial) reads `cost-partial`, which is now only ever a tokens reason in practice (a partial-only session does not blank minutes); any other blanking keeps `cost-not-recorded`.
+    The window figures are over the measured PRs, and `prsLeftOut.<k>` counts the rest for that measure (`count`), saying why (`why`) and how many of them hold a session with a partial run (`partial`).
   - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat, or only a seat that did not run on the PR (in any of its valid records, in the window or not), counts under `unattributed` and credits that seat nothing, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -177,6 +177,14 @@ def _partial_session(rec):
     return sc is not None and sc.get("runsPartial", 0) >= 1
 
 
+def _whole(sc, k):
+    """True when the well-formed `sessionCost` `sc` gives a whole figure for `k`: its tokens only when complete, its
+    minutes when no run lacks a figure (#2545: a partial run's minutes are every attempt's wall time, only its tokens
+    are short)."""
+    # axis: tokens need a complete session, minutes need none of its runs to lack a figure — see bite-proof record i2545_partial_minutes
+    return sc is not None and (sc["complete"] if k == "tokens" else sc["runsWithoutFigure"] == 0)
+
+
 _raiser = review_learning._raiser  # the one raiser rule lives in review_learning
 
 
@@ -200,14 +208,17 @@ def _r1(spread):
 
 def _pr_cost(rs, k):
     """A PR's reviewer cost for `k`, the sum of its sessions' (`rs` is its in-window records), each read from the
-    session's latest record's `sessionCost`: zero when it ran nothing, its figure when complete, else unmeasured."""
+    session's latest record's `sessionCost`: zero when it ran nothing, its figure when whole for `k`, else unmeasured.
+    Tokens are whole only for a complete `sessionCost`; minutes for one with no run lacking a figure (#2545), so a PR
+    whose only shortfall is partial runs has minutes and no tokens."""
     figures = []
     for recs in _by_session(rs):
         sc = _session_cost(_latest(recs))
         if sc is not None and sc["runs"] == 0:
             figures.append(0.0 if k == "minutes" else 0)
         else:
-            figures.append(sc[k] if sc is not None and sc["complete"] else None)
+            # axis: a session gives its figure for `k` only when whole for `k`, else the PR is unmeasured for `k` — see bite-proof record i2545_partial_minutes
+            figures.append(sc[k] if _whole(sc, k) else None)
     return _sum(figures, k, exact=True)
 
 
@@ -413,8 +424,11 @@ def compute(inp, start, end, written_at=None):
             m["reviewerCostPerPr"][k] = _r1(shown) if k == "minutes" else shown
         m["reviewerCostPerPr"]["prsLeftOut"] = out
         outcomes, costs = collections.defaultdict(collections.Counter), collections.defaultdict(collections.Counter)
-        blanked, ran, costed = set(), set(), set()  # blanked: the seats a session could have run without a complete sessionCost that names them; ran: every seat that ran; costed: the seats a complete session's bySeat names
-        part_blank, other_blank = set(), set()  # blanked split by cause: a partial-only session (no run lacks a figure, one or more partial) vs every other
+        measured_ks = ("tokens", "minutes")
+        # blanked: per measure, the seats a session could have run without a sessionCost whole for it that names them; costed: per measure, the seats a whole session's bySeat names; ran: every seat that ran
+        blanked, costed = {k: set() for k in measured_ks}, {k: set() for k in measured_ks}
+        ran = set()
+        part_blank, other_blank = {k: set() for k in measured_ks}, {k: set() for k in measured_ks}  # blanked split by cause: a partial-only session (no run lacks a figure, one or more partial) vs every other
         unread = set()  # the seats that ran on a PR whose counted finding names no raiser: their outcomes are unmeasured
         for pr, rs in prs.items():
             keyed, lacking = {}, False
@@ -440,28 +454,31 @@ def compute(inp, start, end, written_at=None):
                 ran_seats = _ran_seats(last["reviewers"])
                 ran |= ran_seats
                 named_seats = {s for name in (sc["bySeat"] if sc else ()) for s in review_learning._seats(name)}
-                if sc is None or not sc["complete"]:
-                    blanked |= ran_seats | named_seats
-                    if sc is not None and sc["runsWithoutFigure"] == 0 and sc.get("runsPartial", 0) >= 1:
-                        part_blank |= ran_seats | named_seats
+                for k in measured_ks:
+                    # axis: each measure is blanked by a session that is not whole for that measure, through its own sets — see bite-proof record i2545_partial_minutes
+                    if not _whole(sc, k):
+                        blanked[k] |= ran_seats | named_seats
+                        if sc is not None and sc["runsWithoutFigure"] == 0 and sc.get("runsPartial", 0) >= 1:
+                            part_blank[k] |= ran_seats | named_seats
+                        else:
+                            other_blank[k] |= ran_seats | named_seats
                     else:
-                        other_blank |= ran_seats | named_seats
-                else:
-                    costed |= named_seats
-                    blanked |= ran_seats - named_seats  # a complete cost that leaves out a seat that ran does not cost it
-                    other_blank |= ran_seats - named_seats
+                        costed[k] |= named_seats
+                        blanked[k] |= ran_seats - named_seats  # a whole cost that leaves out a seat that ran does not cost it
+                        other_blank[k] |= ran_seats - named_seats
                 for name, by in sc["bySeat"].items() if sc else ():
                     for s in review_learning._seats(name):
-                        for k in ("tokens", "minutes"):
-                            costs[s][k] += by[k] if sc["complete"] else 0  # an incomplete session still names its seats
+                        for k in measured_ks:
+                            # axis: a seat's sum adds a session's figure for `k` only when the session is whole for `k` — see bite-proof record i2545_partial_minutes
+                            costs[s][k] += by[k] if _whole(sc, k) else 0  # a session not whole for `k` still names its seats
         m["seats"] = {}
         for s in sorted(set(outcomes) | set(costs) | ran | unread):
             shown = {"outcomes": (miss("seats.%s.outcomes" % s, "raising-seat-not-recorded") if s in unread
                                   else {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")})}
             for k in ("tokens", "minutes"):
-                known = s in costed and s not in blanked and s != "unattributed"  # no seat to record a cost against
+                known = s in costed[k] and s not in blanked[k] and s != "unattributed"  # no seat to record a cost against
                 # axis: a seat blanked only by partial-only sessions reads `cost-partial`; any other blanking keeps `cost-not-recorded` — see bite-proof record i2514_partial_cost
-                why_not = "cost-partial" if s in part_blank and s not in other_blank and s != "unattributed" else "cost-not-recorded"
+                why_not = "cost-partial" if s in part_blank[k] and s not in other_blank[k] and s != "unattributed" else "cost-not-recorded"
                 shown[k] = ((round(costs[s][k], 1) if k == "minutes" else costs[s][k]) if known
                             else miss("seats.%s.%s" % (s, k), why_not))
             m["seats"][s] = shown

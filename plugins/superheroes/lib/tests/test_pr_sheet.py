@@ -151,14 +151,14 @@ def test_an_empty_record_gives_an_empty_sheet():
     assert WORDS["nothingToAccept"] == "Nothing. The review left nothing for you."
 
 
-def test_null_lane_and_ci_commit_are_copied_and_a_previous_commit_is_optional():
-    # Axis: a null lane and a null CI commit are copied as null; previousCommit is left out when null and copied when set.
+def test_null_lane_is_copied_a_records_null_ci_is_never_shown_and_a_previous_commit_is_optional():
+    # Axis: a null lane is copied as null; a record whose ci is none on no commit still builds, and the sheet's CI line is the head's (headNow), never the record's; previousCommit is left out when null and copied when set.
     records, advisor = bundle(SMALL)
     records[0]["lane"] = {"value": None, "reason": None}
     records[0]["ci"] = {"state": "none", "sha": None}
     sheet = build(records, advisor)
     assert sheet["prSheet"]["whatChanged"]["lane"] is None and sheet["prSheet"]["whatChanged"]["laneReason"] is None
-    assert sheet["prSheet"]["whatChanged"]["ci"] == {"state": "none", "commit": None}
+    assert sheet["prSheet"]["whatChanged"]["ci"] == {"state": advisor["headNow"]["211"]["ci"], "commit": advisor["headNow"]["211"]["commit"]}
     assert "previousCommit" not in sheet["prSheet"]
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
     advisor["previousCommit"] = "abcdef1"
@@ -250,7 +250,7 @@ def test_a_stack_gets_one_sheet_from_all_its_records():
 def test_a_lower_pr_check_result_is_kept_in_the_stack_history():
     # Axis: a red check on a lower PR of a stack shows in the history though the top PR is green.
     records, advisor = bundle(STACK)
-    records[0]["ci"]["state"] = "red"
+    advisor["headNow"]["5"]["ci"] = "red"
     history = build(records, advisor)["prSheet"]["history"]
     assert any(line.startswith("#5: Checks were red") for line in history)
 
@@ -442,6 +442,10 @@ def sheet_bytes(sheet):
 
 def carry_input(advisor, heads, **more):
     advisor["carriedForward"] = {"fromSheet": "earlier/sheet.json", "heads": dict(heads), "date": CARRY_DATE, "moved": CARRY_MOVED, "whyNotMaterial": CARRY_WHY, **more}
+    # A carry names each PR's head as the vet read it, which is headNow's commit (CI as it was stays as it was).
+    for number, head in heads.items():
+        if number in advisor.get("headNow", {}):
+            advisor["headNow"][number] = {**advisor["headNow"][number], "commit": head}
     return advisor
 
 
@@ -457,25 +461,25 @@ def carry_with(case, edit):
 
 @pytest.mark.parametrize("name", CARRY_CASES)
 def test_a_carry_takes_its_heads_and_digest_and_leaves_everything_else_as_built(name):
-    # Bites on: a carried sheet that keeps the records' final commits, forgets previousCommit, records the wrong digest, or changes anything beyond the commits and the carry (the CI line names the commit CI ran on).
-    # Axis: previousCommit is the earlier sheet's commit, commit and each prs[].commit come from heads (the top PR's on a stack), carriedForward holds the earlier bytes' digest and the input's words, nothing else moves.
+    # Bites on: a carried sheet that keeps the records' final commits, forgets previousCommit, records the wrong digest, or changes anything beyond the carry (the CI line names the head's CI, as on any sheet).
+    # Axis: previousCommit is the earlier sheet's commit, commit and each prs[].commit are the heads (the top PR's on a stack), carriedForward holds the earlier bytes' digest and the input's words, and the sheet is otherwise the very sheet the same input builds with no carry.
     case, heads = CARRY_CASES[name]
     records, advisor = bundle(case)
     earlier = build(records, advisor)
     previous = sheet_bytes(earlier)
-    plain = build(records, advisor)
-    carried = build(records, carry_input(advisor, heads), previous)
+    carried_input = carry_input(copy.deepcopy(advisor), heads)
+    carried = build(records, carried_input, previous)
+    plain = build(records, {k: v for k, v in carried_input.items() if k != "carriedForward"})
     part = carried["prSheet"]
     top = str(advisor["prs"][-1]["number"] if advisor["kind"] == "stack" else advisor["number"])
     assert part["previousCommit"] == earlier["prSheet"]["commit"]
-    assert part["commit"] == heads[top] != plain["prSheet"]["commit"]
+    assert part["commit"] == heads[top] != earlier["prSheet"]["commit"]
     assert part["carriedForward"] == {"sheets": [hashlib.sha256(previous).hexdigest()], "date": CARRY_DATE, "moved": CARRY_MOVED, "whyNotMaterial": CARRY_WHY}
     if advisor["kind"] == "stack":
         assert [(f["number"], f["commit"]) for f in part["prs"]] == [(f["number"], heads[str(f["number"])]) for f in advisor["prs"]]
-    assert part["whatChanged"]["ci"] == plain["prSheet"]["whatChanged"]["ci"] and part["whatChanged"]["ci"]["commit"] != part["commit"]
-    moved = ("commit", "previousCommit", "carriedForward", "prs")
+    assert part["whatChanged"]["ci"] == {"state": advisor["headNow"][top]["ci"], "commit": heads[top]}
+    moved = ("previousCommit", "carriedForward")
     assert {**carried, "prSheet": {k: v for k, v in part.items() if k not in moved}} == {**plain, "prSheet": {k: v for k, v in plain["prSheet"].items() if k not in moved}}
-    assert [{k: v for k, v in f.items() if k != "commit"} for f in part.get("prs", [])] == [{k: v for k, v in f.items() if k != "commit"} for f in plain["prSheet"].get("prs", [])]
     assert list(Draft202012Validator(SCHEMA).iter_errors(carried)) == [] and check_sheet_problems(carried) == []
 
 
@@ -505,6 +509,7 @@ def three_layer_to_two():
     """The stack's earlier sheet, from the days it had two layers."""
     records, advisor = bundle(STACK)
     advisor["prs"] = advisor["prs"][:2]
+    del advisor["headNow"]["7"]
     advisor["walk"]["stops"] = [stop for stop in advisor["walk"]["stops"] if stop["pr"] != 7]
     return sheet_bytes(build(records[:2], advisor))
 
@@ -780,6 +785,7 @@ def test_a_walk_stop_for_pr_one_still_builds():
     # Axis: the integer 1 is a good walk stop pr, so the bool check refuses true and not the number it equals.
     records, advisor = bundle(BIG)
     records[0]["pr"] = advisor["number"] = 1
+    advisor["headNow"] = {"1": advisor["headNow"].pop("214")}
     for stop in advisor["walk"]["stops"]:
         stop["pr"] = 1
     assert [stop["pr"] for stop in build(records, advisor)["prSheet"]["walk"]["stops"]] == [1, 1]

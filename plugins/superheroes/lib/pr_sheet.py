@@ -5,6 +5,7 @@ CLI:
   pr_sheet.py build --record FILE [--record FILE ...] --pr-body N=FILE [--pr-body N=FILE ...] --input FILE --out FILE
   pr_sheet.py build --pr-body N=FILE --input FILE --out FILE   (a spec PR: the input names spec, and no --record is given)
   pr_sheet.py index --input FILE [--answers FILE] --out FILE
+  pr_sheet.py hold --sheet FILE --out FILE   (takes a published pr or stack sheet down: the same sheet, held, with no cards)
 
 On success it writes the data file to --out and each walk picture it could copy to pictures/ beside it, prints
 {"ok": true, "out": ..., "cards": N, "pictures": [the sheet's picture paths]} and exits 0.
@@ -12,6 +13,12 @@ On a refusal it writes nothing, prints {"ok": false, "problems": [...]} (one lin
 unreadable or non-JSON file, the words file included, is a refusal problem that names the file. `index` prints
 {"ok": true, "out": ..., "cards": N, "pictures": [...], "rows": N} on success and refuses the same way; if
 writing fails it removes the pictures that run created. --record and --pr-body are for `build` only, --answers for `index` only.
+
+`hold` reads one published pr or stack sheet.json (--sheet), refuses any other kind of sheet the same way (exit 1, {"ok": false,
+"problems": [...]}), and writes the same sheet with prSheet.held true and its cards emptied; it prints {"ok": true, "out": ...}.
+A held sheet is a sheet taken down after a material move of the PR: the page shows one fixed notice and no answer control, no
+verdict is read for it (pr_state reads it as being-fixed, whatever the store holds and however long its carry chain), and the prose
+is the notice alone. When the PR is READY again the advisor republishes an ordinary unsigned sheet with previousCommit.
 
 --pr-body N=FILE names the body of covered PR N (gh api repos/<owner>/<repo>/pulls/N --jq .body, read as UTF-8), and `build`
 needs one for every covered PR (number on a pr sheet, every prs[].number on a stack), no more and no fewer; a missing, extra or
@@ -61,7 +68,17 @@ The advisor's input is one JSON object; any key not listed is refused.
                  fewer) to that PR's new head commit; date is YYYY-MM-DD; moved and whyNotMaterial are non-empty strings. The
                  sheet then takes previousCommit and its commits from the earlier sheet and heads, and records the earlier
                  sheet's digest (and the digests it carried) in prSheet.carriedForward. previousCommit, when also given,
-                 must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned.
+                 must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned. The
+                 sheet shows no note of the carry: carriedForward's date, moved and whyNotMaterial are kept in the file and
+                 shown nowhere.
+  headNow        Required on a pr or stack sheet built from records, and refused in the spec-PR mode (which keeps its own
+                 spec.ci): an object mapping each covered PR number (a decimal string: number on a pr, every prs[].number on a
+                 stack, no more and no fewer) to {commit, ci}, both required. commit is the PR's head as the vet read it when
+                 the sheet is built (40 lowercase hex); ci is that head's CI state, a non-empty string (green, pending, red or
+                 none). The sheet's commit (the top PR's), each stack prs[].commit, whatChanged.ci and the stack's "Checks were"
+                 history lines come from headNow alone, never from a record's finalCommit or ci: a review record certifies the
+                 commit it reviewed, and whether that covers the head is the vet's call. When carriedForward is also given, each
+                 of its heads must equal that PR's headNow commit.
   prs            Required on a stack, refused on a pr: at least 2 {number, title}, bottom PR first.
   leftovers      An object with an entry for every left-for-owner finding that has no craft determination (one with neither is
                  refused, and one with both). A key names a
@@ -733,7 +750,7 @@ def _check_list(name, entries, required, optional, problems):
 
 def _check_input(adv, words, problems):
     """Collects the input's problems; returns the PR numbers the sheet covers, or None when unknown."""
-    optional = ("previousCommit", "carriedForward", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec",
+    optional = ("previousCommit", "carriedForward", "headNow", "prs", "leftovers", "craftDeterminations", "items", "collectorItems", "closesSpec",
                 "accounting", "walk", "spec")
     _keys("the advisor's input", adv, ("schema", "kind", "number", "title", "summary"), optional, problems)
     kind, number, prs = adv.get("kind"), adv.get("number"), adv.get("prs")
@@ -878,6 +895,51 @@ def _check_carry_input(carry, allowed, problems):
     return len(problems) == found
 
 
+_HEAD_COMMIT = re.compile(r"[0-9a-f]{40}")
+_PR_KEY = re.compile(r"[1-9][0-9]*")
+
+
+def _check_head_now(advisor, allowed, spec_mode, problems):
+    """Collects the headNow input's problems; the mapping when it is sound (so the carry can be compared to it), else None.
+
+    headNow is the PR head and its CI as the vet read them when the sheet is built: required on a sheet built from records, so
+    a missing one is a refusal and never a fall-back to the record's own ci, and refused in the spec-PR mode, which keeps spec.ci.
+    """
+    if spec_mode:
+        if "headNow" in advisor:
+            problems.append("headNow is refused on a spec-PR sheet: its CI comes from spec.ci")
+        return None
+    if "headNow" not in advisor:
+        problems.append("headNow is required on a pr or stack sheet built from records: an object of each covered PR number to "
+                        "{commit, ci}, the PR's head and its CI as read now")
+        return None
+    heads = advisor["headNow"]
+    if not isinstance(heads, dict):
+        problems.append("headNow must be an object of PR number to {commit, ci}")
+        return None
+    found = len(problems)
+    for k, v in heads.items():
+        if not (isinstance(k, str) and _PR_KEY.fullmatch(k)):
+            problems.append(f"headNow key {k!r} must be a PR number written as a decimal string")
+        if not _keys(f"headNow {k}", v, ("commit", "ci"), (), problems):
+            continue
+        if not (isinstance(v["commit"], str) and _HEAD_COMMIT.fullmatch(v["commit"])):
+            problems.append(f"headNow {k} commit must be a commit id of 40 lowercase hex characters")
+        if not _text(v["ci"]):
+            problems.append(f"headNow {k} ci must be a non-empty string (green, pending, red or none, as the vet read it)")
+    if allowed is not None:
+        covered = {str(n) for n in allowed}
+        problems.extend(f"headNow is missing PR {n}: it must name every PR the sheet covers, {sorted(covered)}" for n in sorted(covered - set(heads)))
+        problems.extend(f"headNow has PR {n}, but the sheet covers PRs {sorted(covered)}" for n in sorted(set(heads) - covered))
+    return heads if len(problems) == found else None
+
+
+def _check_carry_heads(carry, head_now, problems):
+    """A carry names the PR's head as the vet read it: each of its heads must be that PR's headNow commit."""
+    problems.extend(f"carriedForward heads {n} is {head}, but headNow {n} commit is {head_now[n]['commit']}; the two name the PR's head and must agree"
+                    for n, head in carry["heads"].items() if n in head_now and head != head_now[n]["commit"])
+
+
 def _check_previous(advisor, previous, problems):
     """The earlier sheet as a dict when it is this PR's or stack's own sheet and the carry may stand on it; else None after naming why."""
     if previous is None:
@@ -904,6 +966,9 @@ def _check_previous(advisor, previous, problems):
         problems.append(f"the earlier sheet covers PRs {[p['number'] for p in part.get('prs', [])]}, but this stack lists PRs {[p['number'] for p in advisor['prs']]}, in that order")
     if advisor.get("previousCommit") and advisor["previousCommit"] != part["commit"]:
         problems.append(f"previousCommit {advisor['previousCommit']} is not the earlier sheet's commit {part['commit']}")
+    # axis: a held sheet was taken down for a move that needs review, so no verdict carries from it; its return is an unsigned sheet — see bite-proof record i2496_wo_c_sheet_head (E-held-carry)
+    if part.get("held") is True:
+        problems.append("the earlier sheet is held (taken down), so nothing carries from it: republish an unsigned sheet with previousCommit instead")
     return sheet if len(problems) == before else None
 
 
@@ -1264,13 +1329,18 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             if made:
                 record, breakdown, spec_history = made
                 records = [record]
+    # axis: a records-built sheet's head commits and CI come only from headNow; a missing, malformed or partial headNow is refused and never falls back to the record — see bite-proof record i2496_wo_c_sheet_head (E-headnow)
+    head_now = _check_head_now(advisor, allowed, "spec" in advisor, problems)
     bodies_sound = False
     if bodies is not None and allowed is not None:
         found = len(problems)
         _check_bodies(bodies, allowed, problems)
         bodies_sound = len(problems) == found
     earlier = None
-    if "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems) and allowed is not None \
+    carry_sound = "carriedForward" in advisor and _check_carry_input(advisor["carriedForward"], allowed, problems)
+    if carry_sound and head_now is not None:
+        _check_carry_heads(advisor["carriedForward"], head_now, problems)
+    if carry_sound and allowed is not None \
             and _num(advisor.get("number")):  # a stack without a number is refused above, and the earlier sheet cannot be compared to it
         earlier = _check_previous(advisor, previous, problems)
     recs = [r for r in (_record(raw, n, problems) for n, raw in enumerate(records, 1)) if r]
@@ -1414,6 +1484,13 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
         raise Refusal(["two cards would share an id: the same finding or item appears twice"])
     reviewers, caught, craft, decided, history, merge_listed = [], [], [], [], [], []
+
+    def head_of(r):
+        """A record's PR's head commit and CI: headNow's on a sheet built from records, the spec record's own in the spec-PR mode (headNow is refused there)."""
+        # axis: only the spec-PR mode (where headNow is refused) reads the record's own commit and CI; a records-built sheet's head and CI are headNow's — see bite-proof record i2496_wo_c_sheet_head (E-headnow)
+        if head_now is None:
+            return {"commit": r["finalCommit"]["sha"], "ci": r["ci"]["state"], "ciCommit": r["ci"].get("sha")}
+        return {"commit": head_now[str(r["pr"])]["commit"], "ci": head_now[str(r["pr"])]["ci"], "ciCommit": head_now[str(r["pr"])]["commit"]}
     for r in recs:
         lines = [_fill(words["historyRounds"], rounds=r["rounds"]["count"])]
         if r["rounds"]["stoppedAtCap"]:
@@ -1452,7 +1529,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                 counted = True
                 lines.append(_fill(words["historyLeftovers"], count=count) if count > 1 else words["historyLeftover"])
         if stack:
-            lines.append(_fill(words["historyChecks"], state=r["ci"]["state"], commit=r["ci"].get("sha") or "no commit"))
+            lines.append(_fill(words["historyChecks"], state=head_of(r)["ci"], commit=head_of(r)["ciCommit"] or "no commit"))
         ran = [v for v in r["reviewers"] if v["ran"] != review_record.RAN_NOT_RUN]
         behind = [v for v in ran if v.get("coversFinalCommit") is False]
         if behind:
@@ -1474,11 +1551,11 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         history += [tag(r) + line for line in lines]
     history += spec_history
     sheet = {
-        "number": number, "commit": top["finalCommit"]["sha"],
+        "number": number, "commit": head_of(top)["commit"],
         "whatChanged": {
             "summary": advisor["summary"], "reviewers": reviewers, "caught": caught,
             "rounds": sum(r["rounds"]["count"] for r in recs), "stoppedAtCap": any(r["rounds"]["stoppedAtCap"] for r in recs),
-            "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
+            "ci": {"state": head_of(top)["ci"], "commit": head_of(top)["ciCommit"]},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
         "craft": craft, "alreadyDecided": decided, **({"listed": merge_listed} if merge_listed else {}),
         **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
@@ -1501,11 +1578,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     if advisor.get("previousCommit"):
         sheet["previousCommit"] = advisor["previousCommit"]
     if stack:
-        sheet["prs"] = [{"number": p["number"], "title": p["title"], "commit": by_pr[p["number"]]["finalCommit"]["sha"]}
+        sheet["prs"] = [{"number": p["number"], "title": p["title"], "commit": head_of(by_pr[p["number"]])["commit"]}
                         for p in advisor["prs"]]
     if earlier is not None:
-        # The carry: the heads the advisor names replace the records' final commits, and the chain of earlier digests grows by the sheet carried from.
-        # whatChanged.ci stays as the record gives it, because it names the commit CI ran on.
+        # The carry: the heads the advisor names (each already equal to headNow's, which is checked above) are the sheet's commits, and the chain of
+        # earlier digests grows by the sheet carried from. whatChanged.ci is headNow's, as on any records-built sheet, and the carry's date, moved
+        # and whyNotMaterial are recorded in the file but shown by no surface.
         carry = advisor["carriedForward"]
         heads = carry["heads"]
         sheet["previousCommit"] = earlier["prSheet"]["commit"]
@@ -1571,12 +1649,17 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
     stands, else needs-you. An entry is taken back (reclaimed) when the store holds a document at answers/<its id> that is
     not a well-formed answer of null; a malformed document counts as taking it back. Decided entries are no cards: they
     never count in accepted or total and never enter covers. A Merge stands only on this exact sheet, with every item
-    accepted, no walk Problem left without a follow-up fix, and a covers that names exactly the answers the store holds now. words is the "pr" block of sheet-words.json and answer_words its "prAnswers" block,
+    accepted, no walk Problem left without a follow-up fix, and a covers that names exactly the answers the store holds now. A held sheet
+    (prSheet.held true: taken down after a material move) is being-fixed with all four counts 0, and no answer, walk document or verdict is read
+    for it, so a Merge stored under its own digest or any digest of its carry chain never makes it ready. words is the "pr" block of sheet-words.json and answer_words its "prAnswers" block,
     each read from the file when not given.
     """
     words = words or _pr_words()
     answer_words = answer_words or _pr_answer_words()
     digest, sheet = hashlib.sha256(sheet_bytes).hexdigest(), json.loads(sheet_bytes)
+    if sheet["prSheet"].get("held") is True:
+        # axis: a held sheet is a sheet taken down: it reads being-fixed and no verdict is looked up for it, through no revision of its carry chain — see bite-proof record i2496_wo_c_sheet_head (E-held-state)
+        return {"state": "being-fixed", "accepted": 0, "total": 0, "walked": 0, "walkTotal": 0}
     cards, stops = sheet["cards"], sheet["prSheet"].get("walk", {}).get("stops", [])
     fixes = {f["id"]: f for f in words["walkFixes"]}
     answers, walks = _collection(store, "answers"), _collection(store, "walk")
@@ -1617,6 +1700,31 @@ def pr_state(sheet_bytes, store, words=None, answer_words=None):
               and covered is not None and set(verdict["covers"]) == covered)
     state = "being-fixed" if sends_back else "needs-you" if reclaimed else "ready" if stands else "needs-you"
     return {"state": state, "accepted": accepted, "total": len(cards), "walked": walked, "walkTotal": len(stops)}
+
+
+def hold(sheet_bytes):
+    """The published pr or stack sheet's bytes as the same sheet taken down: prSheet.held true and no cards, as a dict.
+
+    Raises Refusal for bytes that are not JSON, a sheet of any other kind (final, remainder, index), or a sheet that does not fit the
+    sheet schema, and for a result that does not fit it either. Everything else on the sheet stays as it was.
+    """
+    try:
+        sheet = json.loads(sheet_bytes)
+    except ValueError as err:
+        raise Refusal([f"the sheet is not JSON: {err}"])
+    if not isinstance(sheet, dict) or sheet.get("kind") not in sheet_prose.PR_KINDS:
+        found = sheet.get("kind") if isinstance(sheet, dict) else None
+        raise Refusal([f"hold takes a pr or stack sheet, but this sheet's kind is {found!r}"])
+    found = sheet_prose.check_sheet(sheet)
+    if found:
+        raise Refusal([f"the sheet: {p}" for p in found])
+    held = copy.deepcopy(sheet)
+    held["prSheet"]["held"] = True
+    held["cards"] = []
+    found = sheet_prose.check_sheet(held)
+    if found:
+        raise Refusal([f"the held sheet: {p}" for p in found])
+    return held
 
 
 _WORD_BLOCKS = {"build": ("pr",), "index": ("pr", "prAnswers", "answers", "index")}
@@ -1885,15 +1993,42 @@ def _names_spec(path):
     return False
 
 
+def _main_hold(parser, args):
+    """`hold`: reads the published sheet, writes it held to --out, prints the result; exit 0, or 1 with the problems."""
+    for flag, given in (("--record", args.record), ("--pr-body", args.pr_body), ("--answers", args.answers), ("--input", args.input)):
+        if given:
+            parser.error(f"{flag} is not for hold")
+    if not args.sheet:
+        parser.error("the following arguments are required: --sheet")
+    try:
+        try:
+            raw = pathlib.Path(args.sheet).read_bytes()
+        except OSError as err:
+            raise Refusal([f"{args.sheet} could not be read as the sheet: {err}"])
+        _write_replacing(args.out, json.dumps(hold(raw), indent=2, ensure_ascii=False) + "\n")
+        result, code = {"ok": True, "out": args.out}, 0
+    except (Refusal, OSError) as err:
+        result, code = {"ok": False, "problems": err.problems if isinstance(err, Refusal) else [str(err)]}, 1
+    print(json.dumps(result, ensure_ascii=False))
+    return code
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Build a PR sheet's data file, or the index's.")
-    parser.add_argument("command", choices=["build", "index"])
+    parser = argparse.ArgumentParser(description="Build a PR sheet's data file, or the index's, or take a published PR sheet down.")
+    parser.add_argument("command", choices=["build", "index", "hold"])
     parser.add_argument("--record", action="append")
     parser.add_argument("--pr-body", action="append")
     parser.add_argument("--answers")
-    parser.add_argument("--input", required=True)
+    parser.add_argument("--input")
+    parser.add_argument("--sheet")
     parser.add_argument("--out", required=True)
     args, problems = parser.parse_args(argv), []
+    if args.command == "hold":
+        return _main_hold(parser, args)
+    if args.sheet:
+        parser.error("--sheet is only for hold")
+    if not args.input:
+        parser.error("the following arguments are required: --input")
     if args.command == "build" and not args.record and not _names_spec(args.input):
         parser.error("the following arguments are required: --record")
     if args.command == "build" and args.answers:
