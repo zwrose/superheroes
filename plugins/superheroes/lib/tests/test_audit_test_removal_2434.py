@@ -933,7 +933,10 @@ def test_g_a_yes_answer_clears_whatever_the_record_says():
 
 
 def test_g_an_id_refused_later_in_the_same_pass_is_not_listed_as_cleared():
-    outcome = _fold([_removed(unnamedChange="also reworks the retry policy")], _target())
+    # #2495: only a change the target's own decision forbids is refused after the guard; an unforbidden one
+    # is a scope-only hold that clears (test_audit_strike_kinds_2495.py keeps `testRemoval` on it).
+    forbidding = _target(ownerRuling={"ruling": "guidance", "allowsChange": False})
+    outcome = _fold([_removed(unnamedChange="also reworks the retry policy")], forbidding)
     entry = _only(outcome)
     assert outcome["unnamedChange"] == ["t0"] and outcome["notDischarged"] == ["t0"]
     assert outcome["testRemovalCleared"] == [] and "testRemoval" not in entry
