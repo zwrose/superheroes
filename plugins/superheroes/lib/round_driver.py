@@ -63,6 +63,7 @@ import cli_contract  # noqa: E402
 import audits  # noqa: E402
 import break_it  # noqa: E402
 import break_it_layers  # noqa: E402
+import calibration_pin  # noqa: E402
 import calibration_read  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
@@ -1439,6 +1440,17 @@ def _diff_changed_paths(diff_text):
 LANE_EXPANDED_RECOMPOSE = decision_kinds.LANE_EXPANDED_RECOMPOSE
 
 
+def _calibration_pin(state):
+    """The calibration pin captured when this review session was created (#2502), or None."""
+    pin = state.get("calibrationPin") if isinstance(state, dict) else None
+    return pin if isinstance(pin, dict) else None
+
+
+def _pinned_risk_areas(state):
+    """The pinned risk-areas read, or None when the state carries no pin."""
+    return (_calibration_pin(state) or {}).get("riskAreas")
+
+
 def _reevaluate_lane_dimensions(state, config, diff_text):
     """Re-ask the lane call at a new reviewed head (#1797). A session whose seat map was composed for
     a reduced roster (``laneBasis.floor`` None) continues unchanged while the head still touches no
@@ -1459,7 +1471,10 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
             new_basis = lane_call.unavailable("lane-basis-unavailable: head diff or repo root unreadable",
                                               proposed="full")
         else:
-            new_basis = lane_call.call(repo_root, paths, proposed="full")
+            pin = _calibration_pin(state)
+            # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+            new_basis = (lane_call.call_pinned(repo_root, paths, pin["riskAreas"], proposed="full") if pin
+                         else lane_call.call(repo_root, paths, proposed="full"))
     except Exception:
         new_basis = {"floor": "full"}
     if not isinstance(new_basis, dict) or new_basis.get("floor") is None:
@@ -1634,6 +1649,9 @@ def new_state(config=None, session_dir=None):
         # is attributed by `_attribute_fix_maker` before its next command.
         FIX_MAKER_MARK: True,
     }
+    if session_dir:
+        repo_root = cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot") or os.getcwd()
+        state["calibrationPin"] = calibration_pin.capture(repo_root, session_dir)
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
@@ -1659,7 +1677,7 @@ def _rename_sources(diff_text):
         return {}
 
 
-def _slice_security(dims, repo_root, parts, sources=None):
+def _slice_security(dims, repo_root, parts, sources=None, stored=None):
     """True when a slice seats the security lens: the panel holds it and the slice's files (a renamed file by both its paths,
     ``sources`` mapping destination to source) touch a risk area, or the risk areas are not set (an unclear risk counts as
     touching). An exception reads as touching."""
@@ -1668,7 +1686,9 @@ def _slice_security(dims, repo_root, parts, sources=None):
     try:
         named = {p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)}
         files = sorted(named | {sources[f] for f in named if f in (sources or {})})
-        found = risk_areas.touched(repo_root, files)
+        # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+        found = (risk_areas.touched(repo_root, files, stored=stored) if stored is not None
+                 else risk_areas.touched(repo_root, files))
         return (found.get("riskAreas") == "not-set" or bool(found.get("touched"))
                 or bool(found.get("unmatchable")))
     except Exception:  # fail toward seating the lens
@@ -1698,7 +1718,7 @@ def _plan_slices(state, cfg):
     state["slicePlan"] = {
         "sliced": True, "countable": plan["countable"], "bar": plan["bar"],
         "slices": [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
-                    "security": _slice_security(dims, repo_root, sl["parts"], sources)}
+                    "security": _slice_security(dims, repo_root, sl["parts"], sources, _pinned_risk_areas(state))}
                    for sl in plan["slices"]],
     }
 
@@ -3037,7 +3057,9 @@ def _decision_sources(state):
     """The `sources` dict `finding_outcomes.on_record` reads: the Canon text and the ratified
     residuals. A source that cannot be read is left out — an unresolvable decision is not on record."""
     config = state.get("config") if isinstance(state.get("config"), dict) else {}
-    return finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
+    sources = finding_outcomes.decision_sources(config.get("repoRoot"), config.get("baseRef"))
+    # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+    return calibration_pin.overlay_residuals(sources, (_calibration_pin(state) or {}).get("residuals"))
 
 
 def _compile_drop_recorded(state, drop):
@@ -3727,6 +3749,9 @@ def _advance(state, config):
     elif step == P_SYNTHESIS:
         payload = {"findings": state.get("_verified") or [], "refuted": state.get("_refuted") or [],
                    "earlier": repeat_marks.order_list(_earlier_pool(state))}
+        if not payload["findings"]:
+            # Repeat-only order: the orchestrator dispatches the seat with `dispatch-review --nothing-to-group` (issue 2527).
+            payload["nothingToGroup"] = True
     elif step == P_SEAMS:
         payload = {"fullDiff": True, "slices": _seams_slices(state)}
     elif step == P_SECOND_TEST:
@@ -5641,7 +5666,8 @@ def _open_unread_wave(state, config, unread, wave, this_wave):
     cut = _cut_wave(_wave_slices(state), unread, nxt, count)
     sources = _rename_sources(state.get("reviewedDiff"))
     marked = [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
-               "security": _slice_security(dims, repo_root, sl["parts"], sources), "wave": nxt} for sl in cut]
+               "security": _slice_security(dims, repo_root, sl["parts"], sources, _pinned_risk_areas(state)),
+               "wave": nxt} for sl in cut]
     risky = [sl for sl in marked if sl["security"]]
     roster = round_phases.wave_roster(dims, marked, with_whole=bool(risky))
     if not marked or not roster:
@@ -9414,8 +9440,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
         if merged_members.get(tid):
             row["mergedMembers"] = copy.deepcopy(merged_members[tid])
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
-        # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
-        # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
+        # does not name sees whether the owner's guidance allows it. A scope-only hold clears with a scope
+        # note (the entry's `scopeNote`, listed in `scopeHeld`); only a change the finding's own decision
+        # forbids (`ownerRuling.allowsChange` false) is refused, as an audit ruling that was not
+        # discharged (audits.UNNAMED_CHANGE_REASON_PREFIX), and that one stays open through the
         # ordinary not-discharged loop, with no state of its own.
         # The finding's last audit rides the target too (derived from the audit history, as the fixer
         # order's does), so the auditor sees why the last audit refused.
@@ -9694,6 +9722,8 @@ def _fold_merged_members(state, outcome, targets, rider_ids, carried_audited):
                 session_contract.FINDING_KEY_FIELD: key, "ruling": "not-discharged",
                 "reason": "merged into %s, whose fix the audit cleared, but the audit did not rule this finding's own part "
                           "fixed (%s)" % (tid, why or "not answered"),
+                # axis: a reopened member does not count toward the stall before its own fix is audited — see bite-proof record i2495_strike_kinds
+                audits.AUDIT_REASON_KIND_FIELD: audits.REASON_KIND_REOPENED_MERGED,
                 "reopenedFrom": tid})
             reopened.append(key)
             rows.append({"findingKey": key, "into": tid, "answer": answer.get("fixed") if why is not None else None})
@@ -9822,7 +9852,9 @@ def _fold_audits(state, config, artifact, session_dir=None):
     audit_round = {"round": state["round"], "outcomes": [
         {"identity": a.get("identity"), "ruling": a.get("ruling"), "id": a.get("id"),
          "title": a.get("title"), "classKey": a.get("classKey"),
-         "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
+         "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy"),
+         # axis: the breaker reads the fold's reason kind off the audit-round outcome — see bite-proof record i2495_strike_kinds
+         "reasonKind": a.get(audits.AUDIT_REASON_KIND_FIELD)}
         for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
     state["auditRounds"].append(audit_round)
     mismatch_ids = list(outcome.get("testMismatch") or [])
@@ -9864,8 +9896,14 @@ def _fold_audits(state, config, artifact, session_dir=None):
     if unnamed_ids:
         _record_round(state, "auditUnnamedChange", unnamed_ids)
         _decision(state, "audit-unnamed-change",
-                  "the fix changes behaviour its finding does not name, so it is not accepted "
-                  "without a ruling: %s" % ", ".join(unnamed_ids))
+                  "the fix changes behaviour its finding does not name, and the finding's own owner "
+                  "decision forbids that change, so the fix is refused: %s" % ", ".join(unnamed_ids))
+    scope_held_ids = list(outcome.get("scopeHeld") or [])
+    if scope_held_ids:
+        _record_round(state, "auditScopeHeld", scope_held_ids)
+        _decision(state, "audit-scope-held",
+                  "the audit ruled the fix right; it also changes behaviour its finding does not name, "
+                  "listed for the vet: %s" % ", ".join(scope_held_ids))
     attributed_ids = list(outcome.get("attributedChange") or [])
     if attributed_ids:
         _record_round(state, "auditAttributedChange", attributed_ids)
@@ -9931,11 +9969,17 @@ def _fold_audits(state, config, artifact, session_dir=None):
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
     removal_by_id = {a["id"]: a["testRemoval"] for a in outcome["audits"]
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("testRemoval"), dict)}
+    scope_note_by_id = {a["id"]: a["scopeNote"] for a in outcome["audits"]
+                        if isinstance(a, dict) and isinstance(a.get("id"), str)
+                        and audits.has_usable_unnamed_change(a.get("scopeNote"))}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         if tid in removal_by_id:
             # a fix cleared as the removal of a worthless test carries the evidence it cleared on, so the review record can name it
             receipt = dict(receipt, testRemoval=copy.deepcopy(removal_by_id[tid]))
+        if tid in scope_note_by_id:
+            # a scope-held fix carries the change its finding does not name, so the review record can list it for the vet
+            receipt = dict(receipt, scopeNote=scope_note_by_id[tid])
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
                             placeResults=place_answers.get(tid) or None,
                             **{session_contract.MEMBER_RESULTS_FIELD: member_results.get(tid) or None})
@@ -14653,7 +14697,7 @@ def _risk_areas_changed_paths(repo_root, base, head):
     return [name for name in names if name], None
 
 
-def _risk_areas_text(seat_key, repo_root, base, head, leave_out=()):
+def _risk_areas_text(seat_key, repo_root, base, head, leave_out=(), stored=None):
     """The test role's risk-areas clause: which of the project's risk areas the reviewed change
     touches, as read by `risk_areas.touched` over every changed path less the `leave_out` paths (the
     proven copies no seat is given). Empty for any other seat.
@@ -14667,7 +14711,9 @@ def _risk_areas_text(seat_key, repo_root, base, head, leave_out=()):
         # axis: a proven copy no seat is given is not named as touching a risk area — see bite-proof record c1l5b_wo_d_proven_copies
         left_out = set(leave_out)
         paths = [path for path in paths if path not in left_out]
-        r = risk_areas.touched(repo_root, paths)
+        # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+        r = (risk_areas.touched(repo_root, paths, stored=stored) if stored is not None
+             else risk_areas.touched(repo_root, paths))
         if r["riskAreas"] == "not-set":
             detail = r.get("detail")
             if isinstance(detail, str) and detail:
@@ -14722,13 +14768,40 @@ def _calibration_path_placeholder(path, label, root_refusal=None):
     return "(%s calibration not resolved for this project)" % label
 
 
+_NO_CLAUDE_MD = "(this project has no CLAUDE.md at %s)"
+
+
 def _claude_md_path_placeholder(repo_root):
     """Absolute live-checkout CLAUDE.md path, or a plain no-CLAUDE.md sentence. Never raises."""
     if isinstance(repo_root, str) and repo_root:
         path = os.path.join(repo_root, "CLAUDE.md")
         if os.path.isfile(path):
             return path
-    return "(this project has no CLAUDE.md at %s)" % (repo_root,)
+    return _NO_CLAUDE_MD % (repo_root,)
+
+
+def _pinned_threat_model(pin):
+    """`(threat_model_text, failure_reason)` read from the pinned core copy; a core that was absent or could not be
+    pinned says so, and the live core is never read."""
+    entry = (pin.get("files") or {}).get(calibration_pin.LABEL_CORE) or {}
+    if entry.get("path"):
+        return round_orders.resolve_order_threat_model(entry["path"])
+    if entry.get("reason") == calibration_pin.REASON_ABSENT:
+        return "", round_orders.THREAT_MODEL_CORE_UNRESOLVED
+    return "", "core calibration not pinned for this review session (%s)" % (entry.get("detail"),)
+
+
+def _pinned_path_text(pin, key, label, repo_root):
+    """The path text a seat order shows for one pinned calibration file: its copy under the session folder,
+    today's no-file text when the file was absent, or a not-pinned line. Never the live path."""
+    entry = (pin.get("files") or {}).get(key) or {}
+    if entry.get("path"):
+        return entry["path"]
+    if entry.get("reason") == calibration_pin.REASON_ABSENT:
+        if key == calibration_pin.LABEL_CLAUDE_MD:
+            return _NO_CLAUDE_MD % (repo_root,)
+        return _calibration_path_placeholder(None, label, pin.get("rootRefusal"))
+    return "(%s calibration not pinned for this review session: %s)" % (label, entry.get("detail"))
 
 
 def _resolved_calibration_paths(repo_root):
@@ -14811,7 +14884,7 @@ def _seat_channel(phase, row):
     return CHANNEL_FILE
 
 
-def _reviewer_engine_vendor(repo_root):
+def _reviewer_engine_vendor(repo_root, state=None):
     """`(vendor, source)` for single-seat reviewer phases (verifiers, seams-check, scoped).
 
     `source` is the marker `_vendor_is_resolved` reads: `configured` when the preference read
@@ -14829,7 +14902,9 @@ def _reviewer_engine_vendor(repo_root):
     documented defaults ARE the configuration). The `except` arms below stay as belt-and-braces
     for a contract violation, not as the primary signal."""
     try:
-        prefs = engine_pref.load_engine_prefs(repo_root)
+        # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+        pinned = (_calibration_pin(state) or {}).get("enginePrefs")
+        prefs = pinned if isinstance(pinned, dict) else engine_pref.load_engine_prefs(repo_root)
     except Exception:  # noqa: BLE001 — transport must degrade, never refuse render
         return "claude", VENDOR_SOURCE_DEFAULTED
     source = (VENDOR_SOURCE_DEFAULTED
@@ -14863,7 +14938,8 @@ def _nonpanel_reviewer_vendor(state, config, repo_root, phase):
 
     The reviewer engine is the preferred candidate, so when it qualifies the result is the engine
     with its own `vendorSource`."""
-    vendor, source = _reviewer_engine_vendor(repo_root)
+    vendor, source = (_reviewer_engine_vendor(repo_root, state) if _calibration_pin(state)
+                      else _reviewer_engine_vendor(repo_root))
     cfg = config if isinstance(config, dict) else {}
     makers = receipt_disclosures.accumulated_maker_families(state)
     fixer = cfg.get("fixerVendor")
@@ -14949,7 +15025,8 @@ def _nonpanel_replaced(state, selected, session_dir=None):
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir) if session_dir else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    return _reviewer_engine_vendor(repo_root)[0] != selected
+    return (_reviewer_engine_vendor(repo_root, state) if _calibration_pin(state)
+            else _reviewer_engine_vendor(repo_root))[0] != selected
 
 
 def effective_seat_map(state):
@@ -15729,11 +15806,18 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = ROUND_MATERIALIZER_REGISTRY["round_diff"](session_dir, rnd, state)
     rubric_path = _shipped_rubric_path()
-    core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
-    core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
-    layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
-                                              root_refusal)
-    claude_md_path = _claude_md_path_placeholder(repo_root)
+    pin = _calibration_pin(state)
+    # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+    if pin:
+        core_path = _pinned_path_text(pin, calibration_pin.LABEL_CORE, "Core", repo_root)
+        layer_path = _pinned_path_text(pin, calibration_pin.LABEL_LAYER, "Review-crew layer", repo_root)
+        claude_md_path = _pinned_path_text(pin, calibration_pin.LABEL_CLAUDE_MD, "CLAUDE.md", repo_root)
+    else:
+        core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
+        core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
+        layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
+                                                  root_refusal)
+        claude_md_path = _claude_md_path_placeholder(repo_root)
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     sidecar_roster = roster if isinstance(roster, list) else [seat_key]
     ph = {}
@@ -15756,7 +15840,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
             "RISK_AREAS_TEXT": _risk_areas_text(
                 seat_key, repo_root, cfg.get("baseRef") or meta.get("baseRef"),
-                _session_certified_head(session_dir, state), leave_out=_left_out_files(state)),
+                _session_certified_head(session_dir, state), leave_out=_left_out_files(state),
+                stored=_pinned_risk_areas(state)),
             "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
@@ -15932,11 +16017,23 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     host_seat = channel == CHANNEL_FILE
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
-    residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
+    pin = _calibration_pin(state)
+    pinned_res = (pin or {}).get("residuals")
+    # axis: a running session reads the calibration pinned at its start, never the live store — see bite-proof record wo1_2502_calibration_pin
+    if isinstance(pinned_res, dict) and pinned_res.get("storage") == "store":
+        residuals, prov, res_failure = (pinned_res.get("text"), pinned_res.get("provenance"),
+                                        pinned_res.get("failure"))
+    else:
+        residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
     if not isinstance(residuals, str):
         residuals = ""
-    core_resolved, layer_resolved, _root_refusal = _resolved_calibration_paths(repo_root)
-    threat_model, threat_failure = round_orders.resolve_order_threat_model(core_resolved)
+    if pin:
+        core_resolved, layer_resolved = [((pin.get("files") or {}).get(k) or {}).get("path")
+                                         for k in (calibration_pin.LABEL_CORE, calibration_pin.LABEL_LAYER)]
+        threat_model, threat_failure = _pinned_threat_model(pin)
+    else:
+        core_resolved, layer_resolved, _root_refusal = _resolved_calibration_paths(repo_root)
+        threat_model, threat_failure = round_orders.resolve_order_threat_model(core_resolved)
     standing_rulings, standing_failure = _standing_rulings_for_orders(state)
     return {
         "session_dir": session_dir,
@@ -16591,12 +16688,15 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
 
 # record-result refusal: a landed panel read list that is not the list the runner graded for the run
 EVIDENCE_READ_PARTS_MISMATCH_REFUSAL = "evidence-read-parts-mismatch"
+# record-result refusal: a synthesis run opened with --nothing-to-group landed on a round that has survivors
+EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL = "evidence-nothing-to-group-mismatch"
 
 
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
-                                phase):
+                                phase, verified=None):
     """Bind runner telemetry to the driver's order hash.
 
+    `verified` is the round's surviving findings (`state["_verified"]`), read only for the synthesis seat.
     Returns (envelope, refusal_reason, extra, cited_head_source)."""
     if not evidence_run_dir:
         return None, None, {}, None
@@ -16610,6 +16710,11 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
                                                  "orderSha256": order_sha}, None
+    # axis: a run opened with --nothing-to-group cannot answer a round that has survivors — see bite-proof record wo_a_2527_nothing_to_group
+    if (phase == P_SYNTHESIS and record.get("nothingToGroup") is True
+            and isinstance(verified, list) and verified):
+        return None, EVIDENCE_NOTHING_TO_GROUP_MISMATCH_REFUSAL, {
+            "survivors": len(verified)}, None
     result_digest = record.get("resultDigest")
     result_kind = record.get("resultKind")
     if (not isinstance(result_digest, str) or not result_digest
@@ -16839,7 +16944,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
             assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir, cited_head, phase)
+                session_dir, envelope, evidence_run_dir, cited_head, phase,
+                verified=state.get("_verified"))
             if assembly_source is not None:
                 cited_head_source = assembly_source
             if ev_reason is not None:

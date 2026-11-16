@@ -634,7 +634,7 @@ PR records test-pilot N/A with its stand-in evidence.
 
 ## 10. Review before handback
 
-**Full lane: run `review-code` with a vendor-mixed panel (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
+**Full lane: run `review-code` with a panel outside every maker's family (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
 loop reviews, has you apply each confirmed fix yourself at its `apply-fixes` step (each committed with its break-it test; no implementer work order is dispatched for a review fix), and re-reviews, until no blocking
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
 `review-code`'s own contract, and §12's delta grading does not apply here. Open the PR as a draft

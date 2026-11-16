@@ -1686,3 +1686,144 @@ def test_author_exclusive_cleans_temp_on_interrupt(tmp_path, monkeypatch):
     leftovers = [n for n in os.listdir(tmp_path) if n.startswith(".ledger-author-")]
     assert leftovers == [], leftovers
     monkeypatch.setattr(os, "link", real_link)
+
+
+# --- deferred by policy: outside the ratio, the floors and the sweep count ----
+
+
+def _hotspot_mix(deferred):
+    """11 useful `accepted` records plus 8 `declined` ones, flagged or not.
+
+    Stamped across three sweeps so only the flag decides how the 8 declined are read."""
+    sweeps = ["s1", "s2", "s3"]
+    useful = [_rec("hotspot:t:u%d.py" % i, "accepted", reason="traded",
+                   adjudicatedIn=sweeps[i % 3]) for i in range(11)]
+    extra = {"deferredByPolicy": True} if deferred else {}
+    declined = [_rec("hotspot:t:d%d.py" % i, "declined", reason="not now, by policy",
+                     adjudicatedIn=sweeps[i % 3], **extra) for i in range(8)]
+    return useful + declined
+
+
+def test_deferred_by_policy_is_11_of_11_not_11_of_19():
+    card = gled.report_card(_hotspot_mix(deferred=True))["hotspot"]
+    assert card["for"] == 11
+    assert card["against"] == 0
+    assert card["adjudicated"] == 11
+    assert card["actionability"] == 1.0
+    assert card["deferred"] == 8
+
+
+def test_same_records_without_the_flag_are_11_of_19():
+    card = gled.report_card(_hotspot_mix(deferred=False))["hotspot"]
+    assert card["for"] == 11
+    assert card["against"] == 8
+    assert card["adjudicated"] == 19
+    assert card["actionability"] == 11 / 19
+    assert card["deferred"] == 0
+
+
+def test_deferred_does_not_count_toward_min_adjudicated():
+    sweeps = ["s1", "s2", "s3"]
+    records = _adjudicated("hotspot", 9, "triaged-out", sweeps) + [
+        _rec("hotspot:t:x%d.py" % i, "declined", reason="by policy",
+             adjudicatedIn=sweeps[i % 3], deferredByPolicy=True) for i in range(8)]
+    card = gled.report_card(records, {"minAdjudicated": 10})["hotspot"]
+    assert card["adjudicated"] == 9
+    assert card["deferred"] == 8
+    assert card["benched"] is False
+    assert "9 of the 10" in card["reason"]
+
+
+def test_deferred_stamp_does_not_add_a_sweep():
+    real = _adjudicated("hotspot", 10, "triaged-out", ["s1", "s2"])
+    deferred = _rec("hotspot:t:late.py", "declined", reason="by policy",
+                    adjudicatedIn="s3", deferredByPolicy=True)
+    card = gled.report_card(real + [deferred])["hotspot"]
+    assert card["sweeps"] == 2
+    assert card["benched"] is False
+
+
+def test_deferred_without_a_stamp_does_not_make_the_sweep_count_unknown():
+    real = _adjudicated("hotspot", 10, "triaged-out", ["s1", "s2", "s3"])
+    deferred = _rec("hotspot:t:late.py", "declined", reason="by policy",
+                    deferredByPolicy=True)
+    card = gled.report_card(real + [deferred])["hotspot"]
+    assert card["sweeps"] == 3
+    assert card["benched"] is True
+    assert card["deferred"] == 1
+
+
+def test_lens_with_only_deferred_records_still_appears_in_the_card():
+    card = gled.report_card([_rec("hotspot:t:a.py", "triaged-out", deferredByPolicy=True)])
+    assert card["hotspot"]["adjudicated"] == 0
+    assert card["hotspot"]["deferred"] == 1
+    assert card["hotspot"]["actionability"] is None
+
+
+def test_validate_record_requires_a_bool_flag():
+    for bad in (1, 0, "yes", None, [], {}):
+        ok, reasons = gled.validate_record(
+            _rec("a:b:c", "triaged-out", deferredByPolicy=bad))
+        assert ok is False, bad
+        assert any("deferredByPolicy" in r and "bool" in r for r in reasons), (bad, reasons)
+
+
+def test_validate_record_true_flag_only_on_deferrable_states():
+    for state in ("filed", "verified-fixed", "reopened", "surfaced", "candidate"):
+        ok, reasons = gled.validate_record(
+            _rec("a:b:c", state, deferredByPolicy=True))
+        assert ok is False, state
+        assert any("deferredByPolicy" in r and "only on" in r for r in reasons), reasons
+    assert gled.DEFERRABLE_STATES == ("accepted", "declined", "triaged-out")
+    for state in gled.DEFERRABLE_STATES:
+        ok, reasons = gled.validate_record(
+            _rec("a:b:c", state, reason="by policy", deferredByPolicy=True))
+        assert ok is True, (state, reasons)
+    assert gled.validate_record(_rec("a:b:c", "filed", deferredByPolicy=False))[0] is True
+
+
+def test_advance_stamps_the_deferred_flag_true_and_false():
+    surfaced, _ = gled.advance([], "hotspot:t:a.py", "candidate")
+    surfaced, _ = gled.advance(surfaced, "hotspot:t:a.py", "surfaced")
+    new, result = gled.advance(surfaced, "hotspot:t:a.py", "declined",
+                               reason="by policy", deferredByPolicy=True, sweepId="s1")
+    assert result["ok"] is True, result
+    assert new[0]["deferredByPolicy"] is True
+
+    new_false, result = gled.advance(surfaced, "hotspot:t:a.py", "declined",
+                                     reason="by policy", deferredByPolicy=False,
+                                     sweepId="s1")
+    assert result["ok"] is True, result
+    assert new_false[0]["deferredByPolicy"] is False
+
+
+def test_advance_refuses_a_true_flag_on_a_non_deferrable_target():
+    new, result = gled.advance([], "hotspot:t:a.py", "candidate", deferredByPolicy=True)
+    assert result["ok"] is False
+    assert "deferredByPolicy" in result["reason"]
+    assert new == []
+
+
+def test_rendered_report_card_region_shows_the_deferred_by_policy_column():
+    text = gled.render(_hotspot_mix(deferred=True), now="2026-07-21")
+    assert "| deferred by policy |" in text
+    assert "| hotspot | 11 | 11 | 0 | 8 | 100% | 3 | active |" in text
+
+
+def test_record_without_the_flag_reads_unchanged():
+    records = [_rec("hotspot:t:a.py", "filed", issue="#1", adjudicatedIn="s1"),
+               _rec("hotspot:t:b.py", "triaged-out", adjudicatedIn="s2")]
+    card = gled.report_card(records)["hotspot"]
+    assert card["deferred"] == 0
+    assert (card["for"], card["against"], card["adjudicated"]) == (1, 1, 2)
+    assert card["sweeps"] == 2
+
+
+def test_deferred_flag_round_trips_through_the_real_reader(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    records = [_rec("hotspot:t:a.py", "declined", date="2026-07-20", reason="by policy",
+                    adjudicatedIn="s1", deferredByPolicy=True)]
+    assert gled.write(repo, records, now="2026-07-21")["ok"] is True
+    read = gs.read_ledger(repo)
+    assert read["status"] == "ok", read
+    assert read["records"] == records

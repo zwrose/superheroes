@@ -44,6 +44,17 @@ the history the floor is measured against. A per-record, write-once sweep stamp 
 field that survives both. Records that lack it (hand-written, legacy) make their lens's sweep
 count **unknown**, which grants no benching authority — the fail-closed direction.
 
+**Schema extension — `DEFERRED_BY_POLICY`.** A second documented extension beyond the ratified
+§5 shape: a record may carry `deferredByPolicy: true`, meaning the project decided, under its own
+stated policy, not to act on this real finding now. Such a record moves neither the top (`for`) nor
+the bottom (`for + against`) of its lens's usefulness ratio, never counts toward `minAdjudicated`,
+and never contributes to or invalidates the lens's sweep count; the report card shows the
+count on its own as `deferred`. Reason: a finding that is real but deferred by policy is neither
+evidence the lens is useful nor evidence it is noise, so letting it into either side of the
+ratio would bench (or prop up) a lens on a decision that says nothing about the lens. Only an
+`accepted`, `declined` or `triaged-out` record may carry `true` (`DEFERRABLE_STATES`); absent or
+`false` is the ordinary record, so every ledger written before this field reads unchanged.
+
 **`benched` is not a mute button.** A benched lens stops surfacing *ordinary drift candidates*
 only. Absolute red lines still surface — they already bypass the baseline quiet rule in
 `guardian_sweep.collect` — and tracked/filed status lines are unaffected. Enforcement lives in
@@ -80,6 +91,10 @@ LEDGER_RECORD_FIELDS = (
     "id", "disposition", "date", "issue", "metricAtDisposition", "reason", "reraiseWhen",
 )
 ADJUDICATED_IN = "adjudicatedIn"
+# Second documented extension (module docstring): the project decided, under its own stated
+# policy, not to act on this finding now. Only these dispositions may carry `true`.
+DEFERRED_BY_POLICY = "deferredByPolicy"
+DEFERRABLE_STATES = ("accepted", "declined", "triaged-out")
 
 # The ledger's sweep roster — append-only.
 SWEEP_FIELDS = ("sweepId", "sweptSha", "date")
@@ -194,6 +209,14 @@ def validate_record(rec):
         reasons.append("reraiseWhen must be a str or null")
     if not _is_str_or_none(rec.get(ADJUDICATED_IN)):
         reasons.append("%s must be a str or null" % ADJUDICATED_IN)
+    if DEFERRED_BY_POLICY in rec:
+        deferred = rec[DEFERRED_BY_POLICY]
+        if not isinstance(deferred, bool):
+            reasons.append("%s must be a bool when present (got %r)"
+                           % (DEFERRED_BY_POLICY, deferred))
+        elif deferred and disposition not in DEFERRABLE_STATES:
+            reasons.append("%s may be true only on %s (got disposition %r)"
+                           % (DEFERRED_BY_POLICY, ", ".join(DEFERRABLE_STATES), disposition))
 
     if disposition in WONT_FIX_STATES:
         why = rec.get("reason")
@@ -549,8 +572,15 @@ def _report_card(records, overrides=None, *, notes_out=None, config_status=None)
             continue
         lens = lens_of(rid)
         entry = by_lens.setdefault(
-            lens, {"for": 0, "against": 0, "sweepIds": set(), "unstamped": 0})
+            lens, {"for": 0, "against": 0, "deferred": 0, "sweepIds": set(), "unstamped": 0})
         disposition = rec.get("disposition")
+        # Axis: a deferred-by-policy record is outside the ratio, the minAdjudicated floor and
+        # the sweep count — it moves for/against and the stamp accounting not at all, and is
+        # counted on its own. It must `continue` before both.
+        if (disposition in OUTCOMES_FOR or disposition in OUTCOMES_AGAINST) \
+                and rec.get(DEFERRED_BY_POLICY) is True:
+            entry["deferred"] += 1
+            continue
         if disposition in OUTCOMES_FOR:
             entry["for"] += 1
         elif disposition in OUTCOMES_AGAINST:
@@ -598,6 +628,7 @@ def _report_card(records, overrides=None, *, notes_out=None, config_status=None)
             "adjudicated": adjudicated,
             "for": entry["for"],
             "against": entry["against"],
+            "deferred": entry["deferred"],
             "actionability": actionability,
             "sweeps": sweeps,
             "benched": benched,
@@ -671,7 +702,8 @@ def can_advance(from_state, to_state):
                    % (from_state, to_state, ", ".join(allowed)))
 
 
-_STAMPABLE = ("issue", "reason", "metricAtDisposition", "reraiseWhen", "sweptSha")
+_STAMPABLE = ("issue", "reason", "metricAtDisposition", "reraiseWhen", "sweptSha",
+              DEFERRED_BY_POLICY)
 
 
 def advance(records, finding_id, to_state, **fields):
@@ -811,10 +843,11 @@ here, re-raising only when a finding has materially worsened past the metric rec
   `reraiseWhen` names the metric whose growth should bring it back.
 """
 
-_CARD_HEADER = ("| lens | adjudicated | for | against | actionability | sweeps | status |\n"
-                "| --- | --- | --- | --- | --- | --- | --- |")
+_CARD_HEADER = ("| lens | adjudicated | for | against | deferred by policy | actionability "
+                "| sweeps | status |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- |")
 
-_RECORD_KEY_ORDER = LEDGER_RECORD_FIELDS + (ADJUDICATED_IN,)
+_RECORD_KEY_ORDER = LEDGER_RECORD_FIELDS + (ADJUDICATED_IN, DEFERRED_BY_POLICY)
 
 
 def _ordered(mapping, key_order):
@@ -883,8 +916,9 @@ def _render_report_card_region(card, *, now=None):
         lines.extend(_CARD_HEADER.splitlines())
         for lens in sorted(card):
             entry = card[lens]
-            lines.append("| %s | %d | %d | %d | %s | %s | %s |" % (
+            lines.append("| %s | %d | %d | %d | %d | %s | %s | %s |" % (
                 lens, entry["adjudicated"], entry["for"], entry["against"],
+                entry.get("deferred", 0),
                 _percent(entry["actionability"]),
                 "unknown" if entry["sweeps"] is None else entry["sweeps"],
                 _status_word(entry)))

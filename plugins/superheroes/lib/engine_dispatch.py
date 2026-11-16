@@ -1354,6 +1354,7 @@ def _build_resolved_inputs(
     engine_model_opts,
     claude_mode=None,
     claude_mode_source=resolved_inputs_vocab.DEFAULT,
+    nothing_to_group=False,
 ):
     snapshot = {}
     model_source = seat.get("modelSource", resolved_inputs_vocab.CALLER)
@@ -1386,6 +1387,9 @@ def _build_resolved_inputs(
     _put_resolved(snapshot, "diffBase", diff_base, diff_base_source)
     _put_resolved(snapshot, "progressPath", progress_path, progress_path_source)
     _put_resolved(snapshot, "claudeMode", claude_mode, claude_mode_source)
+    if nothing_to_group:
+        # Present only when the caller supplied the flag, so a snapshot without it keeps its key set.
+        _put_resolved(snapshot, "nothingToGroup", True, resolved_inputs_vocab.CALLER)
     journal_root, journal_root_source = _journal_root_with_source(run_dir_real)
     _put_resolved(snapshot, "journalRoot", journal_root, journal_root_source)
     return snapshot
@@ -5282,6 +5286,24 @@ def _finish_review_grade_from_parse(
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
+    # A run opened with --nothing-to-group was told its order has nothing to group, so an empty grouping is the
+    # complete answer; it grades ok only from a seat the runner observed using tools (engagement_read, the one home), else it stays vacuous (issue 2527).
+    # axis: nothing-to-group ok branch at the empty-payload forfeit — see bite-proof record wo_a_2527_nothing_to_group
+    if (opened.get("nothingToGroup") is True and kind == "grouping" and has_payload
+            and not _parse_review_has_payload(res)
+            and opened.get("expectedResultKind") in (None, "grouping")):
+        # axis: runner-observed engagement floor inside the nothing-to-group ok branch — see bite-proof record wo_a_2527_nothing_to_group
+        if stamped is not None and stamped.get("read") == "engaged":
+            result = {"ok": True, "resultKind": "grouping", "grouping": payload, "engagement": stamped}
+            if accepted:
+                result["investigated"] = accepted
+            _carry_read_parts(res, result)
+            return _attach_review_rejection_fields(
+                result,
+                rejected_records=rejected_records,
+                rejected_reasons=rejected_reasons,
+            )
+
     if not _parse_review_has_payload(res) and not accepted:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=[])
         return {
@@ -6126,7 +6148,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
                      echo_nonce=None, base_prompt=None, resolved_inputs=None,
-                     claude_mode=None):
+                     claude_mode=None, nothing_to_group=False):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -6208,6 +6230,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         record["configDir"] = cfg
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
+    if nothing_to_group:
+        record["nothingToGroup"] = True
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
     if effective_nonce is not None:
         record["echoNonce"] = effective_nonce
@@ -6235,7 +6259,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
                     mode=None, claude_mode=None, expected_result_kind=None,
                     pr_body_path=None, session_dir=None, leave_out_file=None,
-                    **kwargs):
+                    nothing_to_group=False, **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -6340,7 +6364,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
             expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history,
-            leave_out_file=leave_out_file)
+            leave_out_file=leave_out_file, nothing_to_group=nothing_to_group is True)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
@@ -6374,7 +6398,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           mode=None, claude_mode=None, resolved_mode=None,
                           resolved_claude_mode=None, expected_result_kind=None,
                           pr_body_path=None, session_dir=None, cloud_history=None,
-                          leave_out_file=None):
+                          leave_out_file=None, nothing_to_group=False):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch. In a cloud
     session `cloud_history`, when given, receives the history-completion answer under "cloudHistory"."""
@@ -6738,6 +6762,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 claude_mode=resolved_claude_mode["claudeMode"],
                 claude_mode_source=claude_mode_source,
                 engine_model_opts={"cwd": cwd},
+                nothing_to_group=nothing_to_group,
             )
             ok_open, open_detail = _open_review_run(
                 run_dir_real, engine=engine, argv=argv, cwd=cwd,
@@ -6751,6 +6776,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 echo_nonce=echo_nonce, base_prompt=base_prompt,
                 resolved_inputs=resolved_inputs,
                 claude_mode=resolved_claude_mode["claudeMode"],
+                nothing_to_group=nothing_to_group,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -7750,12 +7776,18 @@ def _observation_from_attempt(run_dir_real, state, attempt):
 
 # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run
 # without one — see bite-proof record i2381_every_attempt
+# axis: a silence-watchdog-ended attempt with no usage total leaves its tokens unmeasured, not the whole run, when another attempt measured — see bite-proof record i2514_partial_cost
 def _attempts_cost(run_dir_real, state):
     """{"tokens", "wallSeconds", "attempts"} summed over every attempt the journal shows, or None.
 
     Each attempt needs a dict `ended` and a finite non-negative numeric (not bool) `wallSeconds`; a codex run also needs
     the attempt's own stdout to carry a valid usage total. Any other engine, an empty attempts map, or any attempt
-    short of a figure gives None. Never raises."""
+    short of a figure gives None, with one exception (#2514): an attempt the silence watchdog ended
+    (`_silence_watchdog_end`) whose stdout carries no usage total (`codex_usage_tokens(..., explicit=True)` is None)
+    adds its wall seconds and no tokens, and its number joins `tokensUnmeasured`. A run with such an attempt and at least
+    one measured attempt gives {"tokens", "wallSeconds", "attempts", "tokensUnmeasured": [attempt numbers, ascending]}:
+    the measured attempts' tokens and every attempt's wall time. A run with no measured attempt gives None. A run whose
+    attempts all measured gives exactly the three keys, as before. Never raises."""
     try:
         opened = state.get("opened")
         if not isinstance(opened, dict) or opened.get("engine") != "codex":
@@ -7763,7 +7795,7 @@ def _attempts_cost(run_dir_real, state):
         attempts = state.get("attempts")
         if not isinstance(attempts, dict) or not attempts:
             return None
-        tokens, wall = 0, 0
+        tokens, wall, unmeasured = 0, 0, []
         for att in sorted(attempts):
             slot = attempts[att]
             ended = slot.get("ended") if isinstance(slot, dict) else None
@@ -7773,12 +7805,24 @@ def _attempts_cost(run_dir_real, state):
             if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):
                 return None
             stdout = _read_capped_text(os.path.join(run_dir_real, "attempt-%d.stdout" % att), stream=CAP_STREAM_STDOUT)
-            used = engine_adapter.codex_usage_tokens(stdout)
-            if used is None:
-                return None
+            if _silence_watchdog_end(ended):
+                used = engine_adapter.codex_usage_tokens(stdout, explicit=True)
+                if used is None:
+                    wall += secs
+                    unmeasured.append(att)
+                    continue
+            else:
+                used = engine_adapter.codex_usage_tokens(stdout)
+                if used is None:
+                    return None
             tokens += used
             wall += secs
-        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+        if not unmeasured:
+            return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+        # axis: a run with no measured attempt has no figure, however many attempts the watchdog ended — see bite-proof record i2514_partial_cost
+        if len(unmeasured) == len(attempts):
+            return None
+        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts), "tokensUnmeasured": unmeasured}
     except Exception:
         return None
 
@@ -7918,6 +7962,8 @@ def run_execution_record(run_dir):
         }
         if isinstance(attempt_prompt_path, str) and attempt_prompt_path:
             record["attemptPromptPath"] = attempt_prompt_path
+        if opened.get("nothingToGroup") is True:
+            record["nothingToGroup"] = True
         folded = state.get("folded")
         # graded: the run's persisted fold is a success (not a forfeit such as a vacuous review).
         record["graded"] = (isinstance(folded, dict) and folded.get("ok") is True
@@ -8195,6 +8241,12 @@ def build_parser():
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
+    cc.add_argument(d, "--nothing-to-group", contract="boolean-flag",
+                    help="declare the synthesis order has no survivors to group (its payload "
+                         "carries nothingToGroup): an empty grouping from a seat the runner "
+                         "observed using tools grades ok instead of vacuous; journaled at run "
+                         "open, the journaled value governs a continuation and a flag supplied "
+                         "on a continuation is ignored")
     cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
                     help="pairs with --session-dir; either alone refuses pr-body-args-unpaired")
     cc.add_argument(d, "--session-dir", contract="existing-directory", default=None,
@@ -8274,6 +8326,7 @@ def main(argv):
                                   diff_base=args.diff_base, mode=args.mode,
                                   claude_mode=args.claude_mode,
                                   expected_result_kind=args.expected_result_kind,
+                                  nothing_to_group=args.nothing_to_group,
                                   pr_body_path=args.pr_body_path, session_dir=args.session_dir,
                                   leave_out_file=args.leave_out_file)
             classification = dispatch_outcome.classify_dispatch_result(res)

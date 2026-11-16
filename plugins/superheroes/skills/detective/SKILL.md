@@ -50,8 +50,8 @@ the two front doors, and has a named budget before diagnosis starts.
 **Scan the project's revisit-trigger registry before repro or A/B work begins**, and cite any row
 whose revisit trigger matches this incident, so a prior decline is not re-investigated from
 scratch. Every owner-direct or advisor-dispatched diagnosis processes a field report, so the scan
-runs every time. Resolve the collector pointer from durable memory when available, or ask the owner
-for it. Never open a second collector.
+runs every time. Resolve the collector pointer from calibration first (`advisor-issues`), then from
+durable memory, or ask the owner for it. Never open a second collector.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` § The revisit-trigger registry from disk when you run the scan.**
 
