@@ -560,6 +560,79 @@ def test_t9_a_cap_round_whose_fixer_applied_nothing_hands_back_round_cap_with_no
     assert max(int(n) for n in state["rounds"]) == cap
 
 
+def test_t10_a_cap_round_that_committed_a_fix_but_reported_no_fixes_enters_the_pass(tmp_path, monkeypatch):
+    # axis: the pass begins on the cap round's fix commits, not only its reported fixes: a session that committed
+    # a fix and reported an empty fixes list still gets its audit — see bite-proof record i2552_bounded_pass_b1
+    # (E-applied-work). The submit chokepoint records a commit only beside a `fixes` binding, so the cap round's
+    # verified commit facts are injected at `_apply_fixes_commit_fault`; the session answers an empty `fixes`.
+    real = RD._apply_fixes_commit_fault
+
+    def committed_in_the_cap_round(state, config, artifact, commit_seam=None):
+        if state.get("round") == CAP:
+            return None, [{"finding": "open-important", "commit": "abc1234"}]
+        return real(state, config, artifact, commit_seam=commit_seam)
+
+    monkeypatch.setattr(RD, "_apply_fixes_commit_fault", committed_in_the_cap_round)
+    d, n, trace = _session(tmp_path, X._respond(cap=CAP), stop=lambda n: n["round"] > CAP)
+    state = X._state(d)
+    cap_fix = state["rounds"][str(CAP)]["fix"]
+    assert cap_fix["fixes"] == [] and cap_fix["commits"], cap_fix
+    assert (n["action"], n["round"]) == (RD.P_AUDITS, CAP + 1), trace
+    assert state["boundedPass"] == {"trigger": "round-cap", "step": "audit", "rounds": [CAP + 1]}
+    assert "bounded-pass-begun" in _kinds(state)
+
+
+def _capped_state(**record):
+    """A state at its cap holding a queued fix batch and a cap round record of `record`."""
+    state = RD.new_state(TRD._cfg(maxRounds=CAP))
+    state["round"] = CAP
+    state["fixBatch"] = [X._finding("queued")]
+    state["rounds"] = {str(CAP): record}
+    return state
+
+
+def test_t10_a_cap_round_whose_only_applied_work_is_a_changed_pr_body_fix_enters_the_pass():
+    # axis: a PR-body-only fix (empty fixes, no commits) is applied work. The test world's fixer cannot stage a PR
+    # body end to end, so the predicate is tested directly on a built state — see bite-proof record
+    # i2552_bounded_pass_b1 (E-applied-work)
+    state = _capped_state(fix={"fixes": [], "commits": []}, prBodyFix={"before": "old body", "after": "new body"})
+    assert RD._bounded_pass_applies(state, state["config"]) is True
+
+
+@pytest.mark.parametrize("record", [
+    {"fix": {"fixes": [], "commits": []}},
+    {"fix": {"fixes": None}},
+    {"fix": {}},
+    {"fix": "not-a-dict"},
+    {"fix": {"fixes": [], "commits": []}, "prBodyFix": {"before": "same", "after": "same"}},
+    {"fix": {"fixes": [], "commits": []}, "prBodyFix": {"before": "old", "after": ""}},
+    {"fix": {"fixes": [], "commits": []}, "prBodyFix": {"before": "old", "after": None}},
+    {"fix": {"fixes": [], "commits": []}, "prBodyFix": {"before": "old"}},
+    {"fix": {"fixes": [], "commits": []}, "prBodyFix": "not-a-dict"},
+], ids=["empty-lists", "fixes-none", "empty-fix", "fix-not-a-dict", "body-unchanged", "body-after-empty",
+        "body-after-none", "body-after-missing", "body-not-a-dict"])
+def test_t10_a_cap_round_that_applied_none_of_the_three_hands_back_with_no_pass(record):
+    state = _capped_state(**record)
+    assert RD._bounded_pass_applies(state, state["config"]) is False
+
+
+@pytest.mark.parametrize("record", [{"fix": {"fixes": [], "commits": ["c1"]}}, {"fix": {"fixes": ["note"]}},
+                                    {"fix": {"commits": "malformed-but-truthy"}}],
+                         ids=["commits", "fixes", "malformed-truthy-commits"])
+def test_t10_fixes_or_commits_are_read_by_truthiness_as_the_vendor_work_reading_does(record):
+    state = _capped_state(**record)
+    assert RD._bounded_pass_applies(state, state["config"]) is True
+    rec = dict(record, fixerVendor="claude")
+    assert RD._vendor_did_fix_work({"rounds": {"1": rec}}, {}, "claude") is True
+
+
+def test_t10_a_missing_cap_round_record_is_not_applied_work():
+    state = _capped_state()
+    state["rounds"] = {}
+    assert RD._bounded_pass_applies(state, state["config"]) is False
+    assert RD._round_applied_work(None) is False
+
+
 def test_t9_the_never_converging_loop_with_the_pass_on_runs_no_round_past_cap_plus_one(tmp_path):
     # the fixer now reports an applied fix each round, so the pass begins: the one round past the cap
     cap = 4

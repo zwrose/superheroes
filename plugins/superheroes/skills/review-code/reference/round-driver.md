@@ -785,8 +785,11 @@ loop stopped at its cap for `round-cap`, `extra-audit-open`, `bounded-pass-open`
 
 ## The bounded pass
 
-**The trigger.** The cap round applied a fix batch no audit has checked, and the session holds
-neither a bounded pass nor an ordered extra audit round. The driver begins the pass itself when the
+**The trigger.** The cap round queued a fix batch and applied work, and the session holds
+neither a bounded pass nor an ordered extra audit round. Applied work is read as the driver reads a
+round's work elsewhere: the cap round's reported fixes, its fix commits, or a PR-body fix whose
+`after` is a non-empty string that differs from its `before`. A cap round that applied none of the
+three hands back `round-cap` with no pass. The driver begins the pass itself when the
 cap round's verify gate folds: no order, no advisor and no `extra-audit` call. A loaded state already
 above its cap never begins one, and a session holds at most one pass.
 
