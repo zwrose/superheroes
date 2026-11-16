@@ -176,7 +176,7 @@ def test_never_raises_on_junk_input():
         assert set(out) == {"audits", "discharged", "notDischarged", "newIssues",
                             "unaudited", "ambiguous", "malformed", "unmatched",
                             "unauthenticated", "echoMismatch", "unnamedChange",
-                            "attributedChange", "testMismatch",
+                            "scopeHeld", "attributedChange", "testMismatch",
                             "placesUnfixed", "placesIgnored",
                             "reviewGuarded", "reviewGuardRefused",
                             "testRemovalCleared", "testRemovalRefused"}

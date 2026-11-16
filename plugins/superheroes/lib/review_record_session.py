@@ -857,14 +857,23 @@ def _decide_rep(own, by_key, rulings, exempt=None, ungraded=frozenset()):
             return _FIXED, f"fixed; the full panel in round {receipt.get('panelRound')} did not raise it again", rep
         removal = receipt.get("testRemoval") if isinstance(receipt, dict) else None
         evidence = removal.get("evidence") if isinstance(removal, dict) else None
+        note = receipt.get("scopeNote") if isinstance(receipt, dict) else None
+        note = note.strip() if isinstance(note, str) and note.strip() else None
         if isinstance(evidence, dict):
             # a fix the audit cleared as the removal of a worthless test names the evidence it cleared on
             spans = ", ".join(f"{item.get('file')} lines {s}-{e}"
                               for item in evidence.get("removed") or [] if isinstance(item, dict)
                               for s, e in (r for r in item.get("ranges") or [] if isinstance(r, list) and len(r) == 2))
-            return (_FIXED, f"fixed and audited in round {rep.get('dispositionRound')}; cleared as the removal of a "
-                            f"worthless test: {evidence.get('taxonomy')} finding {evidence.get('finding')}, "
-                            f"removed {spans}", rep)
+            reason = (f"fixed and audited in round {rep.get('dispositionRound')}; cleared as the removal of a "
+                      f"worthless test: {evidence.get('taxonomy')} finding {evidence.get('finding')}, "
+                      f"removed {spans}")
+            if note is not None:
+                reason += f"; the audit noted a change its finding does not name, listed for the vet: {note}"
+            return _FIXED, reason, rep
+        # axis: a fix the audit ruled right with a scope note names that note in the record, for the vet — see bite-proof record i2495_strike_kinds
+        if note is not None:
+            return (_FIXED, f"fixed and audited in round {rep.get('dispositionRound')}; the audit ruled the fix right "
+                            f"and noted a change its finding does not name, listed for the vet: {note}", rep)
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))

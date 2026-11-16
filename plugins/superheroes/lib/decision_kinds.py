@@ -11,6 +11,7 @@ DECISION_KINDS = (
     "audit-attributed-change",
     "audit-echo-mismatch",
     "audit-provenance-fail",
+    "audit-scope-held",
     "audit-unnamed-change",
     "author-justified-drop",
     "break-it-change",
