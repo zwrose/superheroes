@@ -246,12 +246,22 @@ def _figure(obs):
 
 
 def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=None):
-    """The `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once, every round and attempt.
+    """The `sessionCost` alone: the first part of `_cost_and_unbound`."""
+    return _cost_and_unbound(rows, run_dirs, engine_run, hand, session_dir, state)[0]
+
+
+def _cost_and_unbound(rows, run_dirs, engine_run, hand=(), session_dir=None, state=None):
+    """`(cost, unbound)`: the `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once,
+    every round and attempt, and the runs that carry a runner nonce no single listed run folder claims.
 
     A run is a recorded review row with a runner nonce, or a `record-result`; its identity is the nonce, else the slot.
     Its figures are the every-attempt total (`attemptsCost`) of the engine record whose nonce it carries, never from
     `_bind`; a record without one gives no figure. `hand` names the runs of a
-    hand-submit session (no journaled seat), each counted without a figure."""
+    hand-submit session (no journaled seat), each counted without a figure.
+
+    `unbound` is one `{seat, nonce, case}` per such run, in run order, computed in the same pass over the same folders as
+    the cost: `unmatched` when two folders claim the nonce or some listed folder was foreign (unreadable, no dict, no
+    nonce, or a nonce no run carries), else `not-in-extras`. A nonce exactly one folder claims is bound, never listed."""
     runs, seats = {}, {}
     for r in rows:
         phase, seat, ev = r.get("phase"), r.get("seat"), r.get("executionEvidence")
@@ -274,18 +284,30 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
     by_dir = {}
     for d in run_dirs:
         by_dir.setdefault(os.path.realpath(d), d)
-    seen, clash = {}, set()
+    run_nonces = {nonce for _, nonce in runs.values() if nonce is not None}
+    seen, clash, foreign = {}, set(), False
     for d in by_dir.values():
         try:
             rec = engine_run(d)[0]
         except Exception:
+            foreign = True  # an unreadable dir may be the folder of a run it was never matched to
             continue  # an unreadable dir gives no figure
         n = rec.get("runnerNonce") if isinstance(rec, dict) else None
+        # axis: a folder that is unreadable, no dict, nonce-less or carries a nonce no run of this session has is foreign, and makes an unclaimed nonce `unmatched` — see bite-proof record i2516_unbound_runs
+        if not (isinstance(n, str) and n and n in run_nonces):
+            foreign = True
         if isinstance(n, str) and n:
             if n in seen:
                 clash.add(n)  # two different run dirs claim one nonce: no figure for it
             # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run without one — see bite-proof record i2381_every_attempt
             seen[n] = rec.get("attemptsCost")
+    unbound = []
+    for name, nonce in runs.values():
+        # axis: a nonce exactly one folder claims is bound and never listed; any other nonce-carrying run is — see bite-proof record i2516_unbound_runs
+        if nonce is None or (nonce in seen and nonce not in clash):
+            continue
+        # axis: two folders claiming one nonce, or a foreign folder beside an unclaimed nonce, is `unmatched`; an unclaimed nonce with every folder accounted for is `not-in-extras` — see bite-proof record i2516_unbound_runs
+        unbound.append({"seat": name, "nonce": nonce, "case": "unmatched" if nonce in clash or foreign else "not-in-extras"})
     entries = [(name, None if nonce is None or nonce in clash else _figure(seen.get(nonce))) for name, nonce in runs.values()]
     entries += [(name, None) for name in hand]
     for name, fig in entries:
@@ -299,8 +321,9 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
             s["secs"] += fig[1]
     by_seat = {k: {"tokens": s["tokens"], "minutes": round(s["secs"] / 60, 1), "runs": s["runs"]} for k, s in seats.items()}
     bare = sum(s["bare"] for s in seats.values())
-    return {"tokens": sum(v["tokens"] for v in by_seat.values()), "minutes": round(sum((v["minutes"] for v in by_seat.values()), 0.0), 1),
+    cost = {"tokens": sum(v["tokens"] for v in by_seat.values()), "minutes": round(sum((v["minutes"] for v in by_seat.values()), 0.0), 1),
             "runs": sum(v["runs"] for v in by_seat.values()), "runsWithoutFigure": bare, "complete": bare == 0, "bySeat": by_seat}
+    return cost, unbound
 
 
 # The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` and
@@ -1622,7 +1645,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         hand += ["synthesis synthesis"] * len({(r["round"], r["attempt"] if _int(r.get("attempt")) else 0) for r in rows
                                                if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
                                                and r.get("phase") == round_phases.P_SYNTHESIS and _int(r.get("round"))})
-    session_cost = _session_cost(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand, session_dir, state)
+    session_cost, unbound_runs = _cost_and_unbound(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand, session_dir, state)
     watchdog_ends = _watchdog_ends(extras.get("runDirs", []), reviewers, review_record._readers(readers)["watchdog_ends"])
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     pr_body_line = pr_body_stage.record_line(session_dir)
@@ -1697,6 +1720,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
             **({"silenceWatchdogEnds": watchdog_ends} if watchdog_ends else {}),
+            # axis: the account lists the unbound runs exactly when there are any, never an empty list — see bite-proof record i2516_unbound_runs
+            **({"unboundRuns": unbound_runs} if unbound_runs else {}),
             "reviewers": reviewers, "sessionCost": session_cost, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
