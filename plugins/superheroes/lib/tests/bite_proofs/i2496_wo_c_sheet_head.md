@@ -393,3 +393,19 @@ plugins/superheroes/lib/pr_sheet.py:1653:    if sheet["prSheet"].get("held") is 
 .........                                                                [100%]
 9 passed, 286 deselected in 2.13s
 ```
+
+---
+
+## Added at layer 2's review, round 2: E-held-carry (2026-11-16, typed and run by the build session)
+
+**guard:** `_check_previous` in `lib/pr_sheet.py`, `if part.get("held") is True:` refuses a `carriedForward` whose earlier sheet is held (commit 9cfede68).
+
+**neutralization:** `if False and part.get("held") is True:`.
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_pr_sheet_head_2496.py -k held_sheet_is_refused -q -p no:cacheprovider`, in a detached probe worktree at 9cfede68
+```
+E       Failed: DID NOT RAISE Refusal
+1 failed, 46 deselected in 26.04s
+```
+
+**restore:** the inverse Edit; `git status --short` printed nothing. **green:** the same file, `47 passed in 1.52s`.
