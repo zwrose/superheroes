@@ -245,13 +245,28 @@ def _figure(obs):
     return (t, w) if ok else None
 
 
+def _partial_state(obs):
+    """How an `attemptsCost` marks its figure: "whole" without a `tokensUnmeasured` key, "partial" when the key is a
+    non-empty list of ints >= 1 (the attempts whose tokens nobody measured), "bad" when it is present and anything else."""
+    if not isinstance(obs, dict) or "tokensUnmeasured" not in obs:
+        return "whole"
+    u = obs["tokensUnmeasured"]
+    return "partial" if isinstance(u, list) and u and all(_int(x) and x >= 1 for x in u) else "bad"
+
+
 def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=None):
     """The `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once, every round and attempt.
 
     A run is a recorded review row with a runner nonce, or a `record-result`; its identity is the nonce, else the slot.
     Its figures are the every-attempt total (`attemptsCost`) of the engine record whose nonce it carries, never from
     `_bind`; a record without one gives no figure. `hand` names the runs of a
-    hand-submit session (no journaled seat), each counted without a figure."""
+    hand-submit session (no journaled seat), each counted without a figure.
+
+    A run whose `attemptsCost` also carries a `tokensUnmeasured` that is a non-empty list of ints >= 1 (#2514: an attempt
+    the silence watchdog ended left no usage total, and another attempt measured) is partial: it adds its tokens and
+    seconds to its seat like any figure and counts in `runsPartial`, written only when one or more. A `tokensUnmeasured`
+    present but not such a list makes the run one without a figure. `complete` is true only when no run lacks a figure
+    and none is partial."""
     runs, seats = {}, {}
     for r in rows:
         phase, seat, ev = r.get("phase"), r.get("seat"), r.get("executionEvidence")
@@ -286,10 +301,16 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
                 clash.add(n)  # two different run dirs claim one nonce: no figure for it
             # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run without one — see bite-proof record i2381_every_attempt
             seen[n] = rec.get("attemptsCost")
-    entries = [(name, None if nonce is None or nonce in clash else _figure(seen.get(nonce))) for name, nonce in runs.values()]
-    entries += [(name, None) for name in hand]
-    for name, fig in entries:
-        s = seats.setdefault(name, {"tokens": 0, "secs": 0, "runs": 0, "bare": 0})
+    entries = []
+    for name, nonce in runs.values():
+        obs = None if nonce is None or nonce in clash else seen.get(nonce)
+        fig = _figure(obs)
+        # axis: a malformed `tokensUnmeasured` makes the run one without a figure, never a whole one — see bite-proof record i2514_partial_cost
+        state_of = _partial_state(obs) if fig is not None else "whole"
+        entries.append((name, None if state_of == "bad" else fig, state_of == "partial"))
+    entries += [(name, None, False) for name in hand]
+    for name, fig, partial in entries:
+        s = seats.setdefault(name, {"tokens": 0, "secs": 0, "runs": 0, "bare": 0, "partial": 0})
         s["runs"] += 1
         # axis: a run without both figures adds none and is counted as lacking, never as a zero — see bite-proof record i2307_session_cost
         if fig is None:
@@ -297,10 +318,18 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
         else:
             s["tokens"] += fig[0]
             s["secs"] += fig[1]
+            s["partial"] += partial
     by_seat = {k: {"tokens": s["tokens"], "minutes": round(s["secs"] / 60, 1), "runs": s["runs"]} for k, s in seats.items()}
-    bare = sum(s["bare"] for s in seats.values())
-    return {"tokens": sum(v["tokens"] for v in by_seat.values()), "minutes": round(sum((v["minutes"] for v in by_seat.values()), 0.0), 1),
-            "runs": sum(v["runs"] for v in by_seat.values()), "runsWithoutFigure": bare, "complete": bare == 0, "bySeat": by_seat}
+    bare, partial = sum(s["bare"] for s in seats.values()), sum(s["partial"] for s in seats.values())
+    out = {"tokens": sum(v["tokens"] for v in by_seat.values()), "minutes": round(sum((v["minutes"] for v in by_seat.values()), 0.0), 1),
+           "runs": sum(v["runs"] for v in by_seat.values()), "runsWithoutFigure": bare}
+    # axis: `runsPartial` is written only when one or more runs are partial, so a session of whole runs reads as before — see bite-proof record i2514_partial_cost
+    if partial:
+        out["runsPartial"] = partial
+    # axis: a session holding any partial run is never complete — see bite-proof record i2514_partial_cost
+    out["complete"] = bare == 0 and partial == 0
+    out["bySeat"] = by_seat
+    return out
 
 
 # The `(round N)` suffix a persisted reviewer name carries: the one home of the format. `_reviewer` and

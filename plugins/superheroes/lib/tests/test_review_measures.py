@@ -86,7 +86,7 @@ def test_the_row_shape_is_pinned():
     row = RM.compute(_full(), FROM, UNTIL)
     assert tuple(row) == RM.ROW_KEYS and tuple(row["measures"]) == RM.MEASURES and RM.problems(row) == []
     assert RM.MEASURE_KEYS["reviewerCostPerPr"] == ("tokens", "minutes", "prsLeftOut")
-    none_left = {"count": 0, "why": "a review session has no complete sessionCost"}
+    none_left = {"count": 0, "why": "a review session has no complete sessionCost", "partial": 0}
     assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": none_left, "minutes": none_left}
 
 
@@ -301,7 +301,7 @@ def test_the_window_cost_is_over_measured_prs_and_names_those_left_out():
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a review session has no complete sessionCost"}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a review session has no complete sessionCost", "partial": 0}
     assert cost["prsLeftOut"]["minutes"]["count"] == 1 and RM.problems(row) == []
     row = RM.compute(_full(records=[_rec(1, sc=None), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
