@@ -101,8 +101,6 @@ def test_an_applies_or_unsettled_check_keeps_the_finding_for_the_owner(settled, 
                  "a check against the final commit", id="fix-commit-not-in-history"),
     pytest.param([entry()], PRIOR, {"ancestor": None}, "its fix commit's place in the history could not be read",
                  "a check against the final commit", id="history-unreadable"),
-    pytest.param([entry(checkedHead=HEAD)], PRIOR, {"head": THIRD}, f"checked on {HEAD[:7]}, not the final commit {THIRD[:7]}",
-                 "a check", id="github-head-differs-from-the-session-head"),
 ])
 def test_every_other_case_keeps_the_finding_for_the_owner(checks, prior, kw, why, opening):
     # Axis: fail closed, a finding stays left-for-owner unless every condition of the check holds; it is never removed.
@@ -115,6 +113,15 @@ def test_every_other_case_keeps_the_finding_for_the_owner(checks, prior, kw, why
     assert f["reason"] == f"waits for the owner; {opening} kept it for the owner: {why}"
     (row,) = rec["carriedRechecks"]
     assert (row["result"], row["why"]) == ("kept", why)
+
+
+def test_a_check_on_the_sessions_final_commit_counts_when_the_github_head_moved():
+    # Axis: a carried check counts exactly when it ran on the commit the record certifies (the session's final commit),
+    # whatever head GitHub serves when the record is written.
+    rec = build([entry(checkedHead=HEAD)], PRIOR, head=THIRD)
+    assert the_finding(rec)["outcome"] == "fixed"
+    assert rec["finalCommit"]["sha"] == HEAD
+    assert rec["finalCommit"]["source"] == rr.HEAD_MOVED_SOURCE
 
 
 @pytest.mark.parametrize("settled", ["applies", "unsettled"])
