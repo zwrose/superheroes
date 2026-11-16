@@ -415,6 +415,15 @@ def test_a_malformed_record_reads_needs_review(tmp_path, record):
     assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_RECORD_UNUSABLE] and got["certified"] is None
 
 
+@pytest.mark.parametrize("ok", [False, "yes", 1], ids=["false", "string", "one"])
+def test_a_record_whose_ok_is_not_true_reads_needs_review_even_with_a_valid_final_commit(tmp_path, ok):
+    # axis: only ok true certifies; a record that names a valid final commit but is not ok certifies nothing
+    repo = TR.Repo(tmp_path)
+    base, reviewed, earlier = TR.returning(repo)
+    got = HC.check(repo.root, base, dict(earlier, ok=ok), reviewed)
+    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_RECORD_UNUSABLE] and got["certified"] is None
+
+
 def test_an_abandoned_record_reads_needs_review_even_at_its_own_commit(tmp_path):
     repo = TR.Repo(tmp_path)
     base, reviewed, earlier = TR.returning(repo)
