@@ -163,7 +163,7 @@ declined with a trigger by default.
 
 ## Declared inboxes
 
-**What an inbox is.** An inbox is an issue the project names in calibration item 20 (`advisorIssues`)
+**What an inbox is.** An inbox is an issue the project names in calibration item 21 (`advisorIssues`)
 where routines or people post things for the advisor, for example an operations log a routine writes
 to. The [collector](../../../rubric/glossary.md#collector) is named in the same item. The advisor
 reads the item with `python3 -B "$ROOT_DIR/lib/project_config.py" advisor-issues --cwd .` and, when
@@ -199,9 +199,9 @@ recorded disposition already cites is already triaged. So a seat with no resume 
 one, re-reads the inbox and skips what is already dispositioned: nothing is lost and nothing is done
 twice.
 
-**An unreadable item 20.** When `advisor-issues` returns `status: unreadable`, that is a failed read,
+**An unreadable item 21.** When `advisor-issues` returns `status: unreadable`, that is a failed read,
 named in the report. The collector then comes from durable memory, and the inboxes cannot be read
-until item 20 is fixed through configure.
+until item 21 is fixed through configure.
 
 ## The grid and its two instruments
 

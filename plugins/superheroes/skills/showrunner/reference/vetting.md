@@ -111,10 +111,10 @@ When a builder parks here, the tripwire is firing as designed — **welcome it a
 
 Reading it is a vet-time step: the one moment you are already in disposition mode, and the one moment guaranteed to recur whatever the project's release model.
 
-**Locating the collector is part of the duty.** The number comes from calibration item 20
+**Locating the collector is part of the duty.** The number comes from calibration item 21
 (`python3 -B "$ROOT_DIR/lib/project_config.py" advisor-issues --cwd .`) first and durable memory
 second. Record its issue pointer in durable memory the first time you open or find it, as a recall
-copy. An `unreadable` item 20 is a disclosed degradation, never "no collector". If you cannot resolve
+copy. An `unreadable` item 21 is a disclosed degradation, never "no collector". If you cannot resolve
 it, the pending field says so as a **disclosed degradation**, never a bare `None`, which is
 indistinguishable from an empty collector. Ask the owner for the number rather than opening a second
 collector: a duplicate orphans everything the first one holds.

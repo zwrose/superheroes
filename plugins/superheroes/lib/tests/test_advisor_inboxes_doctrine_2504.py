@@ -1,4 +1,4 @@
-"""Doctrine and configure text for configuration item 20: the collector and the inboxes (issue 2504).
+"""Doctrine and configure text for configuration item 21: the collector and the inboxes (issue 2504).
 
 Plain text detectors. Each test locates a section, paragraph or bullet by its own opening words and
 asserts inside that span only, never over a whole file. The invariant: every place the advisor
@@ -80,9 +80,9 @@ def _need(text, needle, where):
 # Priority is read from the words attached to each source, never from mention order alone: the
 # code spans are dropped, then calibration must carry "first" and durable memory "second" (or come
 # after a "then"), and the reversed words are refused outright.
-_CALIBRATION_FIRST = re.compile(r"\bcalibration(?: item 20)? (?:\(\) )?first\b")
+_CALIBRATION_FIRST = re.compile(r"\bcalibration(?: item 21)? (?:\(\) )?first\b")
 _MEMORY_SECOND = re.compile(r"\bdurable memory second\b|\bthen from (?:the advisor's )?durable memory\b")
-_REVERSED = re.compile(r"\bcalibration(?: item 20)? (?:\(\) )?second\b|\bdurable memory first\b")
+_REVERSED = re.compile(r"\bcalibration(?: item 21)? (?:\(\) )?second\b|\bdurable memory first\b")
 
 
 def _before(text, first, second, where):
@@ -120,7 +120,7 @@ def test_owner_decisions_has_the_section_and_a_contents_entry():
 def test_declared_inboxes_names_what_an_inbox_is():
     text = _inboxes_section()
     where = "owner-decisions § Declared inboxes"
-    _need(text, "calibration item 20", where)
+    _need(text, "calibration item 21", where)
     _need(text, "routines or people post things for the advisor", where)
     _need(text, "collector", where)
 
@@ -183,7 +183,7 @@ def test_declared_inboxes_disposition_citing_the_permalink_is_the_ground_truth()
     _need(text, "nothing is lost and nothing is done twice", where)
 
 
-def test_declared_inboxes_unreadable_item_20_is_a_failed_read_with_memory_fallback():
+def test_declared_inboxes_unreadable_item_21_is_a_failed_read_with_memory_fallback():
     text = _inboxes_section()
     where = "owner-decisions § Declared inboxes"
     _need(text, "status: unreadable", where)
@@ -258,11 +258,11 @@ def test_resume_step_seven_line_three_lists_inboxes_and_failed_reads():
     _need(first_example, "inbox <number>", "showrunner-resume Step 7 first worked example")
 
 
-def test_resume_failure_modes_has_the_item_twenty_row():
+def test_resume_failure_modes_has_the_item_twenty_one_row():
     section = _section(RESUME, "## Failure modes")
-    row = next((l for l in section if l.startswith("| Item 20 is unreadable")), None)
-    assert row is not None, "showrunner-resume failure-modes table has no item 20 row"
-    where = "showrunner-resume item 20 failure row"
+    row = next((l for l in section if l.startswith("| Item 21 is unreadable")), None)
+    assert row is not None, "showrunner-resume failure-modes table has no item 21 row"
+    where = "showrunner-resume item 21 failure row"
     _need(row, "advisor-issues", where)
     _need(row, "line 3 of the report", where)
     _need(row, "never skip", where)
@@ -301,7 +301,7 @@ def test_vetting_collector_paragraph_names_calibration_before_memory():
     where = "vetting.md § The collector, locating paragraph"
     _before(paragraph, "advisor-issues", "durable memory", where)
     _need(paragraph, "recall copy", where)
-    _need(paragraph, "`unreadable` item 20 is a disclosed degradation", where)
+    _need(paragraph, "`unreadable` item 21 is a disclosed degradation", where)
     _need(paragraph, "never \"no collector\"", where)
     _need(paragraph, "Ask the owner for the number rather than opening a second collector", where)
 
@@ -348,15 +348,15 @@ def test_set_up_has_section_4_10_and_its_contents_line():
     _need(text, "set --item advisorIssues --cwd . <<'SUPERHEROES_ANSWER'", where)
     _need(text, "only `written` or `noop` means it was saved", where)
     _need(text, "its `reason`", where)
-    _need(text, "Skipping this leaves item 20 unset", where)
+    _need(text, "Skipping this leaves item 21 unset", where)
     _need(text, "resolves the collector from its memory and reads no inbox", where)
     _need(text, "owner-decisions.md` § Declared inboxes", where)
 
 
-def test_view_and_tune_has_an_item_twenty_row_naming_advisor_issues():
+def test_view_and_tune_has_an_item_twenty_one_row_naming_advisor_issues():
     section = _section(VIEW_AND_TUNE, "## 2")
-    row = _bullet(section, "- **Name the collector and the inboxes (item 20)**", "- **")
-    where = "view-and-tune.md § 2 item 20 row"
+    row = _bullet(section, "- **Name the collector and the inboxes (item 21)**", "- **")
+    where = "view-and-tune.md § 2 item 21 row"
     _need(row, "advisorIssues", where)
     _need(row, "set --item advisorIssues --cwd . <<'SUPERHEROES_ANSWER'", where)
     _need(row, "replaces the whole value", where)
@@ -365,4 +365,4 @@ def test_view_and_tune_has_an_item_twenty_row_naming_advisor_issues():
     after_19 = [l for l in section if l.startswith("- **Keep cloud dependencies current with a hook (item 19)**")]
     assert after_19, "view-and-tune.md § 2 lost the item 19 row"
     assert section.index(after_19[0]) < next(
-        i for i, l in enumerate(section) if "(item 20)**" in l), "the item 20 row is not after the item 19 row"
+        i for i, l in enumerate(section) if "(item 21)**" in l), "the item 21 row is not after the item 19 row"

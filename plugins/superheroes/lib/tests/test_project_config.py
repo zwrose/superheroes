@@ -110,6 +110,10 @@ def _item_by_slug(payload, slug):
 
 def test_registry_has_every_item_in_order():
     assert len(PC.ITEMS) == 19
+    # axis: no two registry items share a configuration-item number, so a merge that lands two items on one number fails here
+    numbers = [item["number"] for item in PC.ITEMS]
+    duplicates = sorted({n for n in numbers if numbers.count(n) > 1})
+    assert len(set(numbers)) == len(numbers), "registry items share a number: %s" % duplicates
     assert [item["number"] for item in PC.ITEMS] == [1, 2, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21]
     assert [item["slug"] for item in PC.ITEMS] == [
         "severityLadder",

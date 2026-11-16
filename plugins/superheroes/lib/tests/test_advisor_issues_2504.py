@@ -1,7 +1,7 @@
 # plugins/superheroes/lib/tests/test_advisor_issues_2504.py
-"""Conformance: configuration item 20 (advisorIssues), its one total reader, and the verb.
+"""Conformance: configuration item 21 (advisorIssues), its one total reader, and the verb.
 
-The invariant: item 20's state is read through exactly one total reader, and a stored value that
+The invariant: item 21's state is read through exactly one total reader, and a stored value that
 cannot be read is reported unreadable, never read as nothing declared."""
 import copy
 import importlib.util
@@ -127,10 +127,10 @@ def _item(payload, slug=SLUG):
 # --- the registry entry -----------------------------------------------------------------------
 
 
-def test_registry_entry_for_item_20():
+def test_registry_entry_for_item_21():
     item = next(entry for entry in PC.ITEMS if entry["slug"] == "advisorIssues")
     assert item == {
-        "number": 20,
+        "number": 21,
         "slug": "advisorIssues",
         "name": "Advisor issues",
         "home": PC.HOME_PROJECT_CONFIGURATION,
@@ -348,7 +348,7 @@ def test_get_item_and_view_report_stamped_for_declared(tmp_path):
     assert got["malformed"] is False
     viewed = [i for i in PC.view(repo, root=store)["items"] if i["slug"] == SLUG]
     assert len(viewed) == 1
-    assert viewed[0]["number"] == 20 and viewed[0]["name"] == "Advisor issues"
+    assert viewed[0]["number"] == 21 and viewed[0]["name"] == "Advisor issues"
     assert viewed[0]["source"] == "stamped" and viewed[0]["malformed"] is False
 
 
@@ -361,7 +361,7 @@ def test_get_item_and_view_report_unset_when_no_key(tmp_path):
 
 
 @pytest.mark.parametrize("case", sorted(_UNREADABLE_CASES))
-def test_v1_read_reports_unreadable_item_20_as_malformed(tmp_path, case):
+def test_v1_read_reports_unreadable_item_21_as_malformed(tmp_path, case):
     repo, store = _setup_repo(tmp_path)
     _UNREADABLE_CASES[case](repo, store)
     got = PC.get_item(repo, SLUG, root=store)
@@ -401,7 +401,7 @@ def test_configure_view_screen_shows_unreadable_as_malformed(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _make_stored_invalid(repo, store)
     screen = CV.render(repo, root=store)
-    row = next(line for line in screen.splitlines() if line.startswith("20. Advisor issues"))
+    row = next(line for line in screen.splitlines() if line.startswith("21. Advisor issues"))
     assert "malformed (stamped value not applied)" in row
 
 
@@ -429,7 +429,7 @@ def test_cli_advisor_issues_unreadable_still_exits_zero(tmp_path, capsys):
 # --- dependencies() collector ----------------------------------------------------------------
 
 
-def test_dependencies_collector_declared_from_item_20(tmp_path):
+def test_dependencies_collector_declared_from_item_21(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _store_raw(repo, store, copy.deepcopy(VALID))
     assert PC.dependencies(repo, root=store)["collector"] == {
@@ -444,19 +444,19 @@ def test_dependencies_collector_declared_wins_over_declared_dependencies(tmp_pat
         "status": "declared", "collector": 11}
 
 
-def test_dependencies_collector_unset_item_20_keeps_today_absent(tmp_path):
+def test_dependencies_collector_unset_item_21_keeps_today_absent(tmp_path):
     repo, store = _setup_repo(tmp_path)
     assert PC.dependencies(repo, root=store)["collector"] == {
         "status": "absent", "fallback": PC._DEPENDENCY_FALLBACKS["collector"]}
 
 
-def test_dependencies_collector_unset_item_20_keeps_today_declared(tmp_path):
+def test_dependencies_collector_unset_item_21_keeps_today_declared(tmp_path):
     repo, store = _setup_repo(tmp_path)
     CM.write_declared_dependencies(repo, {"collector": True}, root=store)
     assert PC.dependencies(repo, root=store)["collector"] == {"status": "declared"}
 
 
-def test_dependencies_collector_marks_unreadable_item_20(tmp_path):
+def test_dependencies_collector_marks_unreadable_item_21(tmp_path):
     repo, store = _setup_repo(tmp_path)
     _make_stored_invalid(repo, store)
     assert PC.dependencies(repo, root=store)["collector"] == {
@@ -582,3 +582,64 @@ def test_reader_writes_nothing(tmp_path):
     before = _core_text(repo, store)
     CM.read_project_config_value(repo, SLUG, root=store)
     assert _core_text(repo, store) == before
+
+
+# --- a pinned path: the reader reads that file, never the live one -------------------------------
+
+_AREA_A = {"name": "Secrets", "covers": ["secrets/*"], "why": "Holds keys.", "undo": "Hard: rotate the keys."}
+_AREA_B = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges customers.",
+           "undo": "Hard: a charge needs a refund."}
+_LIVE_VALUE = {"collector": 7, "inboxes": [8]}
+_PINNED_VALUE = {"collector": 9, "inboxes": []}
+
+
+def _live_and_pinned(tmp_path):
+    """A live core.md (advisorIssues collector 7, riskAreas A) and a second, pinned core.md (a copy of the live
+    text with advisorIssues collector 9 and riskAreas B) at a path outside the store."""
+    repo, store = _setup_repo(tmp_path)
+
+    def _live(block):
+        config = block.setdefault("projectConfiguration", {})
+        config[SLUG] = copy.deepcopy(_LIVE_VALUE)
+        config[CM.RISK_AREAS_KEY] = [dict(_AREA_A)]
+
+    _edit_block(repo, store, _live)
+    live_text = _core_text(repo, store)
+    m = CM._JSON_BLOCK.search(live_text)
+    block = json.loads(m.group(1))
+    block["projectConfiguration"][SLUG] = copy.deepcopy(_PINNED_VALUE)
+    block["projectConfiguration"][CM.RISK_AREAS_KEY] = [dict(_AREA_B)]
+    pinned_dir = tmp_path / "pinned-copy"
+    pinned_dir.mkdir()
+    pinned = str(pinned_dir / "core.md")
+    with open(pinned, "w", encoding="utf-8") as fh:
+        fh.write(live_text[:m.start(1)] + json.dumps(block, indent=2) + live_text[m.end(1):])
+    assert not pinned.startswith(store + os.sep)
+    return repo, store, pinned
+
+
+def test_reader_given_a_pinned_path_reads_the_pinned_file_not_the_live_one(tmp_path):
+    # axis: a reader given a pinned path reads that file, never the live core.md
+    repo, store, pinned = _live_and_pinned(tmp_path)
+    live = CM.read_project_config_value(repo, SLUG, root=store)
+    assert live["present"] is True and live["value"] == _LIVE_VALUE  # premise: the live file says collector 7
+    got = CM.read_project_config_value(repo, SLUG, root=store, path=pinned)
+    assert got["reason"] is None and got["present"] is True
+    assert got["value"] == _PINNED_VALUE and got["value"]["collector"] == 9
+    risk = CM.read_risk_areas(repo, root=store, path=pinned)
+    assert risk["reason"] is None and risk["declared"] is True
+    assert risk["areas"] == [_AREA_B] and risk["areas"] != [_AREA_A]
+    assert CM.read_risk_areas(repo, root=store)["areas"] == [_AREA_A]  # no path: the live file, as before
+
+
+def test_reader_given_a_pinned_path_that_does_not_exist_never_falls_back_to_the_live_file(tmp_path):
+    # axis: a missing pinned path reads unreadable, never the live core.md's value
+    repo, store, _pinned = _live_and_pinned(tmp_path)
+    missing = str(tmp_path / "pinned-copy" / "gone" / "core.md")
+    assert not os.path.exists(missing)
+    got = CM.read_project_config_value(repo, SLUG, root=store, path=missing)
+    assert got["reason"] == "project-config-unreadable"
+    assert got["present"] is False and got["value"] is None
+    risk = CM.read_risk_areas(repo, root=store, path=missing)
+    assert risk["reason"] == "risk-areas-unreadable"
+    assert risk["declared"] is False and risk["areas"] is None

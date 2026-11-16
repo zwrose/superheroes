@@ -18,7 +18,7 @@ def test_collector_detector_rejects_reversed_priority_words(monkeypatch):
         "## Step 2 — Sweep",
         "",
         "Resolve the collector's number from calibration second (`project_config.py advisor-issues`)"
-        " and from the advisor's durable memory first; an `unreadable` item 20 is named in the"
+        " and from the advisor's durable memory first; an `unreadable` item 21 is named in the"
         " report; ask the owner and never open a second collector.",
         "",
         "## Step 3 — Filter",
