@@ -12,6 +12,7 @@
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
 - §4.9 — Size count exclusions — none by default
+- §4.10 — Duplication skip trees — none by default
 - §5 — Secrets stay out of shared calibration (NFR)
 - §6 — Cloud builds: the setup sitting
 - Recovering an interrupted set-up
@@ -479,6 +480,27 @@ Set-up writes nothing for size count exclusions. By default every non-test path 
 size count, and lockfiles are always left out. When a project has generated or vendored paths that
 should not count, the owner lists them later through the view-and-tune path, which holds the
 commands (`skills/configure/reference/view-and-tune.md` § 2).
+
+## 4.10 — Duplication skip trees — none by default
+
+Set-up writes nothing for item 20 by default, so the guardian's duplication lens reads every tracked
+file. Set-up asks only when the project has frozen or generated trees (for example a frozen
+snapshot of an earlier design, or generated style files). Then it saves the owner's globs with the
+`project_config.py set --item duplicationSkip` command, stdin a JSON list of repo-relative globs
+(Python `fnmatch`, matched against the path from the repository root, `*` also crosses `/`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item duplicationSkip --cwd . <<'SUPERHEROES_ANSWER'
+["snapshots/**", "styles/generated/*.css"]
+SUPERHEROES_ANSWER
+```
+
+Each skipped glob and the number of files it covered appear in every sweep report, and an
+unreadable value skips nothing and the report says so. This answers a different question from § 4.9:
+size count exclusions decide what counts toward a pull request's size, while this decides which
+duplication is not worth reporting, so neither value is copied into the other. Later changes go
+through the view-and-tune path (`skills/configure/reference/view-and-tune.md` § 2).
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

@@ -283,7 +283,10 @@ prevents proper use of the driver carries the project's `driver-blocker` label, 
 **Who ran each seat is read from the record.** The review record lists which reviewers were
 planned and which ran, each with its model family. It takes a run from the engine's own run record
 where one exists, and marks a run "reported by the session" where only the session reports it. A
-mixed panel — different seats on different vendors by design — is normal. A planned reviewer that
+mixed panel — different seats on different vendors by design — is normal. A review is independent
+when every seat sits outside every maker's family. A panel whose seats all sit outside the makers'
+families is not degraded for sharing one vendor, and the record names the seats' vendors as a plain
+fact; a seat from a maker's family still degrades or refuses the review. A planned reviewer that
 did not run is a review that did not run: the PR stays parked until it runs, unless a standing
 ruling of the owner covers the missing review or the owner says in plain words to go ahead without
 it, and the record carries that word. Either go-ahead, a standing ruling or the owner's plain

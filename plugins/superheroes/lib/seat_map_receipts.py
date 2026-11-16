@@ -85,16 +85,24 @@ def any_seats(state):
     return False
 
 
+def _session_makers(state):
+    """The session's whole maker set — the one the driver's own readers use, so the exemption for a panel
+    outside every maker's family judges a map against all of them, not only the map's own."""
+    from receipt_disclosures import accumulated_maker_families  # lazy: receipt_disclosures imports this module
+    return accumulated_maker_families(state)
+
+
 def same_family_seats(state, driver_author_family=None):
     """Degradations projection — union of same-family seats across all receipts.
 
     Suppresses a raw same-family record when the same receipt carries an unexcused maker-family
     violation for that seat — submitted maps bypass ``to_receipt``, so both can coexist."""
     seats: list[str] = []
+    session_makers = _session_makers(state)
     for entry in receipts(state):
         unexcused_maker = {
             str(v.get("seat") or "")
-            for v in seat_map.unexcused_violations(entry["map"], driver_author_family)
+            for v in seat_map.unexcused_violations(entry["map"], driver_author_family, extra_makers=session_makers)
             if isinstance(v, dict) and v.get("constraint") == "maker-family"
         }
         degradations = entry["map"].get("degradations")
@@ -123,8 +131,10 @@ def _merge_violations_conservative(by_key: dict, violation: dict) -> None:
 def unexcused_violations(state, driver_author_family=None):
     """Violations projection — per-receipt ``unexcused_violations``, deduped by (constraint, seat)."""
     by_key: dict[tuple, dict] = {}
+    session_makers = _session_makers(state)
     for entry in receipts(state):
-        for v in seat_map.unexcused_violations(entry["map"], driver_author_family):
+        # axis: the unexcused critical-diversity record reads the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        for v in seat_map.unexcused_violations(entry["map"], driver_author_family, extra_makers=session_makers):
             _merge_violations_conservative(by_key, v)
     merged = list(by_key.values())
     merged.sort(key=lambda item: (str(item.get("constraint", "")), str(item.get("seat") or "")))
@@ -134,8 +144,10 @@ def unexcused_violations(state, driver_author_family=None):
 def pin_excused_records(state, driver_author_family=None):
     """Pin-excusal projection — per-receipt ``classify_violations`` excusedByPin lists."""
     records: list[dict] = []
+    session_makers = _session_makers(state)
     for entry in receipts(state):
-        classified = seat_map.classify_violations(entry["map"], driver_author_family)
+        # axis: the pin-excused critical-diversity record reads the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        classified = seat_map.classify_violations(entry["map"], driver_author_family, extra_makers=session_makers)
         for rec in classified.get("excusedByPin") or []:
             if isinstance(rec, dict):
                 records.append(rec)
@@ -259,22 +271,32 @@ def emit_receipt_seat_map(state, driver_author_family=None):
     base = dict(latest_with_seats(state))
     seen: set[str] = set()
     merged_degs: list = []
+    dropped_critical_diversity = False
+    session_makers = _session_makers(state)
     for entry in receipt_list:
         degs = entry["map"].get("degradations")
         if not isinstance(degs, list):
             continue
+        # axis: the emitted critical-diversity row is judged against the session's whole maker set — see bite-proof record wo_a_2530_single_vendor_panel
+        outside_makers = seat_map.panel_outside_makers(
+            entry["map"], seat_map.effective_author_family(entry["map"], driver_author_family), session_makers,
+        )
         for row in degs:
             if isinstance(row, dict):
+                # axis: a receipt's critical-diversity row is not emitted for a panel wholly outside the makers' families — see bite-proof record wo_a_2530_single_vendor_panel
+                if outside_makers and row.get("constraint") == "critical-diversity":
+                    dropped_critical_diversity = True
+                    continue
                 key = json.dumps(row, sort_keys=True)
                 if key in seen:
                     continue
                 seen.add(key)
             merged_degs.append(row)
-    if merged_degs:
+    if merged_degs or dropped_critical_diversity:
         base["degradations"] = merged_degs
     violation_by_key: dict[tuple, dict] = {}
     for entry in receipt_list:
-        for v in seat_map.derived_violations(entry["map"], driver_author_family):
+        for v in seat_map.derived_violations(entry["map"], driver_author_family, extra_makers=session_makers):
             _merge_violations_conservative(violation_by_key, v)
     merged_violations = list(violation_by_key.values())
     merged_violations.sort(

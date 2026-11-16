@@ -86,7 +86,7 @@ def test_the_row_shape_is_pinned():
     row = RM.compute(_full(), FROM, UNTIL)
     assert tuple(row) == RM.ROW_KEYS and tuple(row["measures"]) == RM.MEASURES and RM.problems(row) == []
     assert RM.MEASURE_KEYS["reviewerCostPerPr"] == ("tokens", "minutes", "prsLeftOut")
-    none_left = {"count": 0, "why": "a review session has no complete sessionCost"}
+    none_left = {"count": 0, "why": "a review session has no complete sessionCost", "partial": 0}
     assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": none_left, "minutes": none_left}
 
 
@@ -210,7 +210,7 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     assert "premortem-reviewer" not in seats and "seats.premortem-reviewer.tokens" not in why
     assert why["seats.security-reviewer.minutes"] == "cost-not-recorded"
     cost = row["measures"]["reviewerCostPerPr"]
-    assert cost["tokens"]["total"] == 100 and cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY}
+    assert cost["tokens"]["total"] == 100 and cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY, "partial": 0}
     # an incomplete sessionCost blanks them too, while a session that ran nothing (runs 0) does not
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=_sc(5, 0.1, runs=2, without=1))], ciRuns=ci), FROM, UNTIL)
     assert row["measures"]["seats"]["security-reviewer"]["tokens"] == U
@@ -224,7 +224,7 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     row = RM.compute(_full(records=[_rec(1, sc=None), _rec(2, sc=None)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"] == U and cost["minutes"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
-    assert cost["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY}, "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY}}
+    assert cost["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 0}, "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 0}}
 
 
 def test_a_session_without_a_readable_cost_blanks_only_the_seats_it_ran():
@@ -301,7 +301,7 @@ def test_the_window_cost_is_over_measured_prs_and_names_those_left_out():
     row = RM.compute(_full(records=[_rec(1), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a review session has no complete sessionCost"}
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a review session has no complete sessionCost", "partial": 0}
     assert cost["prsLeftOut"]["minutes"]["count"] == 1 and RM.problems(row) == []
     row = RM.compute(_full(records=[_rec(1, sc=None), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
