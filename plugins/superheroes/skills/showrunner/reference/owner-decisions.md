@@ -582,9 +582,13 @@ advisor run together to keep calibration honest.
    or more days have passed since the last record and no "gardening pass owed" item is on the
    [collector](../../../rubric/glossary.md#collector), **the advisor appends one, dated, and says so at
    the walk**.
-3. The item **stays on the collector until the pass runs and its record lands**, which closes it.
+3. The item **stays on the collector until the pass is done and its record lands**, which closes it.
+   A record that lists pending items leaves it open (**Every pass is a full pass**, at this
+   section's end).
 4. **The owner picks the sitting.** The advisor may prepare the sweep beforehand so the sitting is
-   short. **A walk opened for one urgent ruling is never turned into a pass by the calendar.**
+   short. **Prep a pass leaves owed is checked at the start of the next pass**: preparing the sweep
+   beforehand, or anything a record marks as prep before the next pass. The next record says whether
+   each was done. **A walk opened for one urgent ruling is never turned into a pass by the calendar.**
 5. **There is no scheduler.** Until the first gardening record exists, **the project's calibration
    date stands in for "the last gardening record"** everywhere this rule is read, so the first pass
    falls on the first walk a week after calibration.
@@ -790,9 +794,12 @@ ninth duty.
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
 - **The decisions-asked count comes from the project's own record**, its configuration profile and
   its gardening records, **never from a founding document**.
-- **If the full pass proves overwhelming, the named fallback is a bounded pass**: urgent exceptions
-  plus one or two retirement proposals per pass, the rest carried forward on the queue, the guardian
-  sweep produced before the sitting. **Moving to the bounded pass is the owner's word at a walk.**
+
+**Every pass is a full pass.** No smaller pass stands in for it, whatever the sitting allows. When a
+sitting ends before the pass is done, the record lists what is unfinished as pending items, and **the
+pass stays owed until they are done**, the way guardian staleness works in duty 6: its clock does not
+reset until triage is recorded. The owner's time is already bounded by the draw in duty 2, about five
+proposals per pass with more only on the owner's word, so nothing shortens the pass to bound it.
 
 ## The gardening record
 
@@ -818,6 +825,10 @@ ninth duty.
   `review_measures.py render --cwd <root>` prints them, with each unmeasured measure and its reason;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
+- **the pending items**: what the sitting left unfinished, each of which keeps the pass owed, or
+  **None**;
+- **the owed prep**: for each piece of prep the last record left owed, whether it was done before
+  this pass, or that the last record left none;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
 - the open questions the passes carry until settled;
 - and **the misses-log appends made**, the review escapes among them, the escapes tallied by kind beside the per-seat tally, and the calibration proposals the pass brought.
