@@ -294,8 +294,8 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
         put("firstSessionCertification", release_of(opening),
             review_record.cleared(status) if status in review_record.STATUSES else None)
         if pr in merged_set:
-            # axis: a merged PR's cards are its distinct finding keys left for the owner, merged members out — see bite-proof record i2498_by_release
-            # axis: a repeat whose card another finding of the record holds is no card of its own — see bite-proof record i2498_by_release
+            # axis: a merged PR's cards are its distinct finding keys that hold owner cards, merged members out — see bite-proof record i2498_by_release
+            # axis: a repeat whose card another finding of the record holds is no card of its own (inside `waits_for_owner`) — see bite-proof record i2498_by_release
             # axis: a card is a finding that reaches the owner as one (`review_record.waits_for_owner`): a listed Minor is none, a no-outcome Minor card is one — see bite-proof record i2531_cards
             cards = {f.get(session_contract.FINDING_KEY_FIELD) or f.get("id") for r in sessions[pr].values()
                      for f in r["findings"] if review_record.waits_for_owner(f, r["findings"])
