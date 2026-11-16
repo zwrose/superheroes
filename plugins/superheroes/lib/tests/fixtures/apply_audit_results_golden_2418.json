@@ -35,6 +35,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "still broken",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -47,6 +48,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -59,6 +61,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "unrecognized ruling 'maybe' — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -71,6 +74,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "audit refused: `checks` is missing, not an object with `right`, `brokeNothing` and `testWouldFail`",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -104,6 +108,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -195,6 +200,7 @@
    "g1",
    "g2"
   ],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -216,6 +222,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -228,6 +235,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -240,6 +248,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -253,6 +262,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -287,6 +297,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -319,6 +330,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "break-it test missing: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "testMatch": {
@@ -336,6 +348,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "break-it test changed-unexplained: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "testMatch": {
@@ -402,6 +415,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [
    "b2",
    "b3"
@@ -425,6 +439,7 @@
     "identity": "a.py::no id",
     "line": 1,
     "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "no id"
@@ -437,6 +452,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -451,6 +467,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -471,6 +488,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -487,6 +505,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -511,6 +530,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "more than one audit result claimed this finding — honoring none",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -527,6 +547,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -549,6 +570,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "duplicate audit target id — honoring none",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -561,6 +583,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 9,
     "reason": "duplicate audit target id — honoring none",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -578,6 +601,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -614,6 +638,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -636,6 +661,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no independent auditor was recorded for this target — cannot prove the audit came from an independent auditor; treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap",
@@ -653,6 +679,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -675,6 +702,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no dispatch-manifest entry for this target — the orchestrator did not record which engine executed the audit; cannot authenticate; treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap",
@@ -692,6 +720,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -714,6 +743,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "the dispatch manifest names 'claude' but the selected independent auditor is 'codex' — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap",
@@ -731,6 +761,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -776,6 +807,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -796,6 +828,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "break-it test missing: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "testMatch": {
@@ -825,6 +858,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [
    "t1"
   ],
@@ -847,6 +881,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "audit refused: `checks` is missing, not an object with `right`, `brokeNothing` and `testWouldFail`",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -865,6 +900,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -921,6 +957,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -953,6 +990,7 @@
      }
     ],
     "reason": "break-it test weakened: dropped an assertion",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "testMatch": {
@@ -974,6 +1012,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [
    "t1"
   ],
@@ -1008,6 +1047,7 @@
      }
     ],
     "reason": "the fix leaves a place of the same kind of mistake open (left unfixed: src/a.py:19). Unnamed change: also drops the log line",
+    "reasonKind": "wrong",
     "reportedUnnamedChange": "also drops the log line",
     "ruling": "not-discharged",
     "taxonomy": null,
@@ -1027,6 +1067,7 @@
   ],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1047,6 +1088,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "audit check failed: right: checked: right",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1071,6 +1113,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1091,6 +1134,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "audit check failed: testWouldFail: review-guarded clears only a fix whose whole delta is prose; this fix's delta touches src/a.py",
+    "reasonKind": "wrong",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1109,6 +1153,7 @@
    "t1"
   ],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1151,6 +1196,7 @@
   "reviewGuarded": [
    "t1"
   ],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1171,6 +1217,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "`unnamedChange` is not a string — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1189,6 +1236,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1209,6 +1257,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1227,6 +1276,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1247,6 +1297,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "`unnamedChangeFixes` is not a list of non-blank strings — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1265,6 +1316,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1273,7 +1325,49 @@
   "unmatched": [],
   "unnamedChange": []
  },
- "S21_discharged_unnamed_change_refused": {
+ "S21_discharged_unnamed_change_scope_held": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reasonKind": "scope-only",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "discharged",
+    "scopeNote": "also drops the log line",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "scopeHeld": [
+   "t1"
+  ],
+  "testMismatch": [],
+  "testRemovalCleared": [],
+  "testRemovalRefused": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S21b_discharged_unnamed_change_forbidden_refused": {
   "ambiguous": [],
   "attributedChange": [],
   "audits": [
@@ -1285,6 +1379,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "the fix changes behaviour its finding does not name: also drops the log line",
+    "reasonKind": "wrong",
     "reportedUnnamedChange": "also drops the log line",
     "ruling": "not-discharged",
     "taxonomy": null,
@@ -1302,6 +1397,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1350,6 +1446,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1390,6 +1487,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1410,6 +1508,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "`discharged` with no reason — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1428,6 +1527,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1436,7 +1536,57 @@
   "unmatched": [],
   "unnamedChange": []
  },
- "S25_new_issue_unnamed_change_refused": {
+ "S25_new_issue_unnamed_change_scope_held": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reasonKind": "scope-only",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "discharged-but-new-issue",
+    "scopeNote": "also drops the log line",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "fresh"
+   }
+  ],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "scopeHeld": [
+   "t1"
+  ],
+  "testMismatch": [],
+  "testRemovalCleared": [],
+  "testRemovalRefused": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S25b_new_issue_unnamed_change_forbidden_refused": {
   "ambiguous": [],
   "attributedChange": [],
   "audits": [
@@ -1448,6 +1598,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "the fix changes behaviour its finding does not name: also drops the log line",
+    "reasonKind": "wrong",
     "reportedUnnamedChange": "also drops the log line",
     "ruling": "not-discharged",
     "taxonomy": null,
@@ -1473,6 +1624,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1526,6 +1678,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1546,6 +1699,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "`discharged-but-new-issue` with no usable newIssues — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1564,6 +1718,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1585,6 +1740,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "still broken Unnamed change: also drops the log line",
+    "reasonKind": "wrong",
     "reportedUnnamedChange": "also drops the log line",
     "ruling": "not-discharged",
     "taxonomy": null,
@@ -1610,6 +1766,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1630,6 +1787,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "unrecognized ruling 'maybe' — treated as not-discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1648,6 +1806,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1668,6 +1827,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1684,6 +1844,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1707,6 +1868,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1731,6 +1893,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 2,
     "reason": "duplicate audit target id — honoring none",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1743,6 +1906,7 @@
     "identity": "src/a.py::retry without a cap",
     "line": 9,
     "reason": "duplicate audit target id — honoring none",
+    "reasonKind": "unanswered",
     "ruling": "not-discharged",
     "taxonomy": null,
     "title": "Retry without a cap"
@@ -1760,6 +1924,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],
@@ -1806,6 +1971,7 @@
   "placesUnfixed": [],
   "reviewGuardRefused": [],
   "reviewGuarded": [],
+  "scopeHeld": [],
   "testMismatch": [],
   "testRemovalCleared": [],
   "testRemovalRefused": [],

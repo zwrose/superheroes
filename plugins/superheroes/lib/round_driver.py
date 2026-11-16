@@ -9414,8 +9414,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
         if merged_members.get(tid):
             row["mergedMembers"] = copy.deepcopy(merged_members[tid])
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
-        # does not name sees whether the owner's guidance allows it. A scope refusal is an audit ruling
-        # that was not discharged (audits.UNNAMED_CHANGE_REASON_PREFIX): it stays open through the
+        # does not name sees whether the owner's guidance allows it. A scope-only hold clears with a scope
+        # note (the entry's `scopeNote`, listed in `scopeHeld`); only a change the finding's own decision
+        # forbids (`ownerRuling.allowsChange` false) is refused, as an audit ruling that was not
+        # discharged (audits.UNNAMED_CHANGE_REASON_PREFIX), and that one stays open through the
         # ordinary not-discharged loop, with no state of its own.
         # The finding's last audit rides the target too (derived from the audit history, as the fixer
         # order's does), so the auditor sees why the last audit refused.
@@ -9694,6 +9696,8 @@ def _fold_merged_members(state, outcome, targets, rider_ids, carried_audited):
                 session_contract.FINDING_KEY_FIELD: key, "ruling": "not-discharged",
                 "reason": "merged into %s, whose fix the audit cleared, but the audit did not rule this finding's own part "
                           "fixed (%s)" % (tid, why or "not answered"),
+                # axis: a reopened member does not count toward the stall before its own fix is audited — see bite-proof record i2495_strike_kinds
+                audits.AUDIT_REASON_KIND_FIELD: audits.REASON_KIND_REOPENED_MERGED,
                 "reopenedFrom": tid})
             reopened.append(key)
             rows.append({"findingKey": key, "into": tid, "answer": answer.get("fixed") if why is not None else None})
@@ -9822,7 +9826,9 @@ def _fold_audits(state, config, artifact, session_dir=None):
     audit_round = {"round": state["round"], "outcomes": [
         {"identity": a.get("identity"), "ruling": a.get("ruling"), "id": a.get("id"),
          "title": a.get("title"), "classKey": a.get("classKey"),
-         "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
+         "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy"),
+         # axis: the breaker reads the fold's reason kind off the audit-round outcome — see bite-proof record i2495_strike_kinds
+         "reasonKind": a.get(audits.AUDIT_REASON_KIND_FIELD)}
         for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
     state["auditRounds"].append(audit_round)
     mismatch_ids = list(outcome.get("testMismatch") or [])
@@ -9864,8 +9870,14 @@ def _fold_audits(state, config, artifact, session_dir=None):
     if unnamed_ids:
         _record_round(state, "auditUnnamedChange", unnamed_ids)
         _decision(state, "audit-unnamed-change",
-                  "the fix changes behaviour its finding does not name, so it is not accepted "
-                  "without a ruling: %s" % ", ".join(unnamed_ids))
+                  "the fix changes behaviour its finding does not name, and the finding's own owner "
+                  "decision forbids that change, so the fix is refused: %s" % ", ".join(unnamed_ids))
+    scope_held_ids = list(outcome.get("scopeHeld") or [])
+    if scope_held_ids:
+        _record_round(state, "auditScopeHeld", scope_held_ids)
+        _decision(state, "audit-scope-held",
+                  "the audit ruled the fix right; it also changes behaviour its finding does not name, "
+                  "listed for the vet: %s" % ", ".join(scope_held_ids))
     attributed_ids = list(outcome.get("attributedChange") or [])
     if attributed_ids:
         _record_round(state, "auditAttributedChange", attributed_ids)
@@ -9931,11 +9943,17 @@ def _fold_audits(state, config, artifact, session_dir=None):
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
     removal_by_id = {a["id"]: a["testRemoval"] for a in outcome["audits"]
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("testRemoval"), dict)}
+    scope_note_by_id = {a["id"]: a["scopeNote"] for a in outcome["audits"]
+                        if isinstance(a, dict) and isinstance(a.get("id"), str)
+                        and audits.has_usable_unnamed_change(a.get("scopeNote"))}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         if tid in removal_by_id:
             # a fix cleared as the removal of a worthless test carries the evidence it cleared on, so the review record can name it
             receipt = dict(receipt, testRemoval=copy.deepcopy(removal_by_id[tid]))
+        if tid in scope_note_by_id:
+            # a scope-held fix carries the change its finding does not name, so the review record can list it for the vet
+            receipt = dict(receipt, scopeNote=scope_note_by_id[tid])
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
                             placeResults=place_answers.get(tid) or None,
                             **{session_contract.MEMBER_RESULTS_FIELD: member_results.get(tid) or None})
