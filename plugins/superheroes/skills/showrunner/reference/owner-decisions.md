@@ -906,7 +906,12 @@ say how it changes and what the advisor says when the owner finds a review slow.
   finishes what remains by hand (committing that entry, or writing and reading back the setting)
   instead of running `apply` again, which would append a second entry.
 - **From the next review on.** A Risk and trust change takes effect for every review that starts after
-  the setting is written. The advisor runs `apply` only when no review loop is in flight on the project; if one is, it waits for that review to end and applies the change before the next one starts, so every review runs on one calibration from start to end. A standing
+  the setting is written. The advisor runs `apply` as soon as the owner approves, whatever reviews are
+  running: each review session keeps the calibration it read when it started (its risk areas, engine
+  preferences, store-mode ratified residuals, and copies of the calibration files its seats read) for
+  its whole run, so a running review finishes on the calibration it started with and the next one sees
+  the change. A review session whose state carries no capture reads calibration live until it ends, so
+  a change applied while it runs reaches it mid-run. A standing
   ruling about leftovers binds where Canon's own reading rules say it does.
 - **The adoption day.** The project's adoption day is recorded once, with `lib/review_learning.py adopt`,
   when the project adopts the plugin release that carries this learning. It lives in the project's

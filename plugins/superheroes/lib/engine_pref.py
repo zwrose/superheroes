@@ -729,8 +729,9 @@ def _normalize_engine_preferences_block(prefs):
     return out
 
 
-def load_engine_prefs(cwd, root=None):
-    """Read core.md's enginePreferences via ``core_md.engine_preferences_for_gate``; normalize each
+def load_engine_prefs(cwd, root=None, profile_path=None):
+    """Read core.md's enginePreferences via ``core_md.engine_preferences_for_gate`` (the core.md beside
+    ``profile_path`` when given, as a review session's pinned copy); normalize each
     role to a valid engine (else that key's fail-open default via resolve_engine_pref_key); surface
     the optional FR-9 `effort` sub-map (a dict, else {}); validated `codexModels` /
     `invalidCodexModels` and `seatPins` / `invalidSeatPins` when present. Genuinely absent config →
@@ -739,7 +740,7 @@ def load_engine_prefs(cwd, root=None):
     Never raises."""
     try:
         import core_md
-        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
+        cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root, profile_path=profile_path)
         if core_md.gate_config_is_absent(cfg):
             return degenerate_engine_prefs()
         if core_md.gate_config_is_refusal(cfg):
