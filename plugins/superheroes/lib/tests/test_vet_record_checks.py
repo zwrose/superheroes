@@ -212,7 +212,8 @@ def test_fixtures_carry_the_facts_they_stand_for():
     assert pg["record"]["ci"]["state"] == "none" and pg["record"]["ci"]["source"] == "GitHub checks"
     assert pg["record"]["ci"]["sha"] == pg["record"]["finalCommit"]["sha"] == pg["pr"]["head"]
     assert pg["pr"]["ciOnHead"] == "green" and pg["record"]["parked"] is False
-    assert any(line.startswith("CI is none on ") for line in pg["record"]["whatIsMissing"])
+    # CI is no part of the certificate (#2493): the record keeps the reading and names no CI line
+    assert pg["record"]["status"] == "reviewed" and not any(line.startswith("CI ") for line in pg["record"]["whatIsMissing"])
     ph = f["pr-h"]
     assert ph["record"]["ci"]["state"] == "none" and ph["record"]["ci"]["sha"] == ph["record"]["finalCommit"]["sha"]
     assert ph["record"]["finalCommit"]["sha"] != ph["pr"]["head"]

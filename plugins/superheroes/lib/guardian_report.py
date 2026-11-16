@@ -203,13 +203,18 @@ def _render_report_card(lines, card):
         entry = card[lens]
         if not isinstance(entry, dict):
             continue
-        lines.append("- %s: %d for / %d against (%s actionability, sweeps=%s)" % (
+        line = "- %s: %d for / %d against (%s actionability, sweeps=%s)" % (
             lens,
             entry.get("for", 0),
             entry.get("against", 0),
             _percent(entry.get("actionability")),
             "unknown" if entry.get("sweeps") is None else entry.get("sweeps"),
-        ))
+        )
+        # Axis: findings deferred by policy sit outside the ratio; show their count on the
+        # lens line only when there are some, so a lens without any reads exactly as before.
+        if entry.get("deferred", 0) > 0:
+            line += ", %d deferred by policy" % entry["deferred"]
+        lines.append(line)
         if entry.get("benched"):
             lines.append("  - %s" % (entry.get("reason") or ("%s is benched" % lens)))
         elif entry.get("adjudicated", 0) == 0 or entry.get("sweeps") is None \
