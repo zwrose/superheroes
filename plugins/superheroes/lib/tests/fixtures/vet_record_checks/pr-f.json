@@ -12,7 +12,6 @@
   "record": {
     "carriedRechecks": [],
     "checked": [
-      "CI on ccccccc: green",
       "Reviewers that ran: code-reviewer",
       "read the diff"
     ],
@@ -43,6 +42,7 @@
         "file": "a.py",
         "findingKey": "rr1:ee3c117ca82da4d7daff3741971b8559",
         "id": "code-account-delete-invoices",
+        "inRiskArea": null,
         "line": 3,
         "outcome": "craft",
         "reason": "minor cleanup",
@@ -75,6 +75,7 @@
       ]
     },
     "leftForOwner": [],
+    "listedForMerge": [],
     "makers": [
       {
         "family": "anthropic"

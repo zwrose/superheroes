@@ -119,6 +119,8 @@
     "acceptingHeading": "What you're accepting",
     "craftHeading": "Decided as craft, for your veto",
     "decidedHeading": "Already decided",
+    "listedHeading": "Minor findings, accepted when you merge",
+    "listedNoOutcome": "open when the review ended, outside every risk area",
     "decidedForYouHeading": "Decided for you",
     "decidedForYouIntro": "The advisor judged these craft, not yours, so they are not cards. Make one yours and it comes back to you as a card.",
     "decidedGround": "Ground: {ground}",

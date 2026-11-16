@@ -55,6 +55,7 @@ ROW = {"name": "code-reviewer", "vendor": "codex", "model": TRRS.CODEX, "planned
 MAKERS = [{"family": "anthropic", "source": "builder"}]
 OPEN = {"id": "code-001", "title": "t", "severity": "Minor", "file": "a.py", "line": 3, "body": "b", "consequence": "c",
         "outcome": None, "reason": None, "reviewer": "code-reviewer"}
+OPEN_IMPORTANT = dict(OPEN, severity="Important")  # a no-outcome Important stops the carry; a no-outcome Minor is admitted
 WHY = "the change since the last reviewed commit held nothing countable, so no reviewer ran in this round"
 
 
@@ -144,8 +145,8 @@ def test_a_catch_up_merge_only_writes_a_record_marked_carried_that_reads_reviewe
                                     and v["ran"] == "reported-by-session" and v["coversFinalCommit"] is True
                                     and v["cost"] == {"tokens": None, "minutes": None} and "observation" not in v
                                     for v in rec["reviewers"]), rec["reviewers"]
-    # the record says plainly that no reviewer ran in this round, and why
-    assert rec["checked"][1] == ("Reviewers that ran: none in this round — carried from the earlier review of %s: code-reviewer"
+    # the record says plainly that no reviewer ran in this round, and why (the CI entry left checked in #2493)
+    assert rec["checked"][0] == ("Reviewers that ran: none in this round — carried from the earlier review of %s: code-reviewer"
                                  % s.reviewed[:7]), rec["checked"]
     assert RS.CARRIED_WHY % s.reviewed[:7] in rec["checked"], rec["checked"]
     body = fake.marked()[-1]["body"]
@@ -162,7 +163,7 @@ def test_a_catch_up_merge_only_writes_a_record_marked_carried_that_reads_reviewe
 def test_e2_an_unsettled_earlier_finding_refuses_review_session_unsupported(tmp_path, monkeypatch):
     s = _empty_session(tmp_path, monkeypatch)
     fake = TRRS.Fake(head=s.head)
-    _post_earlier(fake, s, edit=_open_finding, findings=[OPEN])
+    _post_earlier(fake, s, edit=_open_finding, findings=[OPEN_IMPORTANT])
     before = list(fake.comments)
     out = _send(tmp_path, s, fake)
     assert out["ok"] is False and out["reason"] == RS.UNSUPPORTED and out["detail"] == "an earlier finding is still open", out
@@ -256,7 +257,7 @@ def test_e6_a_carried_account_over_a_real_source_change_demotes_every_row(tmp_pa
     assert rec["reviewers"] and _row_states(rec) == [("not-run", False)] * len(rec["reviewers"]), rec["reviewers"]
     assert all(v["runNote"] == "the change since the last reviewed commit holds changed files" for v in rec["reviewers"])
     assert {"fact": "code-reviewer ran", "session": True, "code": "not-run"} in rec["sessionDisagreements"]
-    assert rec["checked"][1] == "Reviewers that ran: none", rec["checked"]
+    assert rec["checked"][0] == "Reviewers that ran: none", rec["checked"]  # (the CI entry left checked in #2493)
 
 
 def test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round(tmp_path, monkeypatch):
@@ -353,7 +354,7 @@ def test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran(tmp_pat
 @pytest.mark.parametrize("edit,over,why", [
     (lambda rec: rec.update(status="not-reviewed"), {}, "the earlier review does not stand for this head (earlier-review-incomplete:"),
     (lambda rec: rec.update(abandoned={"reason": "closed early"}), {}, "the earlier review does not stand for this head (earlier-record-unusable:"),
-    (_open_finding, {"findings": [OPEN]}, "an earlier finding is still open"),
+    (_open_finding, {"findings": [OPEN_IMPORTANT]}, "an earlier finding is still open"),
 ], ids=["not-reviewed", "abandoned", "unsettled"])
 def test_e7_a_carried_account_over_an_earlier_record_that_does_not_qualify_demotes_every_row(tmp_path, monkeypatch, edit, over, why):
     s = _empty_session(tmp_path, monkeypatch)
@@ -469,7 +470,9 @@ def test_carry_refusal_names_the_first_failing_leg_and_passes_when_every_leg_hol
     assert ask(prior) is None
     assert ask(None) == "the earlier record's final commit is not the last reviewed commit"
     assert ask(prior, sha="abc123") == "the earlier record's final commit is not the last reviewed commit"
-    assert ask(dict(prior, findings=[OPEN])) == "an earlier finding is still open"
+    assert ask(dict(prior, findings=[OPEN_IMPORTANT])) == "an earlier finding is still open"
+    # a no-outcome Minor is listed for merge or a card, so the carry admits it beyond the outcome leg
+    assert ask(dict(prior, findings=[OPEN])) != "an earlier finding is still open"
     assert ask(dict(prior, findings={"a": 1})) == "an earlier finding is still open"
     assert ask(dict(prior, findings=[dict(OPEN, outcome="fixed"), "x"])) == "an earlier finding is still open"
     assert ask(dict(prior, reviewers=[dict(prior["reviewers"][0], coversFinalCommit=False)])).startswith(
@@ -499,7 +502,7 @@ def test_a_carried_session_rewritten_after_ci_turns_green_is_carried_and_reads_r
     _post_earlier(fake, s)
     path = TRRS.put_extras(tmp_path, TRRS.extras(ci="green", makers=MAKERS))
     first = RS.write_from_session(s.dir, path, s.repo.root, _readers_with(fake, _PENDING))
-    assert first["ok"] is True and first["status"] != "reviewed", first  # CI is still running: the gate stays closed
+    assert first["ok"] is True and first["status"] == "reviewed", first  # CI is no part of the certificate (#2493): pending CI does not hold the record
     assert _latest(fake)["ci"]["state"] == "pending"
     # nothing changed but CI: the second write reads the record the first one carried from, not the first one itself
     second = RS.write_from_session(s.dir, path, s.repo.root, fake.readers())
