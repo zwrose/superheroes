@@ -174,6 +174,24 @@ def test_a_rename_after_review_to_a_prose_name_reads_needs_review(tmp_path, dest
     assert got["answer"] == "needs-review" and dest in got["files"] and got["reconstructed"] == [], got
 
 
+def test_a_copy_proven_restore_of_a_reviewed_renames_source_does_not_block_a_comment_edit(tmp_path):
+    # axis: only a move after the review brings its source paths into the qualification diff, and never a path a copy proof settled
+    repo = TR.Repo(tmp_path)
+    base = repo.git("rev-parse", "main")
+    app = "src/app.py"
+    repo.git("mv", SHARED, app)
+    reviewed = repo.commit("first leg: the reviewed rename")
+    earlier = TR.earlier_record(reviewed)
+    restored = "restored = 1\n"
+    repo.write(SHARED, restored)
+    repo.write(app, repo.read(app) + "# a note\n")
+    head = repo.commit("restore the old path from upstream, and a comment")
+    proof = [{"file": SHARED, "source": "upstream/shared.py", "sha256": hashlib.sha256(restored.encode()).hexdigest()}]
+    got = HC.check(repo.root, base, earlier, head, proof=proof)
+    assert got["answer"] == "judgement" and got["files"] == [app], got
+    assert [c["file"] for c in got["copies"]] == [SHARED], got
+
+
 def test_a_file_renamed_before_review_and_edited_in_prose_after_still_reads_judgement(tmp_path):
     repo = TR.Repo(tmp_path)
     base = repo.git("rev-parse", "main")

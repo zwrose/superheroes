@@ -424,8 +424,11 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         return result
 
     # 8. judgement or a review owed
+    # Only a move after the review brings its source paths in, and never a path a copy proof already settled: a rename
+    # the review read is history, and a copy proven at the head needs no second reading.
+    move_sources = set().union(*(sources.get(p, set()) for p in remaining if p in moved))
     qualifies, hunks, reason = _qualification(run, x, head, remaining,
-                                              sorted(set().union(*(sources.get(p, set()) for p in remaining))))
+                                              sorted(move_sources - {c["file"] for c in result["copies"]}))
     commits = _authors(run, base, x, head)
     builder = builder_author.strip().lower() if isinstance(builder_author, str) and builder_author.strip() \
         else _author_email(run, x)
