@@ -284,3 +284,37 @@ def test_the_commit_paths_reader_gives_none_never_a_partial_list(tmp_path):
     assert rr.commit_paths(str(repo), base[:7], x) is None
     assert rr.commit_paths(str(repo), base, x[:7]) is None
     assert rr.commit_paths(str(repo), base, "c" * 40) is None
+
+
+def test_an_abbreviated_session_commit_of_the_pr_head_is_the_full_head_and_reads_reviewed():
+    # axis: an abbreviated session commit is resolved to its one full sha, so the engine row and the head compare like with like — see bite-proof record i2496_wo_b_record_commit (E-abbrev)
+    rec = build(account(finalCommit=HEAD[:7]))
+    assert rec["finalCommit"] == {"sha": HEAD, "source": rr.FINAL_COMMIT_CONFIRMED}
+    assert rec["reviewers"][0]["ran"] == "engine-record" and rec["reviewers"][0]["coversFinalCommit"] is True
+    assert (rec["status"], rec["whatIsMissing"]) == ("reviewed", [])
+
+
+def test_an_abbreviated_session_commit_after_the_head_moved_is_resolved_by_git():
+    readers = dict(Fake(runs=engine_on(EARLIER)).readers(), resolve_commit=lambda root, rev: EARLIER if EARLIER.startswith(rev) else None)
+    rec = rr.build_record(account(finalCommit=EARLIER[:9]), readers)
+    assert rec["finalCommit"] == {"sha": EARLIER, "source": rr.HEAD_MOVED_SOURCE}
+    assert rec["status"] == "reviewed", rec["whatIsMissing"]
+
+
+def test_an_abbreviation_nothing_resolves_stays_as_given_and_covers_nothing():
+    readers = dict(Fake(runs=engine_on(EARLIER)).readers(), resolve_commit=lambda root, rev: None)
+    rec = rr.build_record(account(finalCommit="abc1234"), readers)
+    assert rec["finalCommit"]["sha"] == "abc1234" and rec["status"] == "not-reviewed"
+
+
+def test_the_git_resolver_names_a_full_sha_or_nothing(tmp_path):
+    repo = tmp_path / "resolver-repo"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    subprocess.run([*git, "add", "f.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "one"], check=True)
+    full = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert rr._resolve_commit(str(repo), full[:8]) == full
+    assert rr._resolve_commit(str(repo), "-x") is None and rr._resolve_commit(None, full[:8]) is None

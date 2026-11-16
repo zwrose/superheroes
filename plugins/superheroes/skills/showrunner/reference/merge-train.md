@@ -290,9 +290,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    **Every moved head is read by the head-coverage check**, conflict-free or not, with the base the
    layer below's head. A layer is judged on its own diff and never waits on the layer below. Run
    `lib/head_coverage.py check` and then `outcome` as the final-commit row of
-   `skills/showrunner/reference/vet-receipt.md` § The review record checks says, with `--sheet live`
-   and `--sheet-commit` the commit the published sheet describes. The outcome's `sheet` action decides
-   what happens to the sheet:
+   `skills/showrunner/reference/vet-receipt.md` § The review record checks says, with `--sheet held`
+   when the published sheet carries `prSheet.held` and `--sheet live` otherwise, and `--sheet-commit`
+   the commit the published sheet describes. A carry is judged from that commit, as
+   `skills/showrunner/reference/owner-decisions.md` § When a PR's head moves after its sheet was
+   published says. The outcome's `sheet` action decides what happens to the sheet:
 
    - `republish-carried`: republish the stack's single sheet with `carriedForward.fromSheet` naming its
      previous revision and `heads` giving the new head of every PR the sheet covers. The answers and

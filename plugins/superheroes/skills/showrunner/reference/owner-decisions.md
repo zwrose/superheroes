@@ -1013,7 +1013,12 @@ chat answer in its place.
 
 **When a PR's head moves after its sheet was published.** The advisor runs the head-coverage check
 (`lib/head_coverage.py`, as [the vet receipt](vet-receipt.md#the-review-record-checks) says), and its
-`outcome` names the sheet's action. A move the check covers keeps the word: the advisor republishes
+`outcome` names the sheet's action. Whether the verdict carries is judged from the commit the
+published sheet describes, never from the latest record alone: run `check` a second time with
+`--record` a file holding `{"ok": true, "finalCommit": {"sha": "<the sheet's commit>"}}`, and the
+verdict carries only when that answer is `proven`, or `judgement` the advisor clears. The latest
+record's answer decides READY; a review of a material move never carries a verdict given before it. A
+move the check covers from the sheet's commit keeps the word: the advisor republishes
 the sheet for the new head carrying the answers and the verdict forward, with the `carriedForward`
 input key, whose `fromSheet` is the sheet published last and whose `heads` are the new head commit
 of each PR on the sheet. The sheet shows no note of the carry. The builder refuses a carry across a

@@ -564,7 +564,7 @@ def _readers(overrides):
             "lane_marker": _lane_marker, "engine_run": _engine_run, "watchdog_ends": _watchdog_ends, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
-            "changed_paths": changed_paths, "commit_paths": commit_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
+            "changed_paths": changed_paths, "commit_paths": commit_paths, "resolve_commit": _resolve_commit, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
             "owner_ruling_comment": _owner_ruling_comment, "returning_decide": returning_review.decide,
             "finding_risk": _finding_risk,
             **(overrides or {})}
@@ -2093,11 +2093,41 @@ def _follow_repeats(findings, checks, sources=None):
     return out
 
 
+_ABBREVIATED_SHA_RE = re.compile(r"[0-9a-fA-F]{7,39}")
+
+
+def _full_final_commit(commit, head_read, resolve):
+    """The session's final commit as a full sha: as given when it is one (or not a commit id at all); the PR head
+    read when an abbreviation is that head's prefix; else what `resolve` (git, in the account's repository) names;
+    else as given, so an abbreviation nothing resolves still matches no engine record."""
+    if not isinstance(commit, str) or _full_sha(commit) or not _ABBREVIATED_SHA_RE.fullmatch(commit):
+        return commit
+    if isinstance(head_read, str) and head_read.lower().startswith(commit.lower()):
+        return head_read
+    try:
+        full = resolve(commit)
+    except Exception:  # noqa: BLE001 — fail closed: an abbreviation git cannot read stays as given
+        full = None
+    return full if _full_sha(full) and full.lower().startswith(commit.lower()) else commit
+
+
+def _resolve_commit(repo_root, rev):
+    """The full sha git names for `rev` in `repo_root` (`git rev-parse --verify --quiet <rev>^{commit}`), or None."""
+    if not (isinstance(repo_root, str) and repo_root and os.path.isdir(repo_root)) or not isinstance(rev, str) \
+            or rev.startswith("-"):
+        return None
+    out = _run(["git", "-C", repo_root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"])
+    return out.strip() if isinstance(out, str) and _full_sha(out.strip()) else None
+
+
 def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
     meta = rd["pr_meta"](a["pr"], a["repo"])
     head_read = meta.get("head") if isinstance(meta, dict) else None
     head_read = head_read if isinstance(head_read, str) and head_read else None
+    # axis: an abbreviated session commit is resolved to its one full sha (the PR head it abbreviates, else git's own reading), so reviewer rows and the head compare like with like — see bite-proof record i2496_wo_b_record_commit (E-abbrev)
+    a = dict(a, finalCommit=_full_final_commit(a["finalCommit"], head_read,
+                                               lambda rev: rd["resolve_commit"](a.get("repoRoot"), rev)))
     # The record certifies the commit its session reviewed. The source says whether GitHub confirmed that commit as
     # the PR head just now; a head that moved past it is kept beside it, and adds no open line.
     # axis: the final commit is the session's own, with a source of GitHub PR when the head read equals it, the moved-head source (and the head beside it) when the head read differs, and the session's when the head could not be read — see bite-proof record i2496_wo_b_record_commit (E-source)

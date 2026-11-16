@@ -507,7 +507,7 @@ above).
    **How long it lasts, and what puts a PR back outside the word.** The word covers the PR at the
    commit its sheet describes. When the PR's head commit moves after its sheet was published, you
    run the head-coverage check (`lib/head_coverage.py`, as `vet-receipt.md` says). A move the check
-   covers keeps the word: you republish the sheet for the new commit carrying the answers and the
+   covers from the commit the sheet describes keeps the word: you republish the sheet for the new commit carrying the answers and the
    verdict forward, with no note. A move it does not cover takes the sheet down
    (`lib/pr_sheet.py hold`) until the PR is READY again, when you republish it unsigned: the sheet
    shows "This PR changed", keeps the answers to unchanged items, and starts the verdict over, and a
