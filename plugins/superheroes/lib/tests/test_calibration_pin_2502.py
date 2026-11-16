@@ -322,3 +322,55 @@ def test_the_session_account_carries_the_pinned_residuals(tmp_path):
     assert rs.account_from_session(pinned.save(), extras(), Fake().readers())["pinnedResiduals"] == res
     bare = Session(tmp_path / "b").seat("code-reviewer")
     assert "pinnedResiduals" not in rs.account_from_session(bare.save(), extras(), Fake().readers())
+
+
+def _two_pins(repo, tmp_path):
+    """The pins of two sessions, one opened before and one after a live risk-area edit that adds the payments area."""
+    _write_core(repo, [_SECRETS])
+    before = calibration_pin.capture(repo, _session(tmp_path, "before"))
+    _write_core(repo, [_SECRETS, _PAYMENTS])
+    after = calibration_pin.capture(repo, _session(tmp_path, "after"))
+    return before, after
+
+
+def test_a_findings_risk_reads_the_sessions_pinned_risk_areas(repo, tmp_path):
+    # axis: a session's record reads each finding's risk from the risk areas the session pinned at its start, never the live core.md
+    import review_record
+    pin_before, pin_after = _two_pins(repo, tmp_path)
+    assert review_record._finding_risk(repo, _PAYMENTS_FILE, pin_before["riskAreas"]) is False
+    assert review_record._finding_risk(repo, _PAYMENTS_FILE, pin_after["riskAreas"]) is True
+    assert review_record._finding_risk(repo, _PAYMENTS_FILE) is True  # no pin: today's live read, after the edit
+
+
+def _record_risk(repo, pinned):
+    """The inRiskArea the record writer stamps on a finding in the payments file, under an optional session pin."""
+    import review_record as rr
+    import test_review_record_carried_recheck as CR
+    finding = dict(CR.X, file=_PAYMENTS_FILE)
+    acct = dict(CR.account([], [finding]), repoRoot=repo, **({"pinnedRiskAreas": pinned} if pinned is not None else {}))
+    readers = {**CR.readers(), "finding_risk": rr._finding_risk, "withheld_paths": lambda root, sha, paths: []}
+    rec = rr.build_record(acct, readers, prior=CR.PRIOR)
+    return next(f for f in rec["findings"] if f["id"] == CR.X["id"])["inRiskArea"]
+
+
+def test_the_record_stamps_inriskarea_from_the_pinned_risk_areas(repo, tmp_path):
+    # axis: a session's record reads each finding's risk from the risk areas the session pinned at its start, never the live core.md
+    pin_before, pin_after = _two_pins(repo, tmp_path)  # the live core now declares the payments area
+    assert _record_risk(repo, pin_before["riskAreas"]) is False
+    assert _record_risk(repo, pin_after["riskAreas"]) is True
+    assert _record_risk(repo, None) is True  # an account with no pin reads live
+    assert _record_risk(repo, "not a dict") is True  # a pin that is not a dict is ignored: today's live read
+
+
+def test_the_session_account_carries_the_pinned_risk_areas(tmp_path):
+    # the session writer hands the record writer the risk areas the session pinned; a session with no pin hands none
+    import review_record_session as rs
+    from test_review_record_session import Fake, Session, extras
+    areas = {"riskAreas": "set", "areas": [_SECRETS]}
+    res = {"storage": "store", "text": "- residual R-7: a known gap", "provenance": None, "failure": None}
+    os.makedirs(str(tmp_path / "a"))
+    os.makedirs(str(tmp_path / "b"))
+    pinned = Session(tmp_path / "a", calibrationPin={"riskAreas": areas, "residuals": res}).seat("code-reviewer")
+    assert rs.account_from_session(pinned.save(), extras(), Fake().readers())["pinnedRiskAreas"] == areas
+    bare = Session(tmp_path / "b").seat("code-reviewer")
+    assert "pinnedRiskAreas" not in rs.account_from_session(bare.save(), extras(), Fake().readers())

@@ -501,20 +501,22 @@ def _withheld_paths(repo_root, head_sha, paths):
     return sanitized_view.withheld_review_paths(repo_root, head_sha, paths)
 
 
-def _finding_risk(repo_root, file):
+def _finding_risk(repo_root, file, stored=None):
     """Whether a finding's file lies in a declared risk area, as the one risk-area reader (`risk_areas.touched`) reads
     it: True when an area covers the file; False when risk areas are declared and none covers it, or the project's
     core.md declares none (no `riskAreas` key or an empty list); None when it cannot be told (no repository root,
     no usable file path, a calibration file that cannot be found, an unreadable or malformed store, any fault).
     Only the exact False lets a Minor or Nit be listed for the merge verdict.
     A core.md with no risk areas has no declared risk area to be in (the lane floor reads that as unclear: that is
-    its question, `risk_areas.touched` still answers not-set, and only this reader maps it)."""
+    its question, `risk_areas.touched` still answers not-set, and only this reader maps it).
+    `stored`, when a dict, is the risk-area read a session pinned at its start; it is read in place of the live core.md."""
     try:
         if not repo_root or not isinstance(file, str) or not file.strip():
             return None
         if risk_areas.normalize_change_path(file) is None:
             return None
-        got = risk_areas.touched(repo_root, [file])
+        got = (risk_areas.touched(repo_root, [file], stored=stored) if isinstance(stored, dict)
+               else risk_areas.touched(repo_root, [file]))
         if got["riskAreas"] == "not-set":
             # "core-md-absent" is the detail `core_md.read_risk_areas` gives when no core.md is found
             # axis: a calibration file that cannot be found reads unknown, so the finding stays a card, never "declares none" — see bite-proof record i2493_wo1_record (E-absent)
@@ -2153,9 +2155,12 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     # axis: a kept repeat follows its earlier finding only after the carried re-check has settled it, so a carried fix reaches the repeat — see bite-proof record i2438_repeat_follows
     findings = _follow_repeats(findings, a["carriedChecks"], sources)
     findings = _drop_stale_open_marker(findings)
+    pinned_risk = a.get("pinnedRiskAreas")
     # axis: every finding is stamped with the writer's own reading of its file's risk; an account's inRiskArea is overwritten, never trusted — see bite-proof record i2493_wo1_record (E-stamp)
+    # axis: a session's record reads each finding's risk from the risk areas the session pinned at its start, never the live core.md — see bite-proof record wo7_2502_finding_risk_pin
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome")),
-                     inRiskArea=rd["finding_risk"](a.get("repoRoot"), f.get("file"))) for f in findings]
+                     inRiskArea=(rd["finding_risk"](a.get("repoRoot"), f.get("file"), pinned_risk) if isinstance(pinned_risk, dict)
+                                 else rd["finding_risk"](a.get("repoRoot"), f.get("file")))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
