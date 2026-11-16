@@ -423,11 +423,13 @@ def compute(inp, start, end, written_at=None):
         for k in ("tokens", "minutes"):
             totals = [_pr_cost(rs, k) for rs in prs.values()]
             measured = [t for t in totals if t is not None]
-            hand = sum(1 for rs, t in zip(prs.values(), totals) if t is None and _hand_written_only(rs, k))
+            hands = [t is None and _hand_written_only(rs, k) for rs, t in zip(prs.values(), totals)]
+            hand = sum(hands)
             # axis: `partial` counts the left-out PRs holding a session whose cost is partial, never more than `count` — see bite-proof record i2514_partial_cost
+            # axis: partial counts only left-out PRs under count, so a PR left out for k only by a hand-written session is never partial for k — see bite-proof record i2515_hand_cost
             out[k] = {"count": len(totals) - len(measured) - hand, "why": LEFT_OUT_WHY,
                       "partial": sum(any(_partial_session(_latest(recs)) for recs in _by_session(rs))
-                                     for rs, t in zip(prs.values(), totals) if t is None),
+                                     for rs, t, h in zip(prs.values(), totals, hands) if t is None and not h),
                       "handWritten": {"count": hand, "why": HAND_WRITTEN_WHY}}
             if not measured:
                 m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "no-measured-pr")

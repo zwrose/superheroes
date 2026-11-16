@@ -90,11 +90,28 @@ def test_partial_and_hand_written_prs_read_together_and_partial_never_exceeds_co
         _rec(4, "s1", sc=_psc(100, 1.5)),                            # PR 4: a partial session ...
         _rec(4, "s2", at=LATER, sc=None),                            # ... and a later one with no sessionCost key
     ]
-    want = {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 2,
-            "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}}
+    # a partial session is whole for minutes: PR 2 is measured there, and PR 4 is left out of minutes only by its hand-written session
+    want = {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY, "partial": 2,
+                       "handWritten": {"count": 1, "why": RM.HAND_WRITTEN_WHY}},
+            "minutes": {"count": 0, "why": RM.LEFT_OUT_WHY, "partial": 0,
+                        "handWritten": {"count": 2, "why": RM.HAND_WRITTEN_WHY}}}
     for k in ("tokens", "minutes"):
         got = left_out(*records, k=k)
-        assert got == want, k
+        assert got == want[k], k
         assert got["partial"] <= got["count"], k
     row = RM.compute(_full(records=records, ciRuns=CI), FROM, UNTIL)
     assert RM.problems(row) == []
+
+
+def test_a_pr_left_out_for_tokens_only_counts_under_tokens_alone():
+    # axis: the counts are read per measure; a partial-only PR is left out of tokens and measured for minutes, a PR with a run lacking a figure is left out of both
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2515_hand_cost.md
+    records = [
+        _rec(1, sc=_psc(100, 1.5)),                       # PR 1: its only session is partial
+        _rec(2, sc=_sc(100, 1.5, runs=2, without=1)),     # PR 2: its only session has a run lacking a figure
+    ]
+    tokens, minutes = left_out(*records, k="tokens"), left_out(*records, k="minutes")
+    assert (tokens["count"], tokens["partial"], tokens["handWritten"]["count"]) == (2, 1, 0)
+    assert (minutes["count"], minutes["partial"], minutes["handWritten"]["count"]) == (1, 0, 0)
+    for got in (tokens, minutes):
+        assert got["partial"] <= got["count"]
