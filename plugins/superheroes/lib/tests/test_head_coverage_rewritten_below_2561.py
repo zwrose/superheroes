@@ -81,6 +81,7 @@ def seam(repo, fails):
 
 
 def test_a_straightened_stack_reads_needs_review_without_the_input_and_proven_with_it(tmp_path):
+    # axis: a layer whose layer below was rewritten onto the same tree stays needs-review with the old head left out, or fails to read proven with it given — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     record = TR.earlier_record(s["x"])
@@ -91,6 +92,7 @@ def test_a_straightened_stack_reads_needs_review_without_the_input_and_proven_wi
 
 
 def test_a_file_the_upper_layer_deletes_after_the_lower_layer_edited_it_reads_proven_against_the_second_base(tmp_path):
+    # axis: the reviewed change is read against the second base, so a file whose reconstruction cannot run (a deletion) is compared on its own change — see bite-proof record i2561_head_coverage_rewritten_below (E-xbase)
     repo = TR.Repo(tmp_path)
     main, lower, _ = stack(repo)
     repo.git("rm", "-q", SHARED)
@@ -103,6 +105,7 @@ def test_a_file_the_upper_layer_deletes_after_the_lower_layer_edited_it_reads_pr
 
 
 def test_an_upper_layer_whose_own_change_differs_after_the_rewrite_still_reads_needs_review(tmp_path):
+    # axis: a layer whose own change differs from the reviewed one reads needs-review even with a valid second base given — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     repo.git("checkout", "-q", "--detach", s["h1"])
@@ -113,6 +116,7 @@ def test_an_upper_layer_whose_own_change_differs_after_the_rewrite_still_reads_n
 
 
 def test_the_check_and_the_carry_check_with_the_input_republish_the_sheet_carried(tmp_path):
+    # axis: the coverage check and the carry check both given the second base fail to republish the sheet carried, or the bare checks fail to take it down — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     record, given = TR.earlier_record(s["x"]), [s["lower"]]
@@ -126,6 +130,7 @@ def test_the_check_and_the_carry_check_with_the_input_republish_the_sheet_carrie
 
 
 def test_two_successive_straightenings_prove_when_every_old_head_of_the_layer_below_is_given(tmp_path):
+    # axis: a layer rewritten twice reads proven only when some given old head of the layer below proves it, so a list that lacks the right head must stay needs-review — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     b2 = rebuild(repo, s["b1"], s["main"], "again")
@@ -143,6 +148,7 @@ def test_two_successive_straightenings_prove_when_every_old_head_of_the_layer_be
 
 
 def test_a_layer_below_fixed_after_the_review_is_reconstructed_from_the_second_fork(tmp_path):
+    # axis: the three-way merge forks at the merge base of the certified commit and the second base, so a layer whose layer below was fixed after the review is reconstructed from its own fork — see bite-proof record i2561_head_coverage_rewritten_below (E-fork)
     repo = TR.Repo(tmp_path)
     main, lower, x = stack(repo)
     repo.git("checkout", "-q", "lower")
@@ -162,6 +168,7 @@ def test_a_layer_below_fixed_after_the_review_is_reconstructed_from_the_second_f
 
 
 def test_a_base_at_review_from_the_layers_own_history_never_lets_a_dropped_change_read_proven(tmp_path):
+    # axis: a second base is read only when its tree equals the base's tree, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
     repo = TR.Repo(tmp_path)
     repo.git("checkout", "-q", "-b", "lower", "main")
     repo.write(SHARED, shared_text("lower"))
@@ -183,6 +190,7 @@ def test_a_base_at_review_from_the_layers_own_history_never_lets_a_dropped_chang
 
 
 def test_a_base_at_review_that_is_no_sha_reads_input_invalid(tmp_path):
+    # axis: a value that is not a full sha reads needs-review with input-invalid, whatever else is given with it — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     for value in (["abc"], [""], [None], [7], [s["lower"], "abc"], 7):
@@ -191,6 +199,7 @@ def test_a_base_at_review_that_is_no_sha_reads_input_invalid(tmp_path):
 
 
 def test_a_base_at_review_git_has_no_object_for_reads_needs_review(tmp_path):
+    # axis: a second base git cannot read proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"], NO_OBJECT])
@@ -198,6 +207,7 @@ def test_a_base_at_review_git_has_no_object_for_reads_needs_review(tmp_path):
 
 
 def test_a_base_at_review_with_another_tree_reads_needs_review(tmp_path):
+    # axis: a second base whose tree differs from the base's tree proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"], s["main"]])
@@ -205,6 +215,7 @@ def test_a_base_at_review_with_another_tree_reads_needs_review(tmp_path):
 
 
 def test_a_failed_tree_read_reads_needs_review(tmp_path):
+    # axis: a tree git could not read proves nothing, so the second base reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     git = seam(repo, lambda a: a[:1] == ["rev-parse"] and a[-1].endswith("^{tree}"))
@@ -213,6 +224,7 @@ def test_a_failed_tree_read_reads_needs_review(tmp_path):
 
 
 def test_a_base_at_review_with_no_merge_base_reads_needs_review(tmp_path):
+    # axis: a second base that shares no merge base with the certified commit proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     git = seam(repo, lambda a: a == ["merge-base", s["x"], s["lower"]])
@@ -221,6 +233,7 @@ def test_a_base_at_review_with_no_merge_base_reads_needs_review(tmp_path):
 
 
 def test_no_input_or_an_unneeded_one_leaves_the_answer_as_it_was(tmp_path):
+    # axis: no second base, an empty one, an unusable record or a head that is the certified commit changes the answer from what the check gave before — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     record = TR.earlier_record(s["x"])
@@ -236,6 +249,7 @@ def test_no_input_or_an_unneeded_one_leaves_the_answer_as_it_was(tmp_path):
 
 
 def test_a_plain_bring_current_reads_the_same_with_the_base_given_as_the_second_base(tmp_path):
+    # axis: giving the base itself as the second base changes the answer of a plain bring-current merge — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     repo.git("checkout", "-q", "-b", "lower", "main")
     repo.write("src/lower.py", TR.numbered("lower", 5))
@@ -255,6 +269,7 @@ def test_a_plain_bring_current_reads_the_same_with_the_base_given_as_the_second_
 
 
 def test_the_command_line_takes_the_flag_once_or_repeated(tmp_path):
+    # axis: the command line fails to pass a once-given or repeated --base-at-review through to the check, so the layer does not read proven — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
     b2 = rebuild(repo, s["b1"], s["main"], "again")
