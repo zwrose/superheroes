@@ -18,6 +18,21 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## The next release
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed by a caller that does not pass the new flag: `head_coverage.py check` takes a repeatable `--base-at-review SHA`, and the check's `why` gains the tokens `base-at-review` and `base-at-review-unproven`.** An advisor that straightens a stack now passes the flag once for each head the layer below had before a rewrite, on the coverage check and the carry check of every layer above the bottom (merge-train.md item 4(g) and item 6). See [Head coverage: a stack layer whose layer below was rewritten](#head-coverage-a-stack-layer-whose-layer-below-was-rewritten).
+
+### Head coverage: a stack layer whose layer below was rewritten
+
+- **The check.** `head_coverage.py check` (and `head_coverage.check(..., base_at_review=[...])`) takes the heads the layer below had before it was rewritten. With one given, the check reads the certified commit's own change against it, in place of the base, and answers `proven` when that change equals the layer's own change at the head. The result keeps its ten keys; a proof by a second base adds the why line `base-at-review`.
+- **The rule.** A second base counts only when git shows its tree equals the base's tree and finds a merge base of it and the certified commit. A value that is not a full sha reads `needs-review` with `input-invalid`; a value git cannot read, whose tree differs, or that shares no merge base reads `needs-review` with `base-at-review-unproven`, even where the check alone would have proven the head. With no value given the check reads exactly as before, and a given value never makes an answer worse than the answer without it.
+- **What an advisor does differently.** A layer whose layer below was straightened, rebased or rebuilt read `needs-review` for every file both layers edit. The advisor now passes `--base-at-review` for each earlier head of the layer below, so a rewrite that kept the tree reads `proven` and the sheet is republished carried; a rebuild that changed the layer below's content still reads `needs-review`.
+- Replacement. None: the flag is additive.
+
 ## 0.51.0
 
 ### Before you upgrade

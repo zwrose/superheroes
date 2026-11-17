@@ -38,6 +38,14 @@ The rule, in order; the first step that applies answers:
   9. Any exception: needs-review (``check-failed``).
 Every failure to read anything answers needs-review. The check never raises.
 
+A stack layer whose layer below was rewritten (a straightening rebuilds it on a new commit) has a base that no longer
+sits under the reviewed commit, so every file both layers edit would fail step 5. The caller may give ``base_at_review``,
+the heads the layer below had before it was rewritten. Each must be a full sha whose tree git shows equals the base's
+tree and that shares a merge base with X; any other value answers needs-review (``input-invalid`` for a value that is not
+a sha, else ``base-at-review-unproven``). With every value valid, steps 4 and 5 run again with X's change read against
+that value instead of the base; the first that proves answers proven, with a ``base-at-review`` line. With none given
+the check is exactly steps 1 to 9.
+
 ``outcome(answer, ci, judged_clear, sheet, sheet_commit, head)`` is covered when the answer is proven, or judgement
 with ``judged_clear``. CI red is NOT-READY (``ci-red``, no review owed: the fix arrives as a new commit); not covered
 is NOT-READY (``needs-review``, or ``judged-meaningful`` for an uncleared judgement) with a returning review owed;
@@ -50,6 +58,7 @@ must be full 40-hex shas, and a live sheet whose head moved needs a carry answer
 
 CLI:
   head_coverage.py check --repo-root DIR --base SHA --record FILE --head SHA [--proof FILE] [--builder-author EMAIL]
+                         [--base-at-review SHA]...
   head_coverage.py outcome --answer A --ci C [--judged-clear] [--sheet none|live|held] [--sheet-commit SHA]
                            [--head SHA] [--carry-answer A] [--carry-judged-clear]
 prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record or proof
@@ -85,8 +94,11 @@ WHY_PROSE_OR_COMMENTS = "prose-or-comments"
 WHY_OTHER_AUTHOR = "other-author"
 WHY_BEHAVIOUR_CHANGE = "behaviour-change"
 WHY_CHECK_FAILED = "check-failed"
+WHY_BASE_AT_REVIEW = "base-at-review"
+WHY_BASE_AT_REVIEW_UNPROVEN = "base-at-review-unproven"
 WHY_TOKENS = (WHY_RECORD_UNUSABLE, WHY_SAME_COMMIT, WHY_INPUT_INVALID, WHY_DIFF_UNREADABLE, WHY_OWN_CHANGE_UNCHANGED,
-              WHY_PROVEN_COPIES, WHY_PROSE_OR_COMMENTS, WHY_OTHER_AUTHOR, WHY_BEHAVIOUR_CHANGE, WHY_CHECK_FAILED)
+              WHY_PROVEN_COPIES, WHY_PROSE_OR_COMMENTS, WHY_OTHER_AUTHOR, WHY_BEHAVIOUR_CHANGE, WHY_CHECK_FAILED,
+              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_UNPROVEN)
 
 CI_STATES = ("green", "pending", "red", "none")
 SHEETS = ("none", "live", "held")
@@ -348,21 +360,92 @@ def _authors(run, base, x, head):
     return commits
 
 
-def check(repo_root, base, record, head, proof=(), builder_author=None, git=None):
+def check(repo_root, base, record, head, proof=(), builder_author=None, git=None, base_at_review=()):
     """``{"answer": "proven" | "judgement" | "needs-review", ...}``: whether the commit ``record`` certifies covers
     ``head``. Never raises: every fault reads ``needs-review`` with a reason in ``why``. ``record`` is what
     ``review_record.py read --pr N`` prints, or the bare record. ``proof`` is a list of ``{file, source, sha256}``
     copy entries. ``git`` is the test seam ``returning_review.decide`` takes, ``git(argv) -> (returncode,
-    stdout_text)``; production leaves it None."""
+    stdout_text)``; production leaves it None. ``base_at_review`` is a list of full commit shas, each a second base
+    whose tree git shows equals the base's tree (step 9 of the module docstring); empty, the check is as it was."""
     try:
-        return _check(repo_root, base, record, head, proof, builder_author, git)
+        return _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review)
     except Exception as exc:  # total: a fault nobody foresaw is still a review owed
         # axis: a fault of any kind reads needs-review, never an answer that covers the head — see bite-proof record i2496_wo_a_head_coverage (E-fail)
         result = _result(base, head)
         return _needs_review(result, WHY_CHECK_FAILED, "the check failed on %s: %s" % (type(exc).__name__, exc))
 
 
-def _check(repo_root, base, record, head, proof, builder_author, git):
+def _token_of(line):
+    return line.split(":", 1)[0]
+
+
+def _tree_of(run, rev):
+    """The tree sha of commit ``rev``, or None when git cannot read it."""
+    code, text = run(["rev-parse", "--verify", "--quiet", "%s^{tree}" % rev])
+    tree = text.strip() if isinstance(text, str) else ""
+    return tree if code == 0 and returning_review._is_sha(tree) else None
+
+
+def _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review):
+    """``_check`` against the base, and, when the caller gave second bases, against each of them (9 in the module
+    docstring). With none given the answer is exactly ``_check``'s."""
+    first = _check(repo_root, base, record, head, proof, builder_author, git)
+    if base_at_review is None:
+        values = []
+    elif isinstance(base_at_review, str):
+        values = [base_at_review]
+    elif isinstance(base_at_review, (list, tuple)):
+        values = list(base_at_review)
+    else:
+        values = [base_at_review]  # not a sha: it reads input-invalid below
+    if not values:
+        return first
+    x = first["certified"]
+    if x is None or (first["answer"] == PROVEN and any(_token_of(w) == WHY_SAME_COMMIT for w in first["why"])):
+        return first
+    if not (returning_review._is_sha(base) and all(returning_review._is_sha(v) for v in values)):
+        return _needs_review(_result(base, head, x), WHY_INPUT_INVALID, "every base at review must be a full commit sha")
+    run = git if git is not None else returning_review.production_git(repo_root)
+    base_tree = _tree_of(run, base)
+    trees = [_tree_of(run, v) for v in values]
+    # axis: a second base whose tree git could not read, or that shares no merge base with the certified commit, proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+    if base_tree is None or any(t is None for t in trees):
+        return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
+                             "git could not read the tree of a base at review or of the base")
+    for value, tree in zip(values, trees):
+        # axis: a second base is read only when its tree equals the base's tree, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
+        if tree != base_tree:
+            return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
+                                 "a base at review does not hold the base's tree: %s" % value[:7])
+    for value in values:
+        code, text = run(["merge-base", x, value])
+        if code != 0 or not returning_review._is_sha(text.strip() if isinstance(text, str) else ""):
+            return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
+                                 "git finds no merge base of the certified commit and a base at review")
+    if first["answer"] == PROVEN:
+        return first
+    gots = [(value, _check(repo_root, base, record, head, proof, builder_author, git, x_base=value)) for value in values]
+    chosen = None
+    for value, got in gots:
+        if got["answer"] == PROVEN:
+            chosen = (value, got)
+            break
+    if chosen is None and first["answer"] == JUDGEMENT:
+        return first
+    if chosen is None:
+        for value, got in gots:
+            if got["answer"] == JUDGEMENT:
+                chosen = (value, got)
+                break
+    if chosen is None:
+        chosen = gots[0]
+    value, result = chosen
+    result["why"].append(_line(WHY_BASE_AT_REVIEW, "the certified commit's own change was read against %s, a base at review "
+                                                   "that holds the base's tree" % value[:7]))
+    return result
+
+
+def _check(repo_root, base, record, head, proof, builder_author, git, x_base=None):
     x = _certified(record)
     result = _result(base, head, x)
     # 1. the record
@@ -380,7 +463,7 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
     run = git if git is not None else returning_review.production_git(repo_root)
 
     # 4. the changed files
-    changed = returning_review.changed_files(run, base, x, head)
+    changed = returning_review.changed_files(run, base, x, head, x_base=x_base)
     if changed is None:
         return _needs_review(result, WHY_DIFF_UNREADABLE,
                              "git could not produce the diff of the certified commit or of the head against the base")
@@ -403,7 +486,7 @@ def _check(repo_root, base, record, head, proof, builder_author, git):
         # a mode git could not read (None) and a file that is not in a tree (ABSENT) are no mode: two equal real modes only
         same_mode = _real_mode(modes[path][0]) and _real_mode(modes[path][1]) and modes[path][0] == modes[path][1]
         # axis: a file is reconstructed only when a clean three-way merge of X, the fork and the base reproduces the head blob byte for byte, so a hand-resolved file stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
-        if same_mode and returning_review.merge_reproduces_head(run, base, x, head, path):
+        if same_mode and returning_review.merge_reproduces_head(run, base, x, head, path, fork_base=x_base):
             result["reconstructed"].append(path)
         else:
             remaining.append(path)
@@ -573,7 +656,8 @@ def _check_cli(args):
         elif not isinstance(loaded, list) or countable_lines.copies_fault(loaded, name_extra_key=True) is not None:
             return _usage_error("--proof is not a usable list of copies")
         proof = loaded
-    result = check(args.repo_root, args.base, record, args.head, proof, builder_author=args.builder_author)
+    result = check(args.repo_root, args.base, record, args.head, proof, builder_author=args.builder_author,
+                   base_at_review=args.base_at_review or [])
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return 0
 
@@ -599,7 +683,8 @@ def main(argv):
     cp.add_argument("--head", required=True)
     cp.add_argument("--proof", default=None)
     cp.add_argument("--builder-author", default=None)
-    op = sub.add_parser("outcome")
+    cp.add_argument("--base-at-review", action="append", default=None)
+    op =sub.add_parser("outcome")
     op.add_argument("--answer", required=True)
     op.add_argument("--ci", required=True)
     op.add_argument("--judged-clear", action="store_true")

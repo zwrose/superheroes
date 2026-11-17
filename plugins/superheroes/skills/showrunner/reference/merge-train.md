@@ -206,7 +206,13 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    (g) **Re-pin and merge.** Re-pin each layer's receipt with the `repin` line `prove` printed
    (old head, new head, equal tree hash). Wait for CI green on every new head, selected by workflow
    name plus head sha. Run the head-coverage check and `outcome` for every layer on its new head
-   (item 6 says how a move is read and the sheet republished). Then **re-read membership again** (item 3's re-read, repeated after the push). The
+   (item 6 says how a move is read and the sheet republished). For every layer above the bottom,
+   both the coverage check and the carry check pass `--base-at-review` once for each head the layer
+   below had before a rewrite since the review: the vetted head of the layer below that step (e)'s
+   `prove --layer` took, plus each old head in that layer's earlier re-pin lines. The check reads the
+   certified commit's own change against such a head only when git shows its tree equals the base's
+   tree, so a tree-proven straightening reads `proven` and the sheet is republished carried; any
+   other second base reads `needs-review`. Then **re-read membership again** (item 3's re-read, repeated after the push). The
    straightening moved every head, so the merge's `--sha` and the sheet comparison take the new
    heads from this second re-read. Then merge with item 5's command: `gh stack merge`, since `gh pr
    merge` refuses a stacked pull request, or `stack_merge.py merge` in a cloud session, which
@@ -288,7 +294,11 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    that takes it.
 
    **Every moved head is read by the head-coverage check**, conflict-free or not, with the base the
-   layer below's head. A layer is judged on its own diff and never waits on the layer below. Run
+   layer below's head. A layer is judged on its own diff and never waits on the layer below. When the
+   layer below was rewritten rather than merged forward (item 4's straightening, item 9's queue
+   removal, a cascading rebase), pass `--base-at-review` as item 4(g) says, on both checks. Without
+   it, a rewritten layer below makes every file both layers edit read `needs-review`. A rebuild that
+   changed the layer below's content still reads `needs-review`, which is the safe direction. Run
    `lib/head_coverage.py check` and then `outcome` as the final-commit row of
    `skills/showrunner/reference/vet-receipt.md` § The review record checks says, with `--sheet held`
    when the published sheet carries `prSheet.held` and `--sheet live` otherwise, `--sheet-commit`
