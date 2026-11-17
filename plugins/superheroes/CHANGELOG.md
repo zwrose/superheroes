@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.51.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.50.0...superheroes-v0.51.0) (2026-11-17)
+
+
+### Features
+
+* **superheroes:** a certified review means low-risk to merge ([#2525](https://github.com/zwrose/superheroes/issues/2525)) ([ff438e4](https://github.com/zwrose/superheroes/commit/ff438e43c6209be7ca9e5689c9493af081b812b0))
+* **superheroes:** a panel outside every maker's family is not degraded for sharing one vendor ([#2534](https://github.com/zwrose/superheroes/issues/2534)) ([8a9ac0e](https://github.com/zwrose/superheroes/commit/8a9ac0e84e33f43410a60dc5a53c210a671b2dae))
+* **superheroes:** a project can name frozen or generated trees that the guardian duplication lens skips ([#2511](https://github.com/zwrose/superheroes/issues/2511)) ([01c59cb](https://github.com/zwrose/superheroes/commit/01c59cb719c95415cd50aaf0e830413f9739af95))
+* **superheroes:** a project names its collector and inbox issues in calibration, and the advisor triages them ([#2513](https://github.com/zwrose/superheroes/issues/2513)) ([e8d1d1e](https://github.com/zwrose/superheroes/commit/e8d1d1e3f0059bd68a2921d0314080df3bfb0329))
+* **superheroes:** bounded pass B2 — one bounded fix, and a card for what it could not clear ([#2558](https://github.com/zwrose/superheroes/issues/2558)) ([2b38a25](https://github.com/zwrose/superheroes/commit/2b38a250c94d4e075ec7c3aeeddc807ca8173b65))
+* **superheroes:** measure what reaches the owner, by release, in the gardening pass ([#2506](https://github.com/zwrose/superheroes/issues/2506)) ([a9014e6](https://github.com/zwrose/superheroes/commit/a9014e6e9f891030cd61e6b2606a8dfd37f13939))
+* **superheroes:** one check says whether a review covers the PR head ([#2546](https://github.com/zwrose/superheroes/issues/2546)) ([bd11f01](https://github.com/zwrose/superheroes/commit/bd11f012afea68af00a00a6063a887fa7f9d0e54))
+* **superheroes:** retire the advisor-ordered extra audit round ([#2556](https://github.com/zwrose/superheroes/issues/2556)) ([7839c50](https://github.com/zwrose/superheroes/commit/7839c501e3d0ac09e87c0817115e70f75f5165f4))
+* **superheroes:** the review certifies its commit; the vet decides whether it covers the head ([#2547](https://github.com/zwrose/superheroes/issues/2547)) ([9335cd2](https://github.com/zwrose/superheroes/commit/9335cd2feee09795c2de686f5b12280416872922))
+* **superheroes:** the review loop audits the cap round's fixes in a bounded pass ([#2555](https://github.com/zwrose/superheroes/issues/2555)) ([d44c887](https://github.com/zwrose/superheroes/commit/d44c887bb65f7837c5161c16d463598e27e2e27b))
+
+
+### Bug Fixes
+
+* **superheroes:** a calibration change applies to every review that starts after it ([#2526](https://github.com/zwrose/superheroes/issues/2526)) ([2ce5e59](https://github.com/zwrose/superheroes/commit/2ce5e5978ca79c4a39400dfb64d473175d9caf0c))
+* **superheroes:** a hand-written review account names its raiser, and its missing cost reads hand-written ([#2542](https://github.com/zwrose/superheroes/issues/2542)) ([97e190e](https://github.com/zwrose/superheroes/commit/97e190eb9bf3c6c0b704c14eadc4cb5cc5298f84))
+* **superheroes:** a merged review finding reads fixed only on its own fix-audit ruling ([#2492](https://github.com/zwrose/superheroes/issues/2492)) ([7c8ffc6](https://github.com/zwrose/superheroes/commit/7c8ffc6eb03922ae6655e25906bfe0159dee83f4))
+* **superheroes:** a review record with a control character in it reads back as written ([#2491](https://github.com/zwrose/superheroes/issues/2491)) ([ae07e1e](https://github.com/zwrose/superheroes/commit/ae07e1e3a5db4dbf9f8fd951195e52251f807e31))
+* **superheroes:** a run whose first attempt the silence watchdog ended still counts the cost it measured ([#2539](https://github.com/zwrose/superheroes/issues/2539)) ([98bd484](https://github.com/zwrose/superheroes/commit/98bd48455604508bb13a9b0e3ae7cbd7423209ee))
+* **superheroes:** every gardening pass is a full pass; an unfinished one stays owed ([#2524](https://github.com/zwrose/superheroes/issues/2524)) ([3701c57](https://github.com/zwrose/superheroes/commit/3701c57dd05e663a6ff1eab972257ff086500c67))
+* **superheroes:** leave deferred-by-policy findings out of a guardian lens's usefulness ratio ([#2510](https://github.com/zwrose/superheroes/issues/2510)) ([562f9ae](https://github.com/zwrose/superheroes/commit/562f9aec09751bb139dbf7ce08da3e4fd879bfb4))
+* **superheroes:** let a repeat-only synthesis order finish clean on an empty grouping ([#2533](https://github.com/zwrose/superheroes/issues/2533)) ([afc15d1](https://github.com/zwrose/superheroes/commit/afc15d1ee3dbb4100ff8505dc166e0487f14e793))
+* **superheroes:** match a superseded slot and a stalled finding by their full identity ([#2522](https://github.com/zwrose/superheroes/issues/2522)) ([fe04f1c](https://github.com/zwrose/superheroes/commit/fe04f1c4641296bb14b9b02656ff02c8d3567609))
+* **superheroes:** only a wrong fix counts toward the two-strike audit stop ([#2540](https://github.com/zwrose/superheroes/issues/2540)) ([a33b324](https://github.com/zwrose/superheroes/commit/a33b324f01f50a6ef72e90b3636066edddf0a8ec))
+* **superheroes:** split a gardening record over GitHub's comment limit into parts ([#2508](https://github.com/zwrose/superheroes/issues/2508)) ([bbb344c](https://github.com/zwrose/superheroes/commit/bbb344cffe67d0242c18731262b1c56573446c4c))
+* **superheroes:** the gardening pass counts the minutes of a review whose reviewer was retried after a silence ([#2550](https://github.com/zwrose/superheroes/issues/2550)) ([0441766](https://github.com/zwrose/superheroes/commit/04417668eb52b174011aa11e6a162676de9a895b))
+* **superheroes:** the hotspots lens marks a misread lizard span unmeasured ([#2512](https://github.com/zwrose/superheroes/issues/2512)) ([9d695e7](https://github.com/zwrose/superheroes/commit/9d695e759d4f16fa16595182c829090309877c93))
+* **superheroes:** the owner-card count and repeat suppression read the certified-review rule ([#2541](https://github.com/zwrose/superheroes/issues/2541)) ([362ad05](https://github.com/zwrose/superheroes/commit/362ad0567b273e8fc5d30b2256ed6008df154edb))
+* **superheroes:** the review record names a reviewer run with no bound run folder ([#2538](https://github.com/zwrose/superheroes/issues/2538)) ([110c4a3](https://github.com/zwrose/superheroes/commit/110c4a3091c38adfdbee1c0c174b8d858798fb77))
+* **superheroes:** the seating tally reads a seat's runs across every review record of a PR ([#2523](https://github.com/zwrose/superheroes/issues/2523)) ([63b63f5](https://github.com/zwrose/superheroes/commit/63b63f57d8f0b2ea238cc9f13dc03958d3ec4908))
+* **superheroes:** the vet reads a fix's scope note ([#2551](https://github.com/zwrose/superheroes/issues/2551)) ([3daffbc](https://github.com/zwrose/superheroes/commit/3daffbcff04cee165e16d0c85c0e6ac5719a4e62))
+
 ## [0.50.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.49.0...superheroes-v0.50.0) (2026-11-15)
 
 
