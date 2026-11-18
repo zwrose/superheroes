@@ -18,6 +18,22 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed: in auto mode the timeout hook refuses a Bash call that names no `timeout`, with a reason naming `timeout: 600000`, so no owner approval prompt appears, and the model re-issues the call once; in every other mode the hook rewrites the call as before.** An owner who wants the hook off sets `BASH_DEFAULT_TIMEOUT_MS=600000` in the settings `env` (the host then defaults Bash calls to 600 s itself). See [Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off](#bash-timeout-hook-auto-mode-refuses-instead-of-rewriting-and-a-setting-switches-it-off).
+
+### Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off
+
+- **The change.** The Bash timeout hook has three outcomes. It is off when `BASH_DEFAULT_TIMEOUT_MS` parses to at least 600000. Otherwise, in `auto` mode it refuses a Bash call that names no `timeout`, with a reason naming `timeout: 600000`, so the call is not held for an owner approval prompt and the model re-issues it once. In every other mode it rewrites the call to add `timeout: 600000`, as before. A call that names its own `timeout` is never touched. The hook is still fail-open: a fault in it lets the call through.
+- **The off switch.** An owner who wants the hook off sets `"env": {"BASH_DEFAULT_TIMEOUT_MS": "600000"}` in their Claude Code settings. The host then defaults every Bash call to 600 s itself, so the hook has nothing to add.
+- **The rule.** `PLAIN_COMMAND_RULE` and the four shell-running agents (`implementer`, `check-runner`, `pilot`, `vet-drafter`) now ask for an explicit `timeout` on every Bash call, so the hook seldom has anything to refuse or rewrite. A check-runner may take the hook's named re-issue once (the same command with `timeout: 600000`); a second refusal, or any other refusal, stays a stop for it.
+- **The firing record.** Each line the hook writes to its firing record gains a `branch` field, `rewrite` or `refuse`.
+- Replacement. None: a caller that names a `timeout` on every Bash call sees no change, and one that does not is refused once in auto mode, or rewritten in any other mode, as the first bullet above says.
+
 ## 0.51.0
 
 ### Before you upgrade

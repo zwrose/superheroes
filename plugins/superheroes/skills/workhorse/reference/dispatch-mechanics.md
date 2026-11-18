@@ -33,7 +33,8 @@ fields stay authoritative. Mechanics by dispatch kind:
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
   Bash timeout. On the Claude host (harness **2.1.219**) that is **ten minutes (600 s) — a
   foreground-conversion boundary, not a ceiling you lift by passing a bigger `timeout`**: the plugin's
-  `bash_timeout` hook injects 600 s **only when a call omits its own `timeout`** (an explicit one is
+  `bash_timeout` hook injects 600 s **only when a call omits its own `timeout`** (in auto mode it
+  refuses such a call once, naming `timeout: 600000`, instead of rewriting it; an explicit one is
   never touched), and the host **converts** a foreground call whose `timeout` exceeds 600 s to
   background — it does **not** clamp-and-kill at 600 s. What kills a converted run is **the turn
   ending**. Give the dispatch that room through the `--max-wait` slice loop in § Awaiting a
