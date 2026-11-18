@@ -3,8 +3,9 @@
 
 The layer below is rebuilt on a new commit with the same tree (``git commit-tree <old>^{tree} -p <parent>``). The caller
 gives ``base_at_review``, the layer below's old heads; the check reads the reviewed change against one only when git
-shows its tree equals the base's. Edges: no value is today's check; a non-sha, an object-less, another-tree or an
-unreadable value reads needs-review; an unusable record or a head that is X is unchanged.
+shows its tree equals the base's. Edges: no value is today's check; a non-sha value reads needs-review; an object-less,
+another-tree, unreadable or merge-base-less full-sha value is ignored, so the answer is the check's own without it plus
+one ``base-at-review-ignored`` line; an unusable record or a head that is X is unchanged.
 
 Bite-proof record: i2561_head_coverage_rewritten_below
 """
@@ -12,6 +13,8 @@ import json
 import os
 import subprocess
 import sys
+
+import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -78,6 +81,77 @@ def straightened(repo):
 def seam(repo, fails):
     real = R.production_git(repo.root)
     return lambda argv: (1, "") if fails(argv) else real(argv)
+
+
+def app_text(edited=False):
+    text = TR.numbered("app", 30)
+    return text.replace("value_app_3 = 3", "lower_3 = 1") if edited else text
+
+
+def upper_shared():
+    return TR.numbered("shared", 30).replace("value_shared_20 = 20", "upper_20 = 2")
+
+
+def layers(repo):
+    """``main`` holds the shared and the app file; ``lower`` edits the app file, ``upper`` (on ``lower``) edits the shared
+    file; returns ``(main, lower, x)``."""
+    repo.git("checkout", "-q", "main")
+    repo.write(APP, app_text())
+    main = repo.commit("main gains the app file")
+    repo.git("checkout", "-q", "-b", "lower", "main")
+    repo.write(APP, app_text(True))
+    lower = repo.commit("lower layer")
+    repo.git("checkout", "-q", "-b", "upper", "lower")
+    repo.write(SHARED, upper_shared())
+    return main, lower, repo.commit("upper layer")
+
+
+def cascaded(repo):
+    """Main moves by an unrelated file, then the lower layer is rebuilt on it and the upper layer on that: the layer
+    below changes its tree (the unrelated file), and ``twin`` is a rewrite of the new lower head with the same tree."""
+    main, lower, x = layers(repo)
+    repo.git("checkout", "-q", "main")
+    repo.write("docs/other.md", "other\n")
+    moved = repo.commit("base moves")
+    repo.git("checkout", "-q", "-b", "lower2", moved)
+    repo.write(APP, app_text(True))
+    b = repo.commit("lower layer, rebased")
+    repo.git("checkout", "-q", "-b", "upper2", b)
+    repo.write(SHARED, upper_shared())
+    h = repo.commit("upper layer, rebased")
+    return {"main": main, "lower": lower, "x": x, "b": b, "h": h, "twin": rebuild(repo, b, moved, "twin")}
+
+
+def queue_removed(repo):
+    """The lower layer lands on main as one squashed commit, main moves again, and the upper layer is rebuilt on the tip."""
+    main, lower, x = layers(repo)
+    repo.git("checkout", "-q", "main")
+    repo.write(APP, app_text(True))
+    repo.commit("lower layer, squashed onto main")
+    repo.write("docs/other.md", "other\n")
+    tip = repo.commit("base moves")
+    repo.git("checkout", "-q", "-b", "upper2", tip)
+    repo.write(SHARED, upper_shared())
+    return {"main": main, "lower": lower, "x": x, "b": tip, "h": repo.commit("upper layer, retargeted")}
+
+
+def scenario(repo, kind):
+    """A layer whose bare check reads needs-review (``straightened``) or proven (``cascaded``), with ``same`` (a value
+    that holds the base's tree) and ``other`` (one that does not)."""
+    if kind == "straightened":
+        s = straightened(repo)
+        return {"base": s["b1"], "head": s["h1"], "x": s["x"], "same": s["lower"], "other": s["main"],
+                "bare": "needs-review"}
+    c = cascaded(repo)
+    return {"base": c["b"], "head": c["h"], "x": c["x"], "same": c["twin"], "other": c["lower"], "bare": "proven"}
+
+
+def assert_ignored(bare, got, *ignored):
+    """``got`` is ``bare`` in every field but ``why``, which is the bare ``why`` plus one ignored line per
+    ``(value, reason)`` given, in order."""
+    assert {k: v for k, v in got.items() if k != "why"} == {k: v for k, v in bare.items() if k != "why"}, (bare, got)
+    lines = ["%s: %s %s" % (HC.WHY_BASE_AT_REVIEW_IGNORED, value[:8], reason) for value, reason in ignored]
+    assert got["why"] == bare["why"] + lines, (bare, got)
 
 
 def test_a_straightened_stack_reads_needs_review_without_the_input_and_proven_with_it(tmp_path):
@@ -168,7 +242,7 @@ def test_a_layer_below_fixed_after_the_review_is_reconstructed_from_the_second_f
 
 
 def test_a_base_at_review_from_the_layers_own_history_never_lets_a_dropped_change_read_proven(tmp_path):
-    # axis: a second base is read only when its tree equals the base's tree, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
+    # axis: a second base whose tree differs from the base's tree is never tried, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
     repo = TR.Repo(tmp_path)
     repo.git("checkout", "-q", "-b", "lower", "main")
     repo.write(SHARED, shared_text("lower"))
@@ -183,8 +257,11 @@ def test_a_base_at_review_from_the_layers_own_history_never_lets_a_dropped_chang
     repo.write(SHARED, shared_text("lower", "upper"))
     head = repo.commit("only the shared change, the app file dropped")
     record = TR.earlier_record(x)
+    bare = run_check(repo, b, record, head)
+    assert bare["answer"] == "needs-review", bare
     got = run_check(repo, b, record, head, base_at_review=[p])
-    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_BASE_AT_REVIEW_UNPROVEN], got
+    assert got["answer"] == "needs-review", got
+    assert_ignored(bare, got, (p, "other-tree"))
     got = run_check(repo, b, record, head, base_at_review=[lower])
     assert got["answer"] == "needs-review" and APP in got["files"], got
 
@@ -198,38 +275,105 @@ def test_a_base_at_review_that_is_no_sha_reads_input_invalid(tmp_path):
         assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_INPUT_INVALID], (value, got)
 
 
-def test_a_base_at_review_git_has_no_object_for_reads_needs_review(tmp_path):
-    # axis: a second base git cannot read proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+@pytest.mark.parametrize("kind", ["straightened", "cascaded"])
+def test_a_base_at_review_git_has_no_object_for_is_ignored(tmp_path, kind):
+    # axis: a second base git cannot read is never tried, so the answer is the bare check's, whether it reads needs-review or proven — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
     repo = TR.Repo(tmp_path)
-    s = straightened(repo)
-    got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"], NO_OBJECT])
-    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_BASE_AT_REVIEW_UNPROVEN], got
+    sc = scenario(repo, kind)
+    record = TR.earlier_record(sc["x"])
+    bare = run_check(repo, sc["base"], record, sc["head"])
+    assert bare["answer"] == sc["bare"], bare
+    got = run_check(repo, sc["base"], record, sc["head"], base_at_review=[NO_OBJECT])
+    assert_ignored(bare, got, (NO_OBJECT, "unreadable"))
 
 
-def test_a_base_at_review_with_another_tree_reads_needs_review(tmp_path):
-    # axis: a second base whose tree differs from the base's tree proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
+@pytest.mark.parametrize("kind", ["straightened", "cascaded"])
+def test_a_base_at_review_with_another_tree_is_ignored(tmp_path, kind):
+    # axis: a second base whose tree differs from the base's tree is never tried, so the answer is the bare check's, whether it reads needs-review or proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
     repo = TR.Repo(tmp_path)
-    s = straightened(repo)
-    got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"], s["main"]])
-    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_BASE_AT_REVIEW_UNPROVEN], got
+    sc = scenario(repo, kind)
+    record = TR.earlier_record(sc["x"])
+    bare = run_check(repo, sc["base"], record, sc["head"])
+    assert bare["answer"] == sc["bare"], bare
+    got = run_check(repo, sc["base"], record, sc["head"], base_at_review=[sc["other"]])
+    assert_ignored(bare, got, (sc["other"], "other-tree"))
 
 
-def test_a_failed_tree_read_reads_needs_review(tmp_path):
-    # axis: a tree git could not read proves nothing, so the second base reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+@pytest.mark.parametrize("kind", ["straightened", "cascaded"])
+def test_a_failed_tree_read_is_ignored(tmp_path, kind):
+    # axis: a tree git could not read is never tried, so the answer is the bare check's, whether it reads needs-review or proven — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
     repo = TR.Repo(tmp_path)
-    s = straightened(repo)
+    sc = scenario(repo, kind)
+    record = TR.earlier_record(sc["x"])
     git = seam(repo, lambda a: a[:1] == ["rev-parse"] and a[-1].endswith("^{tree}"))
-    got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"]], git=git)
-    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_BASE_AT_REVIEW_UNPROVEN], got
+    bare = run_check(repo, sc["base"], record, sc["head"], git=git)
+    assert bare["answer"] == sc["bare"], bare
+    got = run_check(repo, sc["base"], record, sc["head"], base_at_review=[sc["same"]], git=git)
+    assert_ignored(bare, got, (sc["same"], "unreadable"))
 
 
-def test_a_base_at_review_with_no_merge_base_reads_needs_review(tmp_path):
-    # axis: a second base that shares no merge base with the certified commit proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+@pytest.mark.parametrize("kind", ["straightened", "cascaded"])
+def test_a_base_at_review_with_no_merge_base_is_ignored(tmp_path, kind):
+    # axis: a second base that shares no merge base with the certified commit is never tried, so the answer is the bare check's, whether it reads needs-review or proven — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+    repo = TR.Repo(tmp_path)
+    sc = scenario(repo, kind)
+    record = TR.earlier_record(sc["x"])
+    git = seam(repo, lambda a: a == ["merge-base", sc["x"], sc["same"]])
+    bare = run_check(repo, sc["base"], record, sc["head"], git=git)
+    assert bare["answer"] == sc["bare"], bare
+    got = run_check(repo, sc["base"], record, sc["head"], base_at_review=[sc["same"]], git=git)
+    assert_ignored(bare, got, (sc["same"], "no-merge-base"))
+
+
+def test_a_cascading_rebase_onto_a_main_that_moved_reads_proven_and_the_old_head_is_ignored(tmp_path):
+    # axis: a layer below rebased onto a main that moved changes its tree, so the old head is ignored and the bare check's proven answer stands — see bite-proof record i2561_head_coverage_rewritten_below (E-ignore)
+    repo = TR.Repo(tmp_path)
+    c = cascaded(repo)
+    record = TR.earlier_record(c["x"])
+    bare = run_check(repo, c["b"], record, c["h"])
+    assert bare["answer"] == "proven", bare
+    got = run_check(repo, c["b"], record, c["h"], base_at_review=[c["lower"]])
+    assert got["answer"] == "proven", got
+    assert_ignored(bare, got, (c["lower"], "other-tree"))
+
+
+def test_a_queue_removal_onto_a_main_that_moved_past_the_layer_below_reads_proven_and_the_old_head_is_ignored(tmp_path):
+    # axis: a layer retargeted onto a main that holds the layer below squashed and has moved on ignores the old head, so the bare check's proven answer stands — see bite-proof record i2561_head_coverage_rewritten_below (E-ignore)
+    repo = TR.Repo(tmp_path)
+    q = queue_removed(repo)
+    record = TR.earlier_record(q["x"])
+    bare = run_check(repo, q["b"], record, q["h"])
+    assert bare["answer"] == "proven", bare
+    got = run_check(repo, q["b"], record, q["h"], base_at_review=[q["lower"]])
+    assert got["answer"] == "proven", got
+    assert_ignored(bare, got, (q["lower"], "other-tree"))
+
+
+def test_an_ignored_value_beside_a_valid_one_that_proves_reads_proven_with_both_lines(tmp_path):
+    # axis: a value that is ignored beside a valid one never stops the valid one from proving, and both lines are reported — see bite-proof record i2561_head_coverage_rewritten_below (E-ignore)
     repo = TR.Repo(tmp_path)
     s = straightened(repo)
-    git = seam(repo, lambda a: a == ["merge-base", s["x"], s["lower"]])
-    got = run_check(repo, s["b1"], TR.earlier_record(s["x"]), s["h1"], base_at_review=[s["lower"]], git=git)
-    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_BASE_AT_REVIEW_UNPROVEN], got
+    record = TR.earlier_record(s["x"])
+    got = run_check(repo, s["b1"], record, s["h1"], base_at_review=[NO_OBJECT, s["lower"], s["main"]])
+    assert got["answer"] == "proven", got
+    assert tokens(got) == [HC.WHY_OWN_CHANGE_UNCHANGED, HC.WHY_BASE_AT_REVIEW, HC.WHY_BASE_AT_REVIEW_IGNORED,
+                           HC.WHY_BASE_AT_REVIEW_IGNORED], got
+    assert got["why"][2:] == ["%s: %s unreadable" % (HC.WHY_BASE_AT_REVIEW_IGNORED, NO_OBJECT[:8]),
+                              "%s: %s other-tree" % (HC.WHY_BASE_AT_REVIEW_IGNORED, s["main"][:8])], got
+
+
+def test_an_unusable_record_or_a_head_that_is_x_gets_no_ignored_line(tmp_path):
+    # axis: an unusable record or a head that is the certified commit returns the check's own answer with no ignored line, whatever the values — see bite-proof record i2561_head_coverage_rewritten_below (not a recorded element)
+    repo = TR.Repo(tmp_path)
+    s = straightened(repo)
+    record = TR.earlier_record(s["x"])
+    assert run_check(repo, s["b1"], {"ok": False}, s["h1"], base_at_review=[NO_OBJECT, s["main"]]) \
+        == run_check(repo, s["b1"], {"ok": False}, s["h1"])
+    same = run_check(repo, s["b1"], record, s["x"], base_at_review=[NO_OBJECT, s["main"]])
+    assert same == run_check(repo, s["b1"], record, s["x"])
+    assert tokens(same) == [HC.WHY_SAME_COMMIT]
+    got = run_check(repo, s["b1"], record, s["h1"], base_at_review=[NO_OBJECT, "abc"])
+    assert got["answer"] == "needs-review" and tokens(got) == [HC.WHY_INPUT_INVALID], got
 
 
 def test_no_input_or_an_unneeded_one_leaves_the_answer_as_it_was(tmp_path):

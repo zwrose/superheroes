@@ -40,11 +40,13 @@ Every failure to read anything answers needs-review. The check never raises.
 
 A stack layer whose layer below was rewritten (a straightening rebuilds it on a new commit) has a base that no longer
 sits under the reviewed commit, so every file both layers edit would fail step 5. The caller may give ``base_at_review``,
-the heads the layer below had before it was rewritten. Each must be a full sha whose tree git shows equals the base's
-tree and that shares a merge base with X; any other value answers needs-review (``input-invalid`` for a value that is not
-a sha, else ``base-at-review-unproven``). With every value valid, steps 4 and 5 run again with X's change read against
-that value instead of the base; the first that proves answers proven, with a ``base-at-review`` line. With none given
-the check is exactly steps 1 to 9.
+the heads the layer below had before it was rewritten. A value that is not a full sha answers needs-review
+(``input-invalid``). A full-sha value is tried only when git reads its tree, the tree equals the base's tree and it
+shares a merge base with X; otherwise it is ignored (reason ``unreadable``, ``other-tree`` or ``no-merge-base``) and the
+answer is the check's answer without it, with one ``base-at-review-ignored: <first 8 of the value> <reason>`` line per
+ignored value. A well-formed value never makes the answer worse than the check without it. Steps 4 and 5 run again for
+each value tried, with X's change read against that value instead of the base; the first that proves answers proven,
+with a ``base-at-review`` line. With none given the check is exactly steps 1 to 9.
 
 ``outcome(answer, ci, judged_clear, sheet, sheet_commit, head)`` is covered when the answer is proven, or judgement
 with ``judged_clear``. CI red is NOT-READY (``ci-red``, no review owed: the fix arrives as a new commit); not covered
@@ -95,10 +97,10 @@ WHY_OTHER_AUTHOR = "other-author"
 WHY_BEHAVIOUR_CHANGE = "behaviour-change"
 WHY_CHECK_FAILED = "check-failed"
 WHY_BASE_AT_REVIEW = "base-at-review"
-WHY_BASE_AT_REVIEW_UNPROVEN = "base-at-review-unproven"
+WHY_BASE_AT_REVIEW_IGNORED = "base-at-review-ignored"
 WHY_TOKENS = (WHY_RECORD_UNUSABLE, WHY_SAME_COMMIT, WHY_INPUT_INVALID, WHY_DIFF_UNREADABLE, WHY_OWN_CHANGE_UNCHANGED,
               WHY_PROVEN_COPIES, WHY_PROSE_OR_COMMENTS, WHY_OTHER_AUTHOR, WHY_BEHAVIOUR_CHANGE, WHY_CHECK_FAILED,
-              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_UNPROVEN)
+              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_IGNORED)
 
 CI_STATES = ("green", "pending", "red", "none")
 SHEETS = ("none", "live", "held")
@@ -366,7 +368,8 @@ def check(repo_root, base, record, head, proof=(), builder_author=None, git=None
     ``review_record.py read --pr N`` prints, or the bare record. ``proof`` is a list of ``{file, source, sha256}``
     copy entries. ``git`` is the test seam ``returning_review.decide`` takes, ``git(argv) -> (returncode,
     stdout_text)``; production leaves it None. ``base_at_review`` is a list of full commit shas, each a second base
-    whose tree git shows equals the base's tree (step 9 of the module docstring); empty, the check is as it was."""
+    whose tree git shows equals the base's tree (the second-base paragraph of the module docstring); a value that does
+    not fit is ignored; empty, the check is as it was."""
     try:
         return _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review)
     except Exception as exc:  # total: a fault nobody foresaw is still a review owed
@@ -387,8 +390,8 @@ def _tree_of(run, rev):
 
 
 def _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review):
-    """``_check`` against the base, and, when the caller gave second bases, against each of them (9 in the module
-    docstring). With none given the answer is exactly ``_check``'s."""
+    """``_check`` against the base, and, when the caller gave second bases, against each valid one of them (the
+    second-base paragraph of the module docstring). With none given, or none valid, the answer is ``_check``'s."""
     first = _check(repo_root, base, record, head, proof, builder_author, git)
     if base_at_review is None:
         values = []
@@ -407,30 +410,26 @@ def _check_rewritten(repo_root, base, record, head, proof, builder_author, git, 
         return _needs_review(_result(base, head, x), WHY_INPUT_INVALID, "every base at review must be a full commit sha")
     run = git if git is not None else returning_review.production_git(repo_root)
     base_tree = _tree_of(run, base)
-    trees = [_tree_of(run, v) for v in values]
-    # axis: a second base whose tree git could not read, or that shares no merge base with the certified commit, proves nothing and reads needs-review — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
-    if base_tree is None or any(t is None for t in trees):
-        return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
-                             "git could not read the tree of a base at review or of the base")
-    for value, tree in zip(values, trees):
-        # axis: a second base is read only when its tree equals the base's tree, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
-        if tree != base_tree:
-            return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
-                                 "a base at review does not hold the base's tree: %s" % value[:7])
+    valid = []
+    ignored = []
     for value in values:
-        code, text = run(["merge-base", x, value])
-        if code != 0 or not returning_review._is_sha(text.strip() if isinstance(text, str) else ""):
-            return _needs_review(_result(base, head, x), WHY_BASE_AT_REVIEW_UNPROVEN,
-                                 "git finds no merge base of the certified commit and a base at review")
-    if first["answer"] == PROVEN:
+        reason = _ignored_reason(run, x, value, base_tree)
+        if reason is None:
+            valid.append(value)
+        else:
+            ignored.append(_line(WHY_BASE_AT_REVIEW_IGNORED, "%s %s" % (value[:8], reason)))
+    # axis: a second base that is ignored never changes the answer from the check's own without it — see bite-proof record i2561_head_coverage_rewritten_below (E-ignore)
+    if first["answer"] == PROVEN or not valid:
+        first["why"].extend(ignored)
         return first
-    gots = [(value, _check(repo_root, base, record, head, proof, builder_author, git, x_base=value)) for value in values]
+    gots = [(value, _check(repo_root, base, record, head, proof, builder_author, git, x_base=value)) for value in valid]
     chosen = None
     for value, got in gots:
         if got["answer"] == PROVEN:
             chosen = (value, got)
             break
     if chosen is None and first["answer"] == JUDGEMENT:
+        first["why"].extend(ignored)
         return first
     if chosen is None:
         for value, got in gots:
@@ -442,7 +441,25 @@ def _check_rewritten(repo_root, base, record, head, proof, builder_author, git, 
     value, result = chosen
     result["why"].append(_line(WHY_BASE_AT_REVIEW, "the certified commit's own change was read against %s, a base at review "
                                                    "that holds the base's tree" % value[:7]))
+    # axis: a second base that is ignored never changes the answer a valid second base proves, and is reported beside it — see bite-proof record i2561_head_coverage_rewritten_below (E-ignore)
+    result["why"].extend(ignored)
     return result
+
+
+def _ignored_reason(run, x, value, base_tree):
+    """Why a full-sha second base is ignored (``unreadable``, ``other-tree`` or ``no-merge-base``), or None when it is
+    valid: git reads its tree, the tree equals the base's, and it shares a merge base with X."""
+    tree = _tree_of(run, value)
+    # axis: a second base whose tree git could not read, or that shares no merge base with the certified commit, is never tried — see bite-proof record i2561_head_coverage_rewritten_below (E-read)
+    if base_tree is None or tree is None:
+        return "unreadable"
+    # axis: a second base whose tree differs from the base's tree is never tried, so a commit from the layer's own history never lets a dropped change read proven — see bite-proof record i2561_head_coverage_rewritten_below (E-tree)
+    if tree != base_tree:
+        return "other-tree"
+    code, text = run(["merge-base", x, value])
+    if code != 0 or not returning_review._is_sha(text.strip() if isinstance(text, str) else ""):
+        return "no-merge-base"
+    return None
 
 
 def _check(repo_root, base, record, head, proof, builder_author, git, x_base=None):
@@ -684,7 +701,7 @@ def main(argv):
     cp.add_argument("--proof", default=None)
     cp.add_argument("--builder-author", default=None)
     cp.add_argument("--base-at-review", action="append", default=None)
-    op =sub.add_parser("outcome")
+    op = sub.add_parser("outcome")
     op.add_argument("--answer", required=True)
     op.add_argument("--ci", required=True)
     op.add_argument("--judged-clear", action="store_true")
