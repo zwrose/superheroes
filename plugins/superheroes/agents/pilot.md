@@ -27,6 +27,7 @@ find.**
   file-write tool), and nothing a rule refuses (a delete, an install, a network call, a push) moves
   into a script to get past it. The rule (`PLAIN_COMMAND_RULE` in
   `lib/command_refusals.py`) is the one home; read it there and follow it.
+  Give every Bash call an explicit `timeout` (`timeout: 600000` for a long run).
 - **Read the execution steps before you drive anything.** How you target controls, how you drive
   each interaction, and what you must do before classifying a failure as an app bug are defined in
   `skills/test-pilot-execute/reference/execution-steps.md` (§ Steps 5–8) — the **one home** of those

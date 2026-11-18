@@ -638,6 +638,9 @@ def test_plain_command_rule_content():
     # axis: the file-write carve-out stays one clause of the rule — see bite-proof record wo2_2458_heredoc_inline
     assert ("where the file-write rule binds you, a file that rule sends to the file tools is never "
             "written by the script") in rule
+    # axis: the rule asks for an explicit timeout on every Bash call, with the 600000 value — see bite-proof record wo_b_2563_explicit_timeout
+    assert "Pass an explicit `timeout` on every Bash call" in rule
+    assert "`timeout: 600000`" in rule
 
 
 def test_plain_command_rule_leaves_the_other_rules_unchanged():
@@ -689,6 +692,37 @@ def test_every_bash_granted_agent_cites_the_plain_command_rule():
     assert granted >= {"check-runner", "implementer", "pilot", "vet-drafter"}
     # axis: every Bash-granted agent cites the plain-command rule by name and home — see bite-proof record wo1_2458_plain_command
     assert offenders == []
+
+
+def test_every_bash_granted_agent_asks_for_an_explicit_timeout():
+    granted, offenders = set(), []
+    agents_dir = os.path.join(_PLUGIN_ROOT, "agents")
+    for name in sorted(os.listdir(agents_dir)):
+        if not name.endswith(".md"):
+            continue
+        with open(os.path.join(agents_dir, name), encoding="utf-8") as fh:
+            frontmatter, body = _split_agent(fh.read())
+        if not _bash_granted(frontmatter):
+            continue
+        granted.add(name[:-len(".md")])
+        if "explicit `timeout`" not in body or "`timeout: 600000`" not in body:
+            offenders.append(name)
+    # axis: the Bash-granted set is not read as empty by a parser regression — see bite-proof record wo_b_2563_explicit_timeout
+    assert granted >= {"check-runner", "implementer", "pilot", "vet-drafter"}
+    # axis: every Bash-granted agent asks for an explicit timeout and names the 600000 value — see bite-proof record wo_b_2563_explicit_timeout
+    assert offenders == []
+
+
+def test_check_runner_takes_the_timeout_route_once():
+    with open(os.path.join(_PLUGIN_ROOT, "agents", "check-runner.md"), encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("- **A refused or denied command is a stop.**"))
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("- **")), len(lines))
+    bullet = "\n".join(lines[start:end])
+    # axis: the check-runner's stop bullet names the timeout hook's one re-issue with the 600000 value — see bite-proof record wo_b_2563_explicit_timeout
+    assert "re-issue that same command once with `timeout: 600000`" in bullet
+    # axis: the exception stays narrow, a second refusal is still a stop — see bite-proof record wo_b_2563_explicit_timeout
+    assert "second refusal" in bullet
 
 
 @pytest.mark.parametrize("frontmatter,expected", [

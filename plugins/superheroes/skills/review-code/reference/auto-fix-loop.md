@@ -475,7 +475,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > Every engine dispatch (the reviewer, read-only, above)
 > runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
 > `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`) injects a 600s `timeout` on any dispatch
-> that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
+> that carries none (in auto mode it refuses the call once, asking for `timeout: 600000`), so a wedged engine CLI is bounded and killed instead of blocking the panel's
 > `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
 > per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
 > dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
