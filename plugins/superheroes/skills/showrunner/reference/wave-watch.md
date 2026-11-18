@@ -101,7 +101,7 @@ end.
 
 Bash timeout on Claude Code has two layers (`hooks/bash_timeout.py`,
 `skills/workhorse/reference/dispatch-mechanics.md`): an **omitted** timeout is rewritten to 600000 ms
-(600 s), so a foreground call with no explicit timeout is killed at ~600 s; an **explicit** timeout
+(in auto mode, refused with a reason asking for `timeout: 600000`) (600 s), so a foreground call with no explicit timeout is killed at ~600 s; an **explicit** timeout
 above ~600 s converts the call to background. For the arming pattern, use the harness background-task
 primitive so `loop` survives across turns — do not rely on a foreground arm outliving the turn.
 

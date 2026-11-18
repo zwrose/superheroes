@@ -34,6 +34,7 @@ def _isolate_claude_config_dir(tmp_path, monkeypatch):
     """The hook writes a durable firing record; a test run must never land in a real one."""
     monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
     monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    monkeypatch.delenv("BASH_DEFAULT_TIMEOUT_MS", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
 
@@ -41,29 +42,34 @@ def _isolate_claude_config_dir(tmp_path, monkeypatch):
 
 def test_decide_injects_floor_when_timeout_omitted():
     m = _mod()
-    out = m.decide({"tool_input": {"command": "sleep 300 && echo ok"}})
-    assert out == {"command": "sleep 300 && echo ok", "timeout": m.DEFAULT_TIMEOUT_MS}
+    out = m.decide({"tool_input": {"command": "sleep 300 && echo ok"}}, {})
+    assert out == ("rewrite", {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "updatedInput": {"command": "sleep 300 && echo ok", "timeout": m.DEFAULT_TIMEOUT_MS}}})
 
 
 def test_decide_never_touches_an_explicit_timeout():
     m = _mod()
-    assert m.decide({"tool_input": {"command": "x", "timeout": 5000}}) is None
+    assert m.decide({"tool_input": {"command": "x", "timeout": 5000}}, {}) is None
     # even one ABOVE the floor stays untouched — omission is the failure mode, not misjudgment
-    assert m.decide({"tool_input": {"command": "x", "timeout": 900000}}) is None
+    assert m.decide({"tool_input": {"command": "x", "timeout": 900000}}, {}) is None
 
 
 def test_decide_treats_null_timeout_as_omitted():
     m = _mod()
-    out = m.decide({"tool_input": {"command": "x", "timeout": None}})
-    assert out is not None and out["timeout"] == m.DEFAULT_TIMEOUT_MS
+    out = m.decide({"tool_input": {"command": "x", "timeout": None}}, {})
+    assert out is not None
+    branch, hook_output = out
+    assert branch == "rewrite"
+    assert hook_output["hookSpecificOutput"]["updatedInput"]["timeout"] == m.DEFAULT_TIMEOUT_MS
 
 
 def test_decide_noops_on_bad_shapes():
     m = _mod()
-    assert m.decide(None) is None
-    assert m.decide([]) is None
-    assert m.decide({}) is None
-    assert m.decide({"tool_input": "not a dict"}) is None
+    assert m.decide(None, {}) is None
+    assert m.decide([], {}) is None
+    assert m.decide({}, {}) is None
+    assert m.decide({"tool_input": "not a dict"}, {}) is None
 
 
 # --- process contract: fail-open, correct hook JSON --------------------------
@@ -158,7 +164,8 @@ def test_firing_record_writes_one_json_line(tmp_path, monkeypatch):
     lines = open(record, encoding="utf-8").read().splitlines()
     assert len(lines) == 1
     entry = json.loads(lines[0])
-    assert set(entry) == {"ts", "timeout_ms", "session", "cwd"}
+    assert set(entry) == {"ts", "timeout_ms", "session", "cwd", "branch"}
+    assert entry["branch"] == "rewrite"
     assert entry["timeout_ms"] == _mod().DEFAULT_TIMEOUT_MS
     assert entry["ts"].endswith("Z")
     assert entry["session"] == "sess-1"
@@ -239,3 +246,158 @@ def test_firing_record_rotation_replaces_prior_generation(tmp_path, monkeypatch)
     ]
     rotated_text = open(record + ".1", encoding="utf-8").read()
     assert rotated_text.startswith("generation-beta-")
+
+
+# --- env off switch, auto-mode refusal, branch record (issue 2563) -----------
+# Bite-proof record for every axis below: bite_proofs/wo_a_2563_timeout_hook.md
+
+_MISSING = object()
+
+_OTHER_MODES = [
+    pytest.param("default", id="default"),
+    pytest.param("acceptEdits", id="acceptEdits"),
+    pytest.param("plan", id="plan"),
+    pytest.param("bypassPermissions", id="bypassPermissions"),
+    pytest.param("dontAsk", id="dontAsk"),
+    pytest.param(_MISSING, id="missing-key"),
+    pytest.param(1, id="int-mode"),
+    pytest.param(None, id="null-mode"),
+]
+
+
+def _payload(mode=_MISSING, **tool_input_extra):
+    tool_input = {"command": "echo ok"}
+    tool_input.update(tool_input_extra)
+    payload = {"tool_input": tool_input}
+    if mode is not _MISSING:
+        payload["permission_mode"] = mode
+    return payload
+
+
+def _assert_rewrite_output(stdout):
+    hso = json.loads(stdout)["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["updatedInput"]["timeout"] == _mod().DEFAULT_TIMEOUT_MS
+    assert "permissionDecision" not in hso
+    return hso
+
+
+@pytest.mark.parametrize("mode", [_MISSING, "auto"], ids=["no-mode", "auto-mode"])
+@pytest.mark.parametrize("env_value", ["600000", "900000", " 600000 "])
+def test_env_at_or_above_floor_switches_hook_off(tmp_path, monkeypatch, env_value, mode):
+    monkeypatch.setenv("BASH_DEFAULT_TIMEOUT_MS", env_value)
+    assert _mod().decide(_payload(mode), {"BASH_DEFAULT_TIMEOUT_MS": env_value}) is None
+    r = _run_hook(json.dumps(_payload(mode)))
+    assert r.returncode == 0
+    # axis: env value >= 600000 means no output and no firing record, bite-proof record wo_a_2563_timeout_hook (E1)
+    assert r.stdout.strip() == ""
+    assert not os.path.exists(_record_path(tmp_path))
+
+
+@pytest.mark.parametrize("env_value", [None, "599999", "", "abc", "600000.5", "-1"],
+                         ids=["unset", "below-floor", "empty", "non-integer", "float", "negative"])
+def test_env_below_floor_or_non_number_still_rewrites(monkeypatch, env_value):
+    environ = {}
+    if env_value is not None:
+        monkeypatch.setenv("BASH_DEFAULT_TIMEOUT_MS", env_value)
+        environ["BASH_DEFAULT_TIMEOUT_MS"] = env_value
+    decision = _mod().decide(_payload(), environ)
+    assert decision is not None and decision[0] == "rewrite"
+    r = _run_hook(json.dumps(_payload()))
+    assert r.returncode == 0
+    # axis: env unset/low/non-numeric must not switch the hook off, bite-proof record wo_a_2563_timeout_hook (E2)
+    _assert_rewrite_output(r.stdout)
+
+
+def test_auto_mode_refuses_with_route_and_never_rewrites():
+    m = _mod()
+    branch, hook_output = m.decide(_payload("auto"), {})
+    assert branch == "refuse"
+    hso = hook_output["hookSpecificOutput"]
+    # axis: auto mode refuses instead of rewriting, bite-proof record wo_a_2563_timeout_hook (E3)
+    assert hso["permissionDecision"] == "deny"
+    assert "updatedInput" not in hso
+    # axis: the refusal reason names the route timeout: 600000, bite-proof record wo_a_2563_timeout_hook (E4)
+    assert "timeout: 600000" in hso["permissionDecisionReason"]
+    assert "Route:" in hso["permissionDecisionReason"]
+    assert hso["hookEventName"] == "PreToolUse"
+
+    r = _run_hook(json.dumps(_payload("auto")))
+    assert r.returncode == 0
+    out_hso = json.loads(r.stdout)["hookSpecificOutput"]
+    # axis: the subprocess output refuses in auto mode with no rewrite, bite-proof record wo_a_2563_timeout_hook (E3)
+    assert out_hso["permissionDecision"] == "deny"
+    assert "updatedInput" not in out_hso
+    # axis: the printed reason names timeout: 600000, bite-proof record wo_a_2563_timeout_hook (E4)
+    assert "timeout: 600000" in out_hso["permissionDecisionReason"]
+    assert out_hso["permissionDecisionReason"] == m.REFUSAL_REASON
+
+
+@pytest.mark.parametrize("mode", _OTHER_MODES)
+def test_every_other_mode_rewrites(mode):
+    decision = _mod().decide(_payload(mode), {})
+    # axis: only auto refuses; every other mode value rewrites, bite-proof record wo_a_2563_timeout_hook (E5)
+    assert decision is not None and decision[0] == "rewrite"
+    r = _run_hook(json.dumps(_payload(mode)))
+    assert r.returncode == 0
+    # axis: the printed output for a non-auto mode is the rewrite, bite-proof record wo_a_2563_timeout_hook (E5)
+    _assert_rewrite_output(r.stdout)
+
+
+@pytest.mark.parametrize("mode", _OTHER_MODES + [pytest.param("auto", id="auto")])
+def test_explicit_timeout_untouched_in_every_mode(tmp_path, mode):
+    payload = _payload(mode, timeout=5000)
+    # axis: an explicit timeout is never touched, auto mode included, bite-proof record wo_a_2563_timeout_hook (E6)
+    assert _mod().decide(payload, {}) is None
+    r = _run_hook(json.dumps(payload))
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    assert not os.path.exists(_record_path(tmp_path))
+
+
+@pytest.mark.parametrize("payload", [
+    pytest.param({"permission_mode": "auto", "tool_input": "x"}, id="tool-input-not-dict"),
+    pytest.param({"permission_mode": "auto"}, id="no-tool-input"),
+])
+def test_malformed_auto_payload_emits_nothing(tmp_path, payload):
+    # axis: a malformed payload in auto mode fails open with no refusal, bite-proof record wo_a_2563_timeout_hook (E7)
+    assert _mod().decide(payload, {}) is None
+    r = _run_hook(json.dumps(payload))
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+    assert not os.path.exists(_record_path(tmp_path))
+
+
+def test_garbage_stdin_emits_nothing_in_auto_environment(monkeypatch):
+    monkeypatch.setenv("BASH_DEFAULT_TIMEOUT_MS", "1000")
+    for garbage in ("", "not json {", "[1,2,3]", '"auto"'):
+        r = _run_hook(garbage)
+        assert r.returncode == 0, "fail-open: hook must exit 0 on %r" % garbage
+        # axis: unparsable stdin never emits, bite-proof record wo_a_2563_timeout_hook (E7)
+        assert r.stdout.strip() == "", "fail-open: no output on %r" % garbage
+
+
+def test_firing_record_names_the_branch(tmp_path):
+    for mode, expected_branch in ((_MISSING, "rewrite"), ("auto", "refuse")):
+        payload = _payload(mode)
+        payload["session_id"] = "sess-" + expected_branch
+        payload["cwd"] = "/work"
+        r = _run_hook(json.dumps(payload))
+        assert r.returncode == 0
+    lines = open(_record_path(tmp_path), encoding="utf-8").read().splitlines()
+    assert len(lines) == 2
+    by_session = {entry["session"]: entry for entry in map(json.loads, lines)}
+    for expected_branch in ("rewrite", "refuse"):
+        entry = by_session["sess-" + expected_branch]
+        # axis: the record names the branch taken, bite-proof record wo_a_2563_timeout_hook (E8)
+        assert entry["branch"] == expected_branch
+        assert set(entry) == {"ts", "timeout_ms", "session", "cwd", "branch"}
+        assert entry["timeout_ms"] == _mod().DEFAULT_TIMEOUT_MS
+        assert entry["cwd"] == "/work"
+
+
+def test_refused_call_firing_record_never_contains_command_text(tmp_path):
+    secret_marker = "DISTINCTIVE_SECRET_COMMAND_MARKER_REFUSE"
+    r = _run_hook(json.dumps(_payload("auto", command=secret_marker)))
+    assert r.returncode == 0
+    assert secret_marker not in open(_record_path(tmp_path), encoding="utf-8").read()

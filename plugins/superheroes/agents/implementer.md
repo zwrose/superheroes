@@ -70,7 +70,8 @@ heredoc and no inline program code such as `python3 -B -c` or `node -e`; content
 written with the file-write tool. Nothing a rule refuses (a delete, an install, a network call, a
 push) moves into a script to get past it. The plain-command rule
 (`PLAIN_COMMAND_RULE` in `lib/command_refusals.py`) binds every command you run; read it there and
-follow it.
+follow it. Give every Bash call an explicit `timeout` (`timeout: 600000` for a gate, a suite or any
+long run).
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when

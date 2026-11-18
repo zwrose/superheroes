@@ -30,7 +30,10 @@ STOP_RULE = (
 PLAIN_COMMAND_RULE = (
     "Write every shell command in plain form, so that no command waits on an approval nobody is "
     "there to give: a chained, looping or variable-dependent command cannot be pre-approved, and "
-    "it is held for the owner's approval even in auto mode. Run one plain command per call. A "
+    "it is held for the owner's approval even in auto mode. Run one plain command per call. "
+    "Pass an explicit `timeout` on every Bash call (`timeout: 600000` for a gate, a suite or "
+    "anything else that may run long), so the timeout hook never has to add one; a call that "
+    "names none can be refused, and that refusal names the one retry to make. A "
     "single command on its own, such as a read-only `git`, `gh api` or `cat`, stays fine as one "
     "plain call. That holds only for a command that carries no heredoc and no inline program code "
     "(`python3 -c`, `node -e`, `bash -c` and the like): file content and code go in a file written "

@@ -209,8 +209,10 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### A4 — Bash timeout hook
 
-- **Component.** PreToolUse(Bash) input rewrite that floors omitted Bash tool timeouts to 600s; it
-  costs a stdin parse on every Bash call and works around the host's 120s default.
+- **Component.** PreToolUse(Bash) input rewrite that floors omitted Bash tool timeouts to 600s (in
+  auto mode it refuses the call instead of rewriting it, and `BASH_DEFAULT_TIMEOUT_MS` at 600000 or
+  more switches it off); it costs a stdin parse on every Bash call and works around the host's 120s
+  default.
 - **Start date.** 2026-09-15.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts in which the
   injected timeout floor is what let a command finish. On firing, a proposal to the owner at a
