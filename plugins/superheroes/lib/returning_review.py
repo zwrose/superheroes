@@ -185,12 +185,15 @@ def _own_change(section_text):
     return "".join(out)
 
 
-def _merge_reproduces_head(run, base, last_reviewed, head, path):
+def _merge_reproduces_head(run, base, last_reviewed, head, path, fork_base=None):
     """True only when git proves the pull request's own lines in ``path`` did not change since ``last_reviewed``:
     a three-way merge of the file (ours = the last reviewed commit's blob, ancestor = the blob at the merge base of
     the last reviewed commit and the base, theirs = the base's blob) equals the head's file byte for byte. A file
-    missing from one side, a conflict, a non-zero exit, a binary file or any git failure is False."""
-    code, text = run(["merge-base", last_reviewed, base])
+    missing from one side, a conflict, a non-zero exit, a binary file or any git failure is False. ``fork_base``,
+    when given, replaces the base only for the merge base of the last reviewed commit (the second base of a
+    rewritten layer below)."""
+    # axis: the fork is the merge base of the last reviewed commit and the second base when one is given, so a layer whose layer below was rewritten is reconstructed from its own fork — see bite-proof record i2561_head_coverage_rewritten_below (E-fork)
+    code, text = run(["merge-base", last_reviewed, fork_base if fork_base is not None else base])
     fork = text.strip()
     if code != 0 or not _is_sha(fork):
         return False
@@ -213,15 +216,17 @@ production_git = _production_git
 merge_reproduces_head = _merge_reproduces_head
 
 
-def changed_files(run, base, last_reviewed, head, proven=()):
+def changed_files(run, base, last_reviewed, head, proven=(), x_base=None):
     """``(files, sources)``: the files whose section's own change differs between ``base...last_reviewed`` and
     ``base...head`` (a file is not changed for an ``index`` line or a hunk header's line numbers, unless the
     sections differ and no three-way merge of the file reproduces the head byte for byte), proven copies left
     out, sorted; ``sources`` is ``{file: {old paths}}`` for every renamed or copied section. None when git cannot
     produce either diff or a section's header cannot be read. ``run(argv) -> (returncode, stdout_text)`` is the git
-    runner (``production_git(repo_root)``)."""
+    runner (``production_git(repo_root)``). ``x_base``, when given, is the base the reviewed side is read against
+    (and the merge base's fork), in place of ``base``."""
     diff_args = list(_DIFF_ARGS)
-    code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
+    # axis: the reviewed side is read against the second base when one is given, so a layer whose layer below was rewritten is compared on its own change — see bite-proof record i2561_head_coverage_rewritten_below (E-xbase)
+    code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (x_base if x_base is not None else base, last_reviewed)])
     code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
     sources = {}
     reviewed = _sections_by_file(reviewed_text, sources) if code_a == 0 else None
@@ -234,7 +239,7 @@ def changed_files(run, base, last_reviewed, head, proven=()):
     files = sorted(f for f in set(reviewed) | set(current)
                    if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, ""))
                    or (reviewed.get(f, "") != current.get(f, "")
-                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
+                       and not _merge_reproduces_head(run, base, last_reviewed, head, f, fork_base=x_base)))
     # Axis: a proven copy is never a changed file, so it is neither read, counted nor matched against a risk area.
     files = [f for f in files if f not in proven_files]
     return files, sources
