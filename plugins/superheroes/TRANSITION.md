@@ -18,11 +18,11 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
-## Unreleased
+## 0.51.1
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.51.1. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed: in auto mode the timeout hook refuses a Bash call that names no `timeout`, with a reason naming `timeout: 600000`, so no owner approval prompt appears, and the model re-issues the call once; in every other mode the hook rewrites the call as before.** An owner who wants the hook off sets `BASH_DEFAULT_TIMEOUT_MS=600000` in the settings `env` (the host then defaults Bash calls to 600 s itself). See [Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off](#bash-timeout-hook-auto-mode-refuses-instead-of-rewriting-and-a-setting-switches-it-off).
 - **After switching.** **Nothing is owed by a caller that does not pass the new flag: `head_coverage.py check` takes a repeatable `--base-at-review SHA`, and the check's `why` gains the tokens `base-at-review` and `base-at-review-ignored`.** An advisor that straightens a stack now passes the flag once for each head the layer below had before a rewrite, on the coverage check and the carry check of every layer above the bottom (merge-train.md item 4(g) and item 6). See [Head coverage: a stack layer whose layer below was rewritten](#head-coverage-a-stack-layer-whose-layer-below-was-rewritten).
