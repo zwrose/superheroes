@@ -3893,15 +3893,15 @@ def test_apply_decisions_restated_unworsened_trade_is_a_no_op():
 
 
 def test_apply_decisions_different_disposition_from_terminal_state_stays_skipped():
-    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": "#7",
-                  "reason": None, "reraiseWhen": None}]
+    decisions = [{"id": "fixture:normal", "disposition": "accepted", "issue": "#7",
+                  "reason": "tolerated", "reraiseWhen": None}]
     before = _settled("declined", 1)
     records, applied, skipped = gsw._apply_decisions(
         [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
     assert records == [before]
     assert applied == []
     assert [(s["id"], s["from"], s["to"]) for s in skipped] == [
-        ("fixture:normal", "declined", "filed")]
+        ("fixture:normal", "declined", "accepted")]
     assert "declined is terminal" in skipped[0]["reason"]
 
 
@@ -4170,3 +4170,269 @@ def test_commit_ledger_redecision_flag_change_persists(tmp_path):
     assert rec["deferredByPolicy"] is True
     assert rec["metricAtDisposition"] == {"metric": 5}
     assert rec["adjudicatedIn"] == "s0"
+
+
+# --- issue 2535: a declined / triaged-out record advances to filed ------------
+
+
+@pytest.mark.parametrize("disposition", ["declined", "triaged-out"])
+def test_apply_decisions_recoverable_state_advances_to_filed_with_an_issue(disposition):
+    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": "#7",
+                  "reason": None, "reraiseWhen": None}]
+    before = _settled(disposition, 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert skipped == []
+    assert applied == [{"id": "fixture:normal", "from": disposition, "to": "filed"}]
+    (rec,) = records
+    assert rec["disposition"] == "filed"
+    assert rec["issue"] == "#7"
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["reason"] == "known trade"
+
+
+@pytest.mark.parametrize("disposition", ["declined", "triaged-out"])
+def test_apply_decisions_recoverable_state_to_filed_without_issue_is_skipped(disposition):
+    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": None,
+                  "reason": None, "reraiseWhen": None}]
+    before = _settled(disposition, 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert "advance refused" in skipped[0]["reason"]
+
+
+@pytest.mark.parametrize("from_state,target", [
+    ("declined", "accepted"), ("triaged-out", "declined"),
+    ("triaged-out", "accepted"), ("declined", "triaged-out"),
+])
+def test_apply_decisions_recoverable_state_to_another_target_is_skipped(from_state, target):
+    decisions = [{"id": "fixture:normal", "disposition": target, "issue": None,
+                  "reason": "settled", "reraiseWhen": None}]
+    before = _settled(from_state, 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert [(s["from"], s["to"]) for s in skipped] == [(from_state, target)]
+    assert "is terminal" in skipped[0]["reason"]
+    assert "advance to filed" in skipped[0]["reason"]
+
+
+def test_apply_decisions_accepted_keeps_the_original_terminal_text():
+    decisions = [{"id": "fixture:normal", "disposition": "filed", "issue": "#7",
+                  "reason": None, "reraiseWhen": None}]
+    before = _settled("accepted", 1)
+    records, applied, skipped = gsw._apply_decisions(
+        [before], decisions, [{"id": "fixture:normal", "metric": 2}], "s1")
+    assert records == [before]
+    assert applied == []
+    assert "accepted is terminal — a different disposition (filed)" in skipped[0]["reason"]
+    assert "except" not in skipped[0]["reason"]
+
+
+# --- issue 2535: commit_ledger recoveries -------------------------------------
+
+
+QUIET = "fixture:quiet"
+
+
+def _quiet_commit(repo, root, recoveries=None, lens=None):
+    """collect with a lens that surfaces nothing → finalize → commit_ledger(recoveries)."""
+    bundle = gsw.collect(repo, lenses=[lens or FixtureLens()], root=root)
+    assert bundle["surfaced"] == []
+    assert gsw.finalize(repo, bundle, [], root=root)["ok"] is True
+    return bundle, gsw.commit_ledger(repo, bundle, [], root=root, recoveries=recoveries)
+
+
+def _card_row(repo, root, lens="fixture"):
+    text = open(gs.ledger_path(repo, root), encoding="utf-8").read()
+    rows = [ln for ln in text.splitlines() if ln.startswith("| %s |" % lens)]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+@pytest.mark.parametrize("disposition", ["declined", "triaged-out"])
+def test_commit_ledger_recovery_advances_a_quiet_record_to_filed(tmp_path, disposition):
+    import guardian_ledger as gled
+
+    repo, root = _seeded_repo(tmp_path, records=[_settled(disposition, 1, rid=QUIET)])
+    before_card = gled.report_card(gs.read_ledger(repo, root)["records"])["fixture"]
+    assert (before_card["for"], before_card["against"]) == (0, 1)
+    _bundle, res = _quiet_commit(repo, root, [{"id": QUIET, "issue": "#7"}])
+    assert res["ok"] is True, res
+    assert res["recoveries"] == [
+        {"id": QUIET, "from": disposition, "to": "filed", "issue": "#7"}]
+    assert res["recoveriesSkipped"] == []
+    rec = _record(repo, root, QUIET)
+    assert rec["disposition"] == "filed"
+    assert rec["issue"] == "#7"
+    assert rec["adjudicatedIn"] == "s0"
+    assert rec["reason"] == "known trade"
+    card = gled.report_card(gs.read_ledger(repo, root)["records"])["fixture"]
+    assert (card["for"], card["against"], card["deferred"]) == (1, 0, 0)
+    assert card["actionability"] == 1.0
+    assert _card_row(repo, root).startswith("| fixture | 1 | 1 | 0 | 0 |")
+
+
+def test_commit_ledger_recovery_clears_deferred_by_policy_through_the_writer_merge(
+        tmp_path, monkeypatch):
+    import guardian_ledger as gled
+
+    monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "open")
+    repo, root = _seeded_repo(
+        tmp_path, records=[_settled("declined", 1, rid=QUIET, deferredByPolicy=True)])
+    before_card = gled.report_card(gs.read_ledger(repo, root)["records"])["fixture"]
+    assert (before_card["for"], before_card["against"], before_card["deferred"]) == (0, 0, 1)
+    _bundle, res = _quiet_commit(repo, root, [{"id": QUIET, "issue": "#7"}])
+    assert res["ok"] is True, res
+    assert [r["id"] for r in res["recoveries"]] == [QUIET]
+    rec = _record(repo, root, QUIET)
+    assert rec["disposition"] == "filed"
+    assert rec["deferredByPolicy"] is False
+    card = gled.report_card(gs.read_ledger(repo, root)["records"])["fixture"]
+    assert (card["for"], card["against"], card["deferred"]) == (1, 0, 0)
+    assert card["sweeps"] == 1
+    assert _card_row(repo, root).startswith("| fixture | 1 | 1 | 0 | 0 |")
+    # the next sweep's commit succeeds on the recovered record and leaves it as it is
+    _bundle2, res2 = _quiet_commit(repo, root)
+    assert res2["ok"] is True, res2
+    assert res2["recoveries"] == [] and res2["recoveriesSkipped"] == []
+    rec2 = _record(repo, root, QUIET)
+    assert rec2["disposition"] == "filed"
+    assert rec2["deferredByPolicy"] is False
+
+
+@pytest.mark.parametrize("recoveries,needle", [
+    ({"id": QUIET, "issue": "#7"}, "must be a list"),
+    ([QUIET], "recoveries[0]: must be an object"),
+    ([{"id": QUIET, "issue": "#7", "reason": "x"}], "unexpected key(s) reason"),
+    ([{"issue": "#7"}], "missing key id"),
+    ([{"id": QUIET}], "%s: missing key issue" % QUIET),
+    ([{"id": "", "issue": "#7"}], "id must be a non-empty string"),
+    ([{"id": "  ", "issue": "#7"}], "id must be a non-empty string"),
+    ([{"id": 5, "issue": "#7"}], "id must be a non-empty string"),
+    ([{"id": QUIET, "issue": ""}], "%s: issue must be a non-empty string" % QUIET),
+    ([{"id": QUIET, "issue": "   "}], "%s: issue must be a non-empty string" % QUIET),
+    ([{"id": QUIET, "issue": 7}], "%s: issue must be a non-empty string" % QUIET),
+    ([{"id": QUIET, "issue": None}], "%s: issue must be a non-empty string" % QUIET),
+    ([{"id": QUIET, "issue": "#7"}, {"id": QUIET, "issue": "#8"}], "duplicate id"),
+    ([{"id": "fixture:normal", "issue": "#7"}], "fixture:normal: also surfaced"),
+], ids=["not-a-list", "entry-not-object", "extra-key", "missing-id", "missing-issue",
+        "empty-id", "blank-id", "non-str-id", "empty-issue", "blank-issue",
+        "non-str-issue", "null-issue", "duplicate-id", "surfaced-overlap"])
+def test_commit_ledger_invalid_recoveries_refused_and_ledger_untouched(
+        tmp_path, recoveries, needle):
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1, rid=QUIET)])
+    disp = [_disposition("validated")]
+    bundle = gsw.collect(repo, lenses=[_drift_lens()], root=root)
+    assert [s["id"] for s in bundle["surfaced"]] == ["fixture:normal"]
+    assert gsw.finalize(repo, bundle, disp, root=root)["ok"] is True
+    path = gs.ledger_path(repo, root)
+    before = open(path, "rb").read()
+    res = gsw.commit_ledger(repo, bundle, disp, root=root, recoveries=recoveries)
+    assert res["ok"] is False
+    assert res["reason"] == "invalid-recoveries"
+    assert any(needle in e for e in res["errors"]), res["errors"]
+    assert open(path, "rb").read() == before
+
+
+def test_validate_recoveries_none_and_well_formed_are_valid():
+    assert gsw.validate_recoveries({"surfaced": []}, None) == (True, [])
+    assert gsw.validate_recoveries({"surfaced": []}, []) == (True, [])
+    ok, errors = gsw.validate_recoveries(
+        {"surfaced": [{"id": "fixture:normal"}]}, [{"id": QUIET, "issue": "#7"}])
+    assert (ok, errors) == (True, [])
+
+
+def test_commit_ledger_recovery_of_a_missing_record_is_skipped_and_creates_nothing(tmp_path):
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1, rid=QUIET)])
+    _bundle, res = _quiet_commit(repo, root, [{"id": "fixture:ghost", "issue": "#7"}])
+    assert res["ok"] is True, res
+    assert res["recoveries"] == []
+    assert res["recoveriesSkipped"] == [{
+        "id": "fixture:ghost", "from": None, "to": "filed",
+        "reason": "no ledger record with this id — record left untouched"}]
+    assert _record(repo, root, "fixture:ghost") is None
+    assert _record(repo, root, QUIET)["disposition"] == "declined"
+
+
+@pytest.mark.parametrize("state", [
+    "surfaced", "candidate", "filed", "accepted", "verified-fixed", "reopened"])
+def test_commit_ledger_recovery_of_a_non_recoverable_record_is_skipped(
+        tmp_path, monkeypatch, state):
+    monkeypatch.setattr(gsw, "_resolve_issue_state", lambda *a, **k: "open")
+    before = _settled(state, 1, rid=QUIET, issue="#3")
+    repo, root = _seeded_repo(tmp_path, records=[before])
+    _bundle, res = _quiet_commit(repo, root, [{"id": QUIET, "issue": "#7"}])
+    assert res["ok"] is True, res
+    assert res["recoveries"] == []
+    assert res["recoveriesSkipped"] == [{
+        "id": QUIET, "from": state, "to": "filed",
+        "reason": "%s cannot be recovered to filed — only declined or triaged-out; "
+                  "record left untouched" % state}]
+    rec = _record(repo, root, QUIET)
+    assert rec["disposition"] == state
+    assert rec["issue"] == "#3"
+
+
+def test_apply_recoveries_matches_the_exact_id_only():
+    drifted = _settled("declined", 1, rid="deadcode:x:a.py:10")
+    records, applied, skipped = gsw._apply_recoveries(
+        [drifted], [{"id": "deadcode:x:a.py:20", "issue": "#7"}], "s1")
+    assert records == [drifted]
+    assert applied == []
+    assert "no ledger record with this id" in skipped[0]["reason"]
+
+
+def test_commit_ledger_without_recoveries_writes_the_same_bytes_and_adds_two_empty_keys(
+        tmp_path):
+    def run(subdir):
+        repo, root = _seeded_repo(tmp_path / subdir, records=[_settled("declined", 1, rid=QUIET)])
+        return repo, root
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo_a, root_a = run("a")
+    repo_b, root_b = run("b")
+    bundle_a, res_a = _quiet_commit(repo_a, root_a)
+    bundle_b, res_b = _quiet_commit(repo_b, root_b, recoveries=[])
+    assert res_a["ok"] is True and res_b["ok"] is True
+    assert res_a["recoveries"] == [] and res_a["recoveriesSkipped"] == []
+    assert res_b["recoveries"] == [] and res_b["recoveriesSkipped"] == []
+    assert res_a["decisions"] == [] and res_a["decisionsSkipped"] == []
+
+    def norm(repo, root, bundle):
+        text = open(gs.ledger_path(repo, root), encoding="utf-8").read()
+        return re.sub(r"updated=\S+|created=\S+", "", text).replace(bundle["sweepId"], "SWEEP")
+
+    assert norm(repo_a, root_a, bundle_a) == norm(repo_b, root_b, bundle_b)
+    assert _record(repo_a, root_a, QUIET)["disposition"] == "declined"
+
+
+def test_cli_commit_ledger_threads_recoveries_file_through(tmp_path):
+    import io
+    from contextlib import redirect_stdout
+
+    repo, root = _seeded_repo(tmp_path, records=[_settled("declined", 1, rid=QUIET)])
+    bundle = gsw.collect(repo, lenses=[FixtureLens()], root=root)
+    assert gsw.finalize(repo, bundle, [], root=root)["ok"] is True
+    bundle_path = str(tmp_path / "bundle.json")
+    disp_path = str(tmp_path / "disp.json")
+    rec_path = str(tmp_path / "recoveries.json")
+    open(bundle_path, "w", encoding="utf-8").write(json.dumps(bundle))
+    open(disp_path, "w", encoding="utf-8").write(json.dumps([]))
+    open(rec_path, "w", encoding="utf-8").write(json.dumps([{"id": QUIET, "issue": "#7"}]))
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = gsw.main(["commit-ledger", "--cwd", repo, "--root", root,
+                       "--bundle", bundle_path, "--dispositions", disp_path,
+                       "--recoveries", rec_path])
+    assert rc == 0
+    out = json.loads(buf.getvalue())
+    assert out["ok"] is True, out
+    assert out["recoveries"] == [
+        {"id": QUIET, "from": "declined", "to": "filed", "issue": "#7"}]
+    assert _record(repo, root, QUIET)["disposition"] == "filed"

@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 import core_md as cm
 import file_lock
 import guardian_ledger as gled
@@ -1802,6 +1804,144 @@ def test_advance_refuses_a_true_flag_on_a_non_deferrable_target():
     assert result["ok"] is False
     assert "deferredByPolicy" in result["reason"]
     assert new == []
+
+
+# --- issue 2535: declined / triaged-out → filed (the one recovery edge) --------
+
+
+RID = "hotspot:t:a.py"
+
+
+def test_recoverable_states_are_declined_and_triaged_out():
+    assert gled.RECOVERABLE_STATES == ("declined", "triaged-out")
+    assert gled.ALLOWED_TRANSITIONS["declined"] == ("filed",)
+    assert gled.ALLOWED_TRANSITIONS["triaged-out"] == ("filed",)
+    assert gled.ALLOWED_TRANSITIONS["accepted"] == ()
+    assert gled.ALLOWED_TRANSITIONS["verified-fixed"] == ()
+
+
+@pytest.mark.parametrize("from_state", ["declined", "triaged-out"])
+def test_can_advance_allows_a_recoverable_state_to_filed(from_state):
+    assert gled.can_advance(from_state, "filed") == (True, None)
+
+
+@pytest.mark.parametrize("from_state,to_state", [
+    (frm, to)
+    for frm in ("declined", "triaged-out")
+    for to in ("accepted", "declined", "triaged-out", "verified-fixed", "reopened",
+               "surfaced", "candidate")
+] + [("accepted", "filed"), ("verified-fixed", "filed")])
+def test_can_advance_refuses_every_other_move_off_a_settled_state(from_state, to_state):
+    ok, reason = gled.can_advance(from_state, to_state)
+    assert ok is False
+    assert reason
+    if from_state in gled.RECOVERABLE_STATES:
+        assert reason == "%s → %s is not an allowed advance (allowed: filed)" % (
+            from_state, to_state)
+    else:
+        assert "is a settled disposition — it never regresses" in reason
+
+
+@pytest.mark.parametrize("from_state", ["declined", "triaged-out"])
+def test_advance_recovers_a_settled_record_to_filed_with_an_issue(from_state):
+    records = [_rec(RID, from_state, date="2026-07-01", reason="not worth it",
+                    reraiseWhen="metric grows", metricAtDisposition={"metric": 3},
+                    adjudicatedIn="s1")]
+    snapshot = json.dumps(records, sort_keys=True)
+    new, result = gled.advance(records, RID, "filed", issue="#7", sweepId="s9",
+                               date="2026-07-21")
+    assert result == {"ok": True, "id": RID, "from": from_state, "to": "filed",
+                      "created": False}
+    (rec,) = new
+    assert rec["disposition"] == "filed"
+    assert rec["issue"] == "#7"
+    assert rec["adjudicatedIn"] == "s1"
+    assert rec["reason"] == "not worth it"
+    assert rec["reraiseWhen"] == "metric grows"
+    assert rec["metricAtDisposition"] == {"metric": 3}
+    assert "deferredByPolicy" not in rec
+    assert json.dumps(records, sort_keys=True) == snapshot
+    after, result2 = gled.advance(new, RID, "verified-fixed", sweepId="s10")
+    assert result2["ok"] is True, result2
+    assert after[0]["disposition"] == "verified-fixed"
+
+
+@pytest.mark.parametrize("fields", [
+    {}, {"issue": None}, {"issue": ""}, {"issue": "   "}, {"issue": "\t\n"},
+], ids=["absent", "none", "empty", "blank", "whitespace"])
+@pytest.mark.parametrize("from_state", ["declined", "triaged-out"])
+def test_advance_refuses_a_recovery_without_an_issue_and_keeps_the_records(
+        from_state, fields):
+    records = [_rec(RID, from_state, date="2026-07-01", reason="not worth it")]
+    snapshot = json.dumps(records, sort_keys=True)
+    new, result = gled.advance(records, RID, "filed", sweepId="s9", **fields)
+    assert result["ok"] is False
+    assert "needs the issue it was filed under" in result["reason"]
+    assert new == records
+    assert json.dumps(records, sort_keys=True) == snapshot
+
+
+def test_advance_recovery_keeps_an_issue_the_record_already_carries():
+    records = [_rec(RID, "declined", reason="r", issue="#4", adjudicatedIn="s1")]
+    new, result = gled.advance(records, RID, "filed", sweepId="s9")
+    assert result["ok"] is True, result
+    assert new[0]["issue"] == "#4"
+
+
+@pytest.mark.parametrize("from_state", ["declined", "triaged-out"])
+def test_advance_recovery_writes_deferred_by_policy_false_not_a_removed_key(from_state):
+    records = [_rec(RID, from_state, reason="by policy", adjudicatedIn="s1",
+                    deferredByPolicy=True)]
+    new, result = gled.advance(records, RID, "filed", issue="#7", sweepId="s9")
+    assert result["ok"] is True, result
+    assert new[0]["deferredByPolicy"] is False
+    # the writer's merge is `dict(old).update(new)`: only an explicit False beats the old True
+    merged = dict(records[0])
+    merged.update(new[0])
+    assert merged["deferredByPolicy"] is False
+    after, result2 = gled.advance(new, RID, "verified-fixed", sweepId="s10")
+    assert result2["ok"] is True, result2
+
+
+def test_advance_recovery_leaves_a_flagless_record_flagless():
+    records = [_rec(RID, "triaged-out", adjudicatedIn="s1")]
+    new, _ = gled.advance(records, RID, "filed", issue="#7")
+    assert "deferredByPolicy" not in new[0]
+
+
+@pytest.mark.parametrize("from_state", ["declined", "triaged-out"])
+def test_report_card_scores_a_recovered_record_for_its_lens(from_state):
+    records = [_rec(RID, from_state, reason="r", adjudicatedIn="s1")]
+    before = gled.report_card(records)["hotspot"]
+    assert (before["for"], before["against"]) == (0, 1)
+    assert before["actionability"] == 0.0
+    new, result = gled.advance(records, RID, "filed", issue="#7", sweepId="s2")
+    assert result["ok"] is True, result
+    after = gled.report_card(new)["hotspot"]
+    assert (after["for"], after["against"], after["adjudicated"]) == (1, 0, 1)
+    assert after["actionability"] == 1.0
+    assert after["sweeps"] == 1
+
+
+def test_report_card_recovered_deferred_record_leaves_deferred_and_counts_its_stamp():
+    real = _adjudicated("hotspot", 10, "triaged-out", ["s1", "s2"])
+    deferred = _rec("hotspot:t:late.py", "declined", reason="by policy",
+                    adjudicatedIn="s3", deferredByPolicy=True)
+    before = gled.report_card(real + [deferred])["hotspot"]
+    assert (before["for"], before["against"], before["deferred"]) == (0, 10, 1)
+    assert before["sweeps"] == 2
+    new, result = gled.advance(real + [deferred], "hotspot:t:late.py", "filed",
+                               issue="#7", sweepId="s9")
+    assert result["ok"] is True, result
+    after = gled.report_card(new)["hotspot"]
+    assert (after["for"], after["against"], after["deferred"]) == (1, 10, 0)
+    assert after["adjudicated"] == 11
+    assert after["sweeps"] == 3
+
+
+def test_preamble_names_the_recovery_edge():
+    assert "a `declined` or `triaged-out` finding advances to `filed` when an issue is " \
+           "filed for it" in gled._PREAMBLE
 
 
 def test_rendered_report_card_region_shows_the_deferred_by_policy_column():
