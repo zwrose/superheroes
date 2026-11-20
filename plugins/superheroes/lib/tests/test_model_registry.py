@@ -837,16 +837,22 @@ def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state)
         for model in MR.codex_models():
             ok, reason = MR.codex_pin_verdict(role, model)
             guard_accepts = DA.validate(role, "codex", model, None)["ok"]
-            if ok is False and reason.startswith("pin-role-not-eligible:"):
+            # Only the legacy gpt-6-astra is carved out: it sits on other roles' ladder slices, so its
+            # guard accepts where its pin verdict refuses. gpt-6.2-astra is filtered from those
+            # allowlists, so its writer and guard must agree like every other model.
+            if model == "gpt-6-astra" and ok is False and reason.startswith("pin-role-not-eligible:"):
                 carve_out_count += 1
             else:
-                assert ok == guard_accepts
+                assert ok == guard_accepts, (role, model, reason)
             if role in SM.panel_pin_tiers():
                 _m, _e, info = SM._cell(role, "codex", {role: model})
                 assert info["honored"] == ok
-    # gpt-6.2-astra (#2573) is pin_roles-limited in both states; gpt-6-astra only once registered
+    # The guard itself refuses gpt-6.2-astra off reviewer-deep, in both registry states.
+    for role in ("reviewer", "implementer", "pilot"):
+        assert DA.validate(role, "codex", "gpt-6.2-astra", None)["ok"] is False, role
+    assert DA.validate("reviewer-deep", "codex", "gpt-6.2-astra", None)["ok"] is True
     if registry_state == "planted-probe-pending":
-        assert carve_out_count == len(MR.codex_pin_roles()) - 1
+        assert carve_out_count == 0
         ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
         assert ok is False
         assert reason.startswith("pin-probe-pending:")
@@ -854,7 +860,7 @@ def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state)
         assert (model, effort) == ("gpt-6.2-sol", "xhigh")
         assert info["honored"] is False
     else:
-        assert carve_out_count == 2 * (len(MR.codex_pin_roles()) - 1)
+        assert carve_out_count == len(MR.codex_pin_roles()) - 1
         ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
         assert ok is True
         assert reason is None
