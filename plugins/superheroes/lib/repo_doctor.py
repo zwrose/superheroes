@@ -34,7 +34,7 @@ Material drift is ANY of:
   - the profile's default-branch no longer resolves (git rev-parse --verify).
 
 The result also carries "staleSeatPins": the sorted core.md `enginePreferences.seatPins` keys
-that name a seat no roster may name (not a known seat, not the legacy `test-reviewer` alias);
+that name a seat no roster may name (not a known seat, not a legacy alias key);
 [] when there are none, core.md is absent or unreadable, or `seatPins` is not an object. A stale
 seat pin is a calibration note, never drift: it is never added to "drift", but it joins the
 signal_hash (so an acknowledgement covers it) and the message. Report only: nothing is
