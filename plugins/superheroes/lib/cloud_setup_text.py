@@ -54,8 +54,8 @@ SETUP_INVENTORY_STAMP_KEY = "setup-plugin-inventory"
 # hook modules).
 STAMP_DEFINITION = 2
 # The plugin-relative files the plugin's own SessionStart hook reads, measured (by an audit hook over
-# the real hook's runs) rather than derived from imports; a static import closure over-counts (119
-# modules at this base). `test_start_hook_read_set.py` keeps the list true in both directions.
+# the real hook's runs) rather than derived from imports; a static import closure over-counts by
+# several times. `test_start_hook_read_set.py` keeps the list true in both directions.
 START_HOOK_READS = (
     "hooks/session_start.py",
     "lib/break_it_key.py",
