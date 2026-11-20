@@ -26,6 +26,7 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 
 - **After switching.** **Nothing is owed: in auto mode the timeout hook refuses a Bash call that names no `timeout`, with a reason naming `timeout: 600000`, so no owner approval prompt appears, and the model re-issues the call once; in every other mode the hook rewrites the call as before.** An owner who wants the hook off sets `BASH_DEFAULT_TIMEOUT_MS=600000` in the settings `env` (the host then defaults Bash calls to 600 s itself). See [Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off](#bash-timeout-hook-auto-mode-refuses-instead-of-rewriting-and-a-setting-switches-it-off).
 - **After switching.** **Nothing is owed by a caller that does not pass the new flag: `head_coverage.py check` takes a repeatable `--base-at-review SHA`, and the check's `why` gains the tokens `base-at-review` and `base-at-review-ignored`.** An advisor that straightens a stack now passes the flag once for each head the layer below had before a rewrite, on the coverage check and the carry check of every layer above the bottom (merge-train.md item 4(g) and item 6). See [Head coverage: a stack layer whose layer below was rewritten](#head-coverage-a-stack-layer-whose-layer-below-was-rewritten).
+- **After switching.** **Nothing is owed: a project that keeps both an in-repo and a global core.md now reviews against the one its storage mode selects, so review setup's `$CORE` and the calibration-read stamp name the same file the verify read already used.** A project with one core.md reads exactly as before. See [Review dispatch core: the core.md the storage mode selects](#review-dispatch-core-the-coremd-the-storage-mode-selects).
 
 ### Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off
 
@@ -41,6 +42,13 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **The rule.** A well-formed value never makes the answer worse than the check without it. A second base is tried only when git shows its tree equals the base's tree and finds a merge base of it and the certified commit; a full-sha value git cannot read, whose tree differs, or that shares no merge base is ignored, and the answer is the check's own without it, with a `base-at-review-ignored` why line (the first 8 characters of the value and the reason: `unreadable`, `other-tree` or `no-merge-base`). A value that is not a full sha reads `needs-review` with `input-invalid`. With no value given the check reads exactly as before.
 - **What an advisor does differently.** A layer whose layer below was straightened, rebased or rebuilt read `needs-review` for every file both layers edit. The advisor now passes `--base-at-review` for each earlier head of the layer below, so a rewrite that kept the tree reads `proven` and the sheet is republished carried. A head that no longer fits is ignored, so passing the layer below's earlier heads never costs anything.
 - Replacement. None: the flag is additive.
+
+### Review dispatch core: the core.md the storage mode selects
+
+- **The change.** `calibration_resolve.py resolve` keeps every key. Its `dispatch_core` value now names the core.md the storage mode selects whenever both the in-repo and the global core.md are regular files, whichever calibration branch won; before, an in-repo core.md beside an in-repo review-crew layer, or a leftover in-repo legacy profile, won even on a project in global storage. In every other case the value is unchanged, and a failure to read the mode leaves it unchanged.
+- **Who reads it.** Review setup's `$CORE`, the round driver's unpinned calibration paths, and `calibration_read.stamp`, which records the stamped core's path and hash, now name the mode-selected core in that case. The session pin and the verify read already took it, so the files a review seat is shown and the settings the review reads now agree.
+- **What did not change.** `core_path`, `layer_path`, `legacy_path`, `dispatch_layer`, `location` and `layout` are unchanged, so a stale in-repo review-crew layer still wins the layer. A dangling symlink at either core.md path does not count as a core.md. Nothing is written: the mode is read without recording it.
+- Replacement. None: the key and its shape are unchanged.
 
 ## 0.51.0
 
