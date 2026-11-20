@@ -115,7 +115,7 @@ def fails(kind=SCOPE, url=RU, words=SW, body=None, doc="build", severity="Import
 
 RU9 = "https://github.com/o/r/issues/9#issuecomment-777"
 STAYS = [
-    pytest.param(fails(url="https://github.com/o/r/pull/7#issuecomment-777"), L1, id="not-a-comment-permalink"),
+    pytest.param(fails(url="https://github.com/o/r/pull/7"), L1, id="not-a-comment-permalink"),
     pytest.param(fails(url="https://github.com/x/y/issues/7#issuecomment-777"), L2, id="another-repository"),
     pytest.param(fails(doc=RuntimeError("down")), L3, id="the-comment-cannot-be-read"),
     pytest.param(fails(doc=doc_of(receipt("- " + SW, scope_line()), comment=778)), L3, id="the-comment-read-is-another-comment"),
@@ -187,13 +187,51 @@ def test_demotion_a_ruling_whose_bound_exceeds_the_rounds_becomes_a_card():
     assert rec["decisionRechecks"][0]["why"] == "the cited decision is not on record (the review ran 3 rounds, fewer than the bound's 4)"
 
 
+PU = "https://github.com/o/r/pull/7#issuecomment-777"
+
+
+@pytest.mark.parametrize("kind, words, line", [(SCOPE, SW, scope_line()), (BOUND, BW, bound_line(2))])
+def test_a_receipt_linked_by_its_pull_request_permalink_resolves(kind, words, line):
+    # Axis: a vet receipt's own link (/pull/<n>#issuecomment-<id>) is read and counts like its /issues/ form.
+    calls = []
+    rec = build([finding(cite(kind, url=PU, words=words))], doc=doc_of(receipt("- " + words, line)), calls=calls)
+    assert calls == [("o/r", 777)]
+    assert the_finding(rec)["outcome"] == "ruling" and rec["leftForOwner"] == []
+
+
+def test_an_owner_ruling_never_takes_a_pull_request_permalink():
+    # Axis: the /pull/ form widens only the scope ruling and the advisor's bound; an owner ruling's link keeps its form.
+    by = {"kind": fo.OWNER_RULING, "ref": {"url": PU, "words": SW}}
+    assert fo.on_record(by, {"repo": "o/r", "ownerRulings": {PU: doc_of(chat(SW))}}) == (False, L1)
+    assert fo.on_record(cite(SCOPE, url=PU), {"repo": "o/r", "reviewPr": 7, "ownerRulings": {PU: doc_of(chat(SW))}})[0]
+
+
+def _kept_repeat(earlier, **over):
+    repeat = finding(id="f-2", title="Kept repeat", line=20, **over)
+    repeat["repeatOf"] = {"findingKey": rr._key(earlier), "id": earlier["id"], "fixHolds": None,
+                          "kept": {"outcome": "left-for-owner", "verdict": "confirmed"}}
+    return repeat
+
+
+def test_a_repeat_follows_a_receipt_scope_ruling_only_when_a_line_names_its_own_key():
+    # Axis: a kept repeat is checked with its own key, so it follows a receipt scope ruling only when a line names it too.
+    earlier = finding(cite(SCOPE))
+    repeat = _kept_repeat(earlier)
+    both = build([earlier, _kept_repeat(earlier)],
+                 doc=doc_of(receipt("- " + SW, scope_line(), "- " + SW, scope_line(rr._key(repeat)))))
+    assert {f["id"]: f["outcome"] for f in both["findings"]} == {"f-1": "ruling", "f-2": "ruling"}
+    only = build([earlier, _kept_repeat(earlier)], doc=doc_of(receipt("- " + SW, scope_line())))
+    assert {f["id"]: f["outcome"] for f in only["findings"]} == {"f-1": "ruling", "f-2": "left-for-owner"}
+    assert "f-2" in only["leftForOwner"]
+
+
 def test_fetch_reads_each_distinct_cited_link_once_for_the_new_kinds_and_none_for_a_non_permalink():
     # Axis: the writer reads the cited comment of a scope ruling and an advisor's bound, once per link, a Critical's included.
     z = dict(X, id="f-3", title="Third", line=30)
     w = dict(X, id="f-4", title="Fourth", line=40)
     v = dict(X, id="f-5", title="Fifth", line=50)
     items = [finding(cite(SCOPE)), dict(Y, decidedBy=cite(BOUND, words=BW)), dict(z, decidedBy=cite(SCOPE, url=RU2)),
-             dict(w, decidedBy=cite(SCOPE, url="https://github.com/o/r/pull/7#issuecomment-1")),
+             dict(w, decidedBy=cite(SCOPE, url="https://github.com/o/r/issues/7")),
              dict(v, severity="Critical", decidedBy=cite(SCOPE, url=RU3))]
     calls = []
     rec = build(items, doc=doc_of(receipt("- " + SW, scope_line())), calls=calls)

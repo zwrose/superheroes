@@ -1916,6 +1916,13 @@ def _apply_owner_rulings(findings, raw, entries):
     return out
 
 
+def _finding_sources(base, f):
+    """The decision sources for checking a citation on ``f``: ``base`` (never changed) plus ``f``'s own stored key and
+    severity, which a scope ruling's receipt line and the Critical refusal read. Every recipient of a citation, a repeat
+    or a merged member included, is checked with its own."""
+    return dict(base if isinstance(base, dict) else {}, findingKey=_key(f), findingSeverity=f.get("severity"))
+
+
 # How an unmet linked decision is named in the reason of the finding that cites it.
 _LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
                  finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
@@ -1935,8 +1942,7 @@ def _recheck_decisions(findings, sources):
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
-            ok, text = finding_outcomes.on_record(
-                by, dict(sources(), findingKey=_key(f), findingSeverity=f.get("severity")))
+            ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
             if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
@@ -2121,7 +2127,8 @@ def _follow_repeats(findings, checks, sources=None):
             old = f.get("reason")
             if g.get("outcome") != _FIXED:
                 # axis: the citation must be on record now, else nothing moves and nothing is marked handled — see bite-proof record i2479_repeat_follows_ruling
-                ok, text = finding_outcomes.on_record(g["decidedBy"], sources())
+                # axis: the repeat is checked with its own key and severity, so a Critical repeat never inherits a scope ruling or the advisor's bound — see bite-proof record i2532_scope_bound (E-repeat)
+                ok, text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), f))
                 if not ok:
                     continue
                 handled.add(i)
@@ -2133,9 +2140,13 @@ def _follow_repeats(findings, checks, sources=None):
                     REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {old}" if isinstance(old, str) and old else reason)
                 moved = True
                 for j in members_to_follow(i, kept):
-                    handled.add(j)
                     h, was = out[j], out[j].get("reason")
-                    note = f"{text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
+                    # axis: each merged member is checked with its own key and severity, and one whose check fails keeps its outcome — see bite-proof record i2532_scope_bound (E-repeat-member)
+                    held, held_text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), h))
+                    if not held:
+                        continue
+                    handled.add(j)
+                    note = f"{held_text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
                     # axis: every member moved to ruling carries its own copy of the decidedBy, never an uncited ruling — see bite-proof record i2479_repeat_follows_ruling
                     out[j] = by_key[_key(h)] = dict(
                         h, outcome=_RULING, decidedBy=copy.deepcopy(g["decidedBy"]),
@@ -2269,7 +2280,7 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
             if isinstance(by, dict) and by.get("kind") in finding_outcomes.LINKED_KINDS and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
                 ref = by.get("ref")
             url = ref.get("url") if isinstance(ref, dict) else None
-            parts = finding_outcomes.comment_permalink(url, a["repo"])[0] if isinstance(url, str) else None
+            parts = finding_outcomes.comment_permalink(url, a["repo"], by.get("kind"))[0] if isinstance(url, str) else None
             if parts is not None and url not in docs:
                 try:
                     docs[url] = rd["owner_ruling_comment"](a["repo"], parts[3])
