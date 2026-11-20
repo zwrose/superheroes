@@ -1819,7 +1819,7 @@ def test_the_inventory_entry_is_the_parts_in_path_order(tmp_path, monkeypatch):
 
 def test_the_start_hook_read_set_is_sorted_unique_and_names_real_files():
     reads = CS.START_HOOK_READS
-    assert list(reads) == sorted(reads) and len(set(reads)) == len(reads) == 18
+    assert list(reads) == sorted(reads) and len(set(reads)) == len(reads)
     for rel in reads:
         assert os.path.isfile(os.path.join(REAL_PLUGIN_ROOT, *rel.split("/"))), rel
 

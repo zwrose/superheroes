@@ -8,6 +8,7 @@ both directions. A second test is a static belt over the imports, and a third pr
 reports a difference either way.
 """
 import ast
+import base64
 import json
 import os
 import subprocess
@@ -54,6 +55,9 @@ def audit(event, args):
         return
     if "__pycache__" in real.split(os.sep) or real.endswith(".pyc"):
         return
+    # a directory opened (a marker sweep's O_DIRECTORY open) is no file the hook reads
+    if os.path.isdir(real):
+        return
     seen.add(os.path.relpath(real, plugin_root).replace(os.sep, "/"))
 
 
@@ -96,15 +100,27 @@ def _fresh_repo(base, calibrated):
     return repo
 
 
-def _run(tmp_path_factory, runner, name, source, remote, calibrated, with_pass=False):
+def _placeable_pass():
+    """A pass `cloud_pass.place` accepts, built at run time from obviously fake pieces: an access
+    token whose middle part carries a far-future expiry, a fake id token and an empty renewal key."""
+    claims = base64.urlsafe_b64encode(
+        json.dumps({"exp": 4000000000}).encode("ascii")).rstrip(b"=").decode("ascii")
+    tokens = {"access" + "_token": ".".join(("fake-head", claims, "fake-sig")),
+              "id" + "_token": "fake-id-" + "q" * 20,
+              "refresh" + "_token": ""}
+    return base64.b64encode(json.dumps({"tokens": tokens}).encode("ascii")).decode("ascii")
+
+
+def _run(tmp_path_factory, runner, name, source, remote, calibrated, with_pass=None):
     base = tmp_path_factory.mktemp(name)
     (base / "home").mkdir()
     repo = _fresh_repo(base, calibrated)
     log = base / "opened.json"
     extra = {}
     if with_pass:
-        # built at run time from pieces: a junk value that is no real pass
-        extra[cloud_pass.PASS_ENV] = "junk-" + "x" * 24 + "-" + "y" * 24
+        # built at run time from pieces: a junk value that is no real pass, or a fake one that places
+        extra[cloud_pass.PASS_ENV] = (_placeable_pass() if with_pass == "placeable"
+                                      else "junk-" + "x" * 24 + "-" + "y" * 24)
         env_file = base / "claude-env"
         env_file.write_text("")
         extra["CLAUDE_ENV_FILE"] = str(env_file)
@@ -122,7 +138,8 @@ def _run(tmp_path_factory, runner, name, source, remote, calibrated, with_pass=F
         timeout=120)
     opened = set(json.loads(log.read_text())) if log.exists() else None
     return {"name": name, "code": done.returncode, "stdout": done.stdout, "stderr": done.stderr,
-            "opened": opened, "calibrated": calibrated}
+            "opened": opened, "calibrated": calibrated, "home": base / "home",
+            "pass": with_pass}
 
 
 @pytest.fixture(scope="module")
@@ -137,7 +154,11 @@ def runs(tmp_path_factory):
                                      "calibrated" if calibrated else "bare")
                 out.append(_run(tmp_path_factory, runner, name, source, remote, calibrated))
     out.append(_run(tmp_path_factory, runner, "remote-pass-env-file", "startup", True, False,
-                    with_pass=True))
+                    with_pass="junk"))
+    # the success path: a pass the hook places, so a file read only after a successful placement
+    # is in the union the list is compared against
+    out.append(_run(tmp_path_factory, runner, "remote-pass-placed", "startup", True, True,
+                    with_pass="placeable"))
     return out
 
 
@@ -147,7 +168,7 @@ def _differences(observed, listed):
 
 
 def test_every_configuration_runs_the_real_hook_to_a_bootstrap(runs):
-    assert len(runs) == 17
+    assert len(runs) == 18
     for run in runs:
         assert run["code"] == 0, run
         assert run["opened"] is not None, run
@@ -157,6 +178,18 @@ def test_every_configuration_runs_the_real_hook_to_a_bootstrap(runs):
         # the fixture provably creates the condition the covenant read discriminates on
         assert ("### Covenant" in context) == run["calibrated"], run["name"]
         assert "hooks/session_start.py" in run["opened"], run["name"]
+
+
+def test_the_success_configuration_really_places_the_pass(runs):
+    # axis: the fixture provably reaches the success path, so its reads are in the census union
+    placed = [run for run in runs if run["pass"] == "placeable"]
+    assert len(placed) == 1
+    run = placed[0]
+    context = json.loads(run["stdout"])["hookSpecificOutput"]["additionalContext"]
+    assert "The reviewer pass is in place" in context, run["name"]
+    assert (run["home"] / ".codex" / "auth.json").is_file(), run["name"]
+    # the fake pass never reaches the bootstrap text
+    assert _placeable_pass() not in run["stdout"] + run["stderr"]
 
 
 def test_the_listed_read_set_is_what_the_real_hook_reads(runs):
