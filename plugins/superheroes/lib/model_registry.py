@@ -749,6 +749,9 @@ def _append_codex_pin_only(role: str, vendor: str, cell: tuple[str, str | None],
     _model, effort = cell
     for pin_model in pin_only_models("codex"):
         rec = _MODELS.get("codex", {}).get(pin_model, {})
+        # A row awaiting its registration probe is held back here exactly as `ladder()` holds back a rung.
+        if rec.get("registration") == "probe-pending":
+            continue
         pin_roles = rec.get("pin_roles")
         if pin_roles and role not in pin_roles:
             continue

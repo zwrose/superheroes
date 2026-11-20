@@ -11,11 +11,12 @@ if _HERE not in sys.path:
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import pytest  # noqa: E402
+
 import conformance_probe  # noqa: E402
 
 from test_model_registry import MR  # noqa: E402
 
-_MODEL = "gpt-6.2-astra"
 _ROLE = "reviewer-deep"
 
 
@@ -23,7 +24,9 @@ def _allowlist_models():
     return [model for model, _effort in MR.allowlist(_ROLE, "codex")]
 
 
-def test_newly_registered_model_is_held_back_until_its_admission_mark_is_removed(monkeypatch):
+# bite-axis: the admission hold covers both ways a model reaches an allowlist — a ladder rung (gpt-6.2-astra) and the pin-only append (gpt-6-astra)
+@pytest.mark.parametrize("_MODEL", ["gpt-6.2-astra", "gpt-6-astra"])
+def test_newly_registered_model_is_held_back_until_its_admission_mark_is_removed(monkeypatch, _MODEL):
     models = copy.deepcopy(MR._MODELS)
     row = dict(models["codex"][_MODEL])
     row["registration"] = "probe-pending"

@@ -727,12 +727,27 @@ def test_matrix_cells_reviewer_roles_unchanged_at_base():
     assert compared == 9
 
 
-def _plant_probe_pending_astra(monkeypatch):
+def _plant_probe_pending_astra(monkeypatch, model="gpt-6.2-astra"):
     models = copy.deepcopy(MR._MODELS)
-    astra = dict(models["codex"]["gpt-6.2-astra"])
+    astra = dict(models["codex"][model])
     astra["registration"] = "probe-pending"
-    models["codex"]["gpt-6.2-astra"] = astra
+    models["codex"][model] = astra
     monkeypatch.setattr(MR, "_MODELS", models)
+
+
+# bite-axis: a pin-only row planted probe-pending (gpt-6-astra) is held back from the pin-only append, as a pending ladder rung is held back from the ladder
+def test_planted_probe_pending_pin_only_astra_hidden_from_allowlist(monkeypatch):
+    _plant_probe_pending_astra(monkeypatch, "gpt-6-astra")
+    assert MR.allowlist("reviewer-deep", "codex") == (
+        MR.matrix_config("reviewer-deep", "codex"),
+        ("gpt-6.2-astra", "high"),
+        ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-sol", "xhigh"),
+        ("gpt-6.1-sol", "xhigh"),
+    )
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+    assert ok is False
+    assert reason.startswith("pin-probe-pending:")
 
 
 def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
@@ -825,14 +840,17 @@ def test_codex_pin_verdict_refuses_pins_off_the_role_allowlist():
     assert reason.startswith("pin-not-on-allowlist:")
 
 
-@pytest.mark.parametrize("registry_state", ["registered-astra", "planted-probe-pending"])
+@pytest.mark.parametrize(
+    "registry_state", ["registered-astra", "planted-probe-pending", "planted-probe-pending-pin-only"])
 def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state):
-    # bite-axis: one judge — writer, composer and guard agree on every codex role pin in both registry states
-    if registry_state == "planted-probe-pending":
+    # bite-axis: one judge — writer, composer and guard agree on every codex role pin in every registry state, a pending ladder rung and a pending pin-only row included
+    planted = {"planted-probe-pending": "gpt-6.2-astra",
+               "planted-probe-pending-pin-only": "gpt-6-astra"}.get(registry_state)
+    if planted is not None:
         models = copy.deepcopy(MR._MODELS)
-        astra = dict(models["codex"]["gpt-6.2-astra"])
+        astra = dict(models["codex"][planted])
         astra["registration"] = "probe-pending"
-        models["codex"]["gpt-6.2-astra"] = astra
+        models["codex"][planted] = astra
         monkeypatch.setattr(MR, "_MODELS", models)
         monkeypatch.setattr(SM.model_registry, "_MODELS", models)
         monkeypatch.setattr(DA.model_registry, "_MODELS", models)
@@ -852,15 +870,22 @@ def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state)
             if role in SM.panel_pin_tiers():
                 _m, _e, info = SM._cell(role, "codex", {role: model})
                 assert info["honored"] == ok
-    # The guard itself refuses gpt-6-astra off reviewer-deep, in both registry states.
+    # The guard itself refuses gpt-6-astra off reviewer-deep in every state, and on reviewer-deep
+    # too while gpt-6-astra itself is pending.
     for role in ("reviewer", "implementer", "pilot"):
         assert DA.validate(role, "codex", "gpt-6-astra", None)["ok"] is False, role
-    assert DA.validate("reviewer-deep", "codex", "gpt-6-astra", None)["ok"] is True
+    assert DA.validate("reviewer-deep", "codex", "gpt-6-astra", None)["ok"] is (
+        registry_state != "planted-probe-pending-pin-only")
     # Carve-out arithmetic. Registered state: gpt-6.2-astra's pin_roles is (reviewer-deep,), so
     # its verdict is pin-role-not-eligible on every codex pin role but reviewer-deep:
     # len(codex_pin_roles()) - 1 = 4 - 1 = 3 (reviewer, implementer, pilot). Planted state:
     # probe-pending is judged before pin_roles, so every verdict is pin-probe-pending and
-    # nothing is carved out: 0.
+    # nothing is carved out: 0. Pin-only planted state: gpt-6.2-astra is registered, so 3 as in
+    # the registered state, and the pending gpt-6-astra is refused pin-probe-pending everywhere.
+    if registry_state == "planted-probe-pending-pin-only":
+        ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+        assert ok is False
+        assert reason.startswith("pin-probe-pending:")
     if registry_state == "planted-probe-pending":
         assert carve_out_count == 0
         ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6.2-astra")
