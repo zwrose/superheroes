@@ -37,6 +37,7 @@ _MODELS: dict[str, dict[str, dict]] = {
             "override_only": False,
             "min_cli": "0.159.0",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "pin_only": True,
         },
         "gpt-6-astra": {
             "family": "openai",
@@ -44,6 +45,22 @@ _MODELS: dict[str, dict[str, dict]] = {
             "override_only": False,
             "efforts": ("high",),
             "pin_roles": ("reviewer-deep",),
+        },
+        "gpt-6.2-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6.2-sol",
+            "override_only": False,
+            "min_cli": "0.166.0",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
+        },
+        "gpt-6.2-astra": {
+            "family": "openai",
+            "dispatch": "gpt-6.2-astra",
+            "override_only": False,
+            "min_cli": "0.166.0",
+            "efforts": ("high",),
+            "pin_roles": ("reviewer-deep",),
+            "pin_only": True,
         },
     },
     # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
@@ -71,7 +88,7 @@ _MODELS: dict[str, dict[str, dict]] = {
 
 # Retired codex models: the replacement each name maps to. The ONE home for the retirement fact —
 # retired_model_reason() is the ONE function that builds the refusal reason from it.
-_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6.1-sol"}}
+_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6.2-sol"}}
 
 _EFFORT_ENUM: dict[str, tuple[str, ...]] = {
     "claude": ("low", "medium", "high", "xhigh"),
@@ -88,8 +105,8 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
         ("opus-5.5", "xhigh"),
     ),
     "codex": (
-        ("gpt-6.1-sol", "high"),
-        ("gpt-6.1-sol", "xhigh"),
+        ("gpt-6.2-sol", "high"),
+        ("gpt-6.2-sol", "xhigh"),
         ("gpt-6-astra", "high"),
     ),
     "cursor": (
@@ -101,37 +118,37 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
 _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     "implementer": {
         "claude": ("sonnet-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
         "claude": ("opus-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer": {
         "claude": ("sonnet-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
         "claude": ("opus-5.5", "xhigh"),
-        "codex": ("gpt-6.1-sol", "xhigh"),
+        "codex": ("gpt-6.2-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
         "claude": ("opus-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
         "claude": ("opus-5.5", "xhigh"),
-        "codex": ("gpt-6.1-sol", "xhigh"),
+        "codex": ("gpt-6.2-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
         "claude": ("opus-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": None,
     },
     "mechanical": {
@@ -146,7 +163,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
     "registration-probe": {
         "claude": None,
-        "codex": ("gpt-6.1-sol", "high"),
+        "codex": ("gpt-6.2-sol", "high"),
         "cursor": None,
     },
 }
@@ -304,9 +321,9 @@ _MODEL_TIER_ROLES = (
 _CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "implementer", "pilot")
 
 _CODEX_PEER_BY_CLAUDE = {
-    "sonnet": "gpt-6.1-sol",
-    "opus": "gpt-6.1-sol",
-    "haiku": "gpt-6.1-sol",
+    "sonnet": "gpt-6.2-sol",
+    "opus": "gpt-6.2-sol",
+    "haiku": "gpt-6.2-sol",
 }
 
 _COMPOSER_MODEL = "composer-2.5"
@@ -717,17 +734,34 @@ def family_for(role: str, vendor: str) -> str | None:
 
 def _append_codex_pin_only(role: str, vendor: str, cell: tuple[str, str | None], out: list) -> None:
     """I3: a codex pin role whose codex cell exists also allows every pin-only codex model, at the
-    cell's own effort, appended after the ladder slice — never widening any other role/vendor."""
+    cell's own effort, appended after the ladder slice — never widening any other role/vendor.
+
+    Two refinements, both per-row: a pin-only row that declares `pin_roles` is appended only when
+    `role` is one of them; and when the cell's effort is not valid for the pin-only model but the
+    row declares exactly one effort, the model is appended at that one effort instead (when
+    `validate_config` accepts it). A model that fits neither is skipped, and a candidate already in
+    `out` is never duplicated."""
     if vendor != "codex" or role not in _CODEX_PIN_ROLES:
         return
     _model, effort = cell
     for pin_model in pin_only_models("codex"):
+        rec = _MODELS.get("codex", {}).get(pin_model, {})
+        pin_roles = rec.get("pin_roles")
+        if pin_roles and role not in pin_roles:
+            continue
         candidate = (pin_model, effort)
+        ok, _ = validate_config(vendor, pin_model, effort, allow_override_only=True)
+        if not ok:
+            declared = rec.get("efforts")
+            if not declared or len(declared) != 1:
+                continue
+            candidate = (pin_model, declared[0])
+            ok, _ = validate_config(vendor, pin_model, candidate[1], allow_override_only=True)
+            if not ok:
+                continue
         if candidate in out:
             continue
-        ok, _ = validate_config(vendor, pin_model, effort, allow_override_only=True)
-        if ok:
-            out.append(candidate)
+        out.append(candidate)
 
 
 def allowlist(role: str, vendor: str) -> tuple[tuple[str, str | None], ...]:
