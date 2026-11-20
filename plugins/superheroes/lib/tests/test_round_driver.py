@@ -3966,16 +3966,17 @@ def _earlier_receipt_naming_openai():
 
 def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_the_exemption():
     # axis: the exemption reads the session's whole maker set, so a later map that leaves out a maker an
-    # earlier one named still degrades an all-codex panel — see bite-proof record wo_a_2530_single_vendor_panel
+    # earlier one named never certifies an all-codex panel clean — see bite-proof record wo_a_2530_single_vendor_panel
+    # #2537: every codex seat sits in that maker's (openai) family, so each is a maker-family breach and the
+    # panel reads constraint-violated (it read degraded, by pin excusal, before) — see bite-proof record
+    # wo_2537_any_maker_seat
     SM = _load("seat_map")
     latest = _legacy_pinned_single_vendor_map()
     earlier = _earlier_receipt_naming_openai()
     state, receipt = _certify_session([earlier, latest])
-    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
-    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
-    # seat-pin is its own shape driver; the `independence` field reads a different channel (_degraded)
-    assert state["certification"]["independence"] == "independent"
-    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
+    assert any("maker-family (seat code-reviewer)" in line for line in receipt["degraded"])
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["seatMap"].get("violations", []))
     # the latest map alone reads outside the makers (what 12a3c1b0 judged); with the session's makers it does not
     assert SM.panel_outside_makers(latest, "anthropic")
@@ -3984,12 +3985,13 @@ def test_a_later_receipt_that_omits_an_earlier_maker_does_not_release_it_from_th
 
 def test_a_former_fixer_family_is_a_maker_for_the_exemption():
     # axis: formerFixerFamilies joins the maker set the exemption reads — see bite-proof record wo_a_2530_single_vendor_panel
+    # #2537: the codex seats sit in the former fixer's family, so each is a maker-family breach — see
+    # bite-proof record wo_2537_any_maker_seat
     stored = _legacy_pinned_single_vendor_map()
     state, receipt = _certify_session([stored], former_fixer_families=["openai"])
-    assert state["certification"]["shape"] == "full-panel-confirmed-degraded"
-    assert state["certification"]["shapeDrivers"] == ["seat-pin"]
-    assert state["certification"]["independence"] == "independent"
-    assert any(d.startswith("seat-map pin excusal:") for d in receipt["degraded"])
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
+    assert any("maker-family (seat code-reviewer)" in line for line in receipt["degraded"])
     # the emitted seat map keeps the critical-diversity row and violation: the panel is in a maker's family
     emitted = receipt["seatMap"]
     assert any(v.get("constraint") == "critical-diversity" for v in emitted.get("violations", []))
@@ -4045,26 +4047,27 @@ def _single_vendor_shape(shape, pinned, recorded):
 
 
 def test_a_later_receipt_that_omits_an_earlier_maker_reads_constraint_violated_for_unpinned_seats():
-    # axis: the liveness excusal never reads the session's makers out of the live alternatives, so a
-    # recorded critical-diversity on unpinned seats is no cleaner than base — see bite-proof record
-    # wo_a_2530_single_vendor_panel (J1)
+    # axis: a recorded critical-diversity on unpinned seats in a session maker's family is no cleaner than
+    # base; since #2537 each seat is a maker-family breach, which keeps it so with the session's makers
+    # back in the liveness excusal (V953-a) — see bite-proof records wo_a_2530_single_vendor_panel (J1,
+    # superseded) and wo_2537_any_maker_seat
     assert _single_vendor_shape("a", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
 
 
 def test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats():
-    # axis: same as above, for the maker held in formerFixerFamilies — see bite-proof record
-    # wo_a_2530_single_vendor_panel (J1)
+    # axis: same as above, for the maker held in formerFixerFamilies — see bite-proof records
+    # wo_a_2530_single_vendor_panel (J1, superseded) and wo_2537_any_maker_seat
     assert _single_vendor_shape("b", pinned=False, recorded=True) == "full-panel-confirmed-constraint-violated"
 
 
 @pytest.mark.parametrize(
     "shape, pinned, recorded, base_shape",
     [
-        ("a", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("a", True, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-degraded (#2537: stricter)
         ("a", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
         ("a", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
         ("a", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
-        ("b", True, True, "full-panel-confirmed-degraded"),  # base: full-panel-confirmed-degraded
+        ("b", True, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-degraded (#2537: stricter)
         ("b", True, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
         ("b", False, True, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
         ("b", False, False, "full-panel-confirmed-constraint-violated"),  # base: full-panel-confirmed-constraint-violated
@@ -4072,8 +4075,35 @@ def test_a_former_fixer_family_reads_constraint_violated_for_unpinned_seats():
 )
 def test_no_variant_of_the_two_shapes_reads_cleaner_than_base(shape, pinned, recorded, base_shape):
     # axis: with live alternatives proven, no variant of shape a or b (pinned or not, recorded or not)
-    # certifies cleaner than the base commit does — see bite-proof record wo_a_2530_single_vendor_panel (J1)
+    # certifies cleaner than the base commit does — see bite-proof records wo_a_2530_single_vendor_panel (J1,
+    # superseded) and wo_2537_any_maker_seat; the two pinned, recorded rows read stricter than base since #2537
     assert _single_vendor_shape(shape, pinned, recorded) == base_shape
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+@pytest.mark.parametrize("recorded", [True, False])
+def test_a_map_naming_its_seats_family_a_maker_never_certifies_independent(pinned, recorded):
+    # axis: a panel seated wholly in a maker's family the map itself names reads maker-family, never
+    # full-panel-confirmed (base 1b1454fb read full-panel-confirmed for the unpinned, recorded variant) —
+    # see bite-proof record wo_2537_any_maker_seat
+    stored = _single_vendor_map(pinned, recorded)
+    stored["makerFamilies"] = ["anthropic", "openai"]
+    state, receipt = _certify_session([stored])
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
+    assert any("maker-family (seat code-reviewer)" in line for line in receipt["degraded"])
+
+
+def test_a_panel_outside_every_maker_family_certifies_as_before():
+    # DoD row 2: with every seat outside every maker's family, the unpinned all-codex panel reads exactly as
+    # on base 1b1454fb — full-panel-confirmed, independent, no driver
+    for pinned in (True, False):
+        stored = _single_vendor_map(pinned, recorded=True)
+        stored["makerFamilies"] = ["anthropic", "xai"]
+        state, _ = _certify_session([stored])
+        assert state["certification"]["shape"] == "full-panel-confirmed", pinned
+        assert state["certification"]["independence"] == "independent", pinned
+        assert state["certification"]["shapeDrivers"] == [], pinned
 
 
 def test_a_malformed_former_fixer_families_names_no_extra_maker():
@@ -4766,7 +4796,9 @@ def test_assertable_seat_map_allows_excused_derived_violations():
         m, makerFamilies=sorted(set(m["makerFamilies"]) | {"anthropic"}),
         violations=[{"constraint": "critical-diversity"}],
     )
-    assert SM.unexcused_violations(held, "openai") == []
+    # #2537: the claude seats now sit in a named maker's family, so each carries a maker-family breach;
+    # the critical-diversity record this test pins stays excused
+    assert [v for v in SM.unexcused_violations(held, "openai") if v.get("constraint") != "maker-family"] == []
     assert SM.derived_violations(held, "openai") != []
 
 

@@ -1279,8 +1279,8 @@ def classify_violations(
             unexcused.append(stamped)
             continue
 
-        raw_makers = seat_map.get("makerFamilies")
-        maker_set = {f for f in (raw_makers if isinstance(raw_makers, list) else []) if isinstance(f, str) and f}
+        # axis: the session's makers are not live alternatives; safe since verify raises maker-family for a seat in any of them — see bite-proof record wo_2537_any_maker_seat
+        maker_set = _named_makers(seat_map, extra_makers)
         maker_set.add(author_family)
         achievable: set[str] | None = set()
         for cs in collapsed:
@@ -1338,7 +1338,20 @@ def unexcused_violations(
     return classify_violations(seat_map, driver_author_family, extra_makers)["unexcused"]
 
 
+def _named_makers(seat_map: dict, extra_makers=()) -> set[str]:
+    """The maker families a map's `makerFamilies` and the session's extra makers name; a non-string or
+    empty member, and a `makerFamilies` that is not a list, name nothing."""
+    raw = seat_map.get("makerFamilies") if isinstance(seat_map, dict) else None
+    named = {f for f in (raw if isinstance(raw, list) else []) if isinstance(f, str) and f}
+    named.update(f for f in extra_makers if isinstance(f, str) and f)
+    return named
+
+
 def verify(seat_map: dict, author_family: str | None, extra_makers=()) -> list[dict]:
+    """The constraints a seat map breaks. A seat in the author's family is a `maker-family` breach
+    only when an alternative family was live (#670); a seat in any other maker's family the map or the
+    session names is a `maker-family` breach whatever the liveness, as the composer never seats one
+    (#2537)."""
     seats = seat_map.get("seats")
     if not isinstance(seats, dict):
         return [{"constraint": "malformed"}]
@@ -1360,6 +1373,7 @@ def verify(seat_map: dict, author_family: str | None, extra_makers=()) -> list[d
             violations.append({"seat": seat, "constraint": "malformed"})
 
     if isinstance(author_family, str) and author_family:
+        other_makers = _named_makers(seat_map, extra_makers) - {author_family}
         for seat in sorted(MAKER_EXCLUDED_SEATS):
             if seat not in seats:
                 continue
@@ -1369,6 +1383,10 @@ def verify(seat_map: dict, author_family: str | None, extra_makers=()) -> list[d
             seat_fam = _seat_family(seat, cfg)
             if seat_fam is None:
                 violations.append({"seat": seat, "constraint": "unresolvable-seat-vendor"})
+                continue
+            # axis: a seat in any other maker's family the map or session names is a maker seat, never excused by liveness — see bite-proof record wo_2537_any_maker_seat
+            if seat_fam in other_makers:
+                violations.append({"seat": seat, "constraint": "maker-family"})
                 continue
             if seat_fam != author_family:
                 continue
