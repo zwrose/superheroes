@@ -26,6 +26,7 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 
 - **After switching.** **Nothing is owed: in auto mode the timeout hook refuses a Bash call that names no `timeout`, with a reason naming `timeout: 600000`, so no owner approval prompt appears, and the model re-issues the call once; in every other mode the hook rewrites the call as before.** An owner who wants the hook off sets `BASH_DEFAULT_TIMEOUT_MS=600000` in the settings `env` (the host then defaults Bash calls to 600 s itself). See [Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off](#bash-timeout-hook-auto-mode-refuses-instead-of-rewriting-and-a-setting-switches-it-off).
 - **After switching.** **Nothing is owed by a caller that does not pass the new flag: `head_coverage.py check` takes a repeatable `--base-at-review SHA`, and the check's `why` gains the tokens `base-at-review` and `base-at-review-ignored`.** An advisor that straightens a stack now passes the flag once for each head the layer below had before a rewrite, on the coverage check and the carry check of every layer above the bottom (merge-train.md item 4(g) and item 6). See [Head coverage: a stack layer whose layer below was rewritten](#head-coverage-a-stack-layer-whose-layer-below-was-rewritten).
+- **After switching.** **Nothing is owed: configure's view, the review-crew doctor and adopt-version's plan now name a core.md seat pin for a seat no roster has; remove such a pin with /superheroes:configure.** See [Stale seat pins are named](#stale-seat-pins-are-named).
 
 ### Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off
 
@@ -41,6 +42,13 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **The rule.** A well-formed value never makes the answer worse than the check without it. A second base is tried only when git shows its tree equals the base's tree and finds a merge base of it and the certified commit; a full-sha value git cannot read, whose tree differs, or that shares no merge base is ignored, and the answer is the check's own without it, with a `base-at-review-ignored` why line (the first 8 characters of the value and the reason: `unreadable`, `other-tree` or `no-merge-base`). A value that is not a full sha reads `needs-review` with `input-invalid`. With no value given the check reads exactly as before.
 - **What an advisor does differently.** A layer whose layer below was straightened, rebased or rebuilt read `needs-review` for every file both layers edit. The advisor now passes `--base-at-review` for each earlier head of the layer below, so a rewrite that kept the tree reads `proven` and the sheet is republished carried. A head that no longer fits is ignored, so passing the layer below's earlier heads never costs anything.
 - Replacement. None: the flag is additive.
+
+### Stale seat pins are named
+
+- `configure view` gains a block, *Seat pins for seats no roster has*, after the rejected seat pins; pins for live seats read as before.
+- The review-crew doctor (`lib/repo_doctor.py`) result gains `staleSeatPins` (a list of seat keys) and a `review-crew calibration note:` part in `message`. A stale pin is never `drift`; it joins `signal_hash`, so dismissing the note works as before and a changed set of stale pins shows once more. With no stale pin, `signal_hash` is unchanged.
+- `adopt_version.py plan` gains `retiredSeats` (each `{seat, version, since}` an installed release in the span dropped, read by each release's own code; `null` when a release's seats cannot be read), `pinsProject` (the project whose pins were checked: `--project`, else the current directory) and `retiredSeatPins` (the pinned seats among them; `null` when unreadable). adopt-version's brief names each one.
+- The grounding seat's earlier note said a saved `grounding-seat` pin "is reported as a pin for an unknown seat": that report was only the seat map's `pin` degradation in a review receipt. These three surfaces now name it too.
 
 ## 0.51.0
 

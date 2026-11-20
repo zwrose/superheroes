@@ -82,10 +82,16 @@ and hold before step 5; otherwise record **no TRANSITION section (no consumer-vi
 recorded)** — that label does not hold. When `CHANGELOG.md` exists but a crossed version's
 section cannot be read, mark **unresolved** and carry why to step 8.
 
+Read `retiredSeatPins` from `plan` (pins checked in `pinsProject`): each seat listed is a core.md
+seat pin for a seat a crossed release retired; the panel never seats it and nothing removes it, so
+carry each to step 8 as "remove the `<seat>` seat pin with `/superheroes:configure`" (it never
+holds adoption). When `retiredSeatPins` is `null`, carry "could not check seat pins against
+retired seats" with `pinsProject` to step 8.
+
 **Output:** from, to, the in-between versions, TRANSITION sections read, every
 `unresolvedGaps` entry as **unresolved** (reason), each `changelogSections` version reviewed
 as either **no TRANSITION section (no consumer-visible change recorded)** or **unresolved**
-(why).
+(why), `retiredSeatPins`.
 
 **Gate before step 2:** Do not run steps 2–7 until every `unresolvedGaps` entry is dispositioned
 as **unresolved** (hold) and every `changelogSections` version without a TRANSITION section has
