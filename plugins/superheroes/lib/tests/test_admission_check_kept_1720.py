@@ -15,7 +15,7 @@ import conformance_probe  # noqa: E402
 
 from test_model_registry import MR  # noqa: E402
 
-_MODEL = "gpt-6-astra"
+_MODEL = "gpt-6.2-astra"
 _ROLE = "reviewer-deep"
 
 

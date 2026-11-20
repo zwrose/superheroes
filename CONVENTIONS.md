@@ -674,11 +674,12 @@ actually runs; the adapter and `engine_pref` re-derive from it.
 Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none.
 An optional per-role `enginePreferences.codexModels` pin may select `gpt-6.2-sol` (the
 default), the pin-only `gpt-5.6-sol`, `gpt-6-sol` or `gpt-6.1-sol` (valid only for a role
-with a codex cell, at that role's own effort), or `gpt-6-astra` or the pin-only
-`gpt-6.2-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs at the
+with a codex cell, at that role's own effort), or `gpt-6.2-astra` or the pin-only
+`gpt-6-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs at the
 effort of its own registry rung, not the role's configured effort. A pin to the retired
 `gpt-5.6-terra` is refused by name
-(`model-retired: gpt-5.6-terra is retired; use gpt-6.2-sol`), never falling back silently. A one-run preflight pin wins over the
+(`model-retired: gpt-5.6-terra is retired; use gpt-6.2-sol`), never falling back silently.
+The codex ladder's top rung is `gpt-6.2-astra` at `high` for every role, so a codex escalation from `gpt-6.2-sol` at `xhigh` runs GPT-6.2 Astra. A one-run preflight pin wins over the
 persistent pin, which wins over tier mapping. The provider-specific pin is carried separately from the shared
 tier so a failed Codex dispatch falls directly open to the host model with a valid native
 model — never automatically downgrading to another GPT model. Effort stays

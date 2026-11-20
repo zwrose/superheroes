@@ -45,6 +45,7 @@ _MODELS: dict[str, dict[str, dict]] = {
             "override_only": False,
             "efforts": ("high",),
             "pin_roles": ("reviewer-deep",),
+            "pin_only": True,
         },
         "gpt-6.2-sol": {
             "family": "openai",
@@ -60,7 +61,6 @@ _MODELS: dict[str, dict[str, dict]] = {
             "min_cli": "0.166.0",
             "efforts": ("high",),
             "pin_roles": ("reviewer-deep",),
-            "pin_only": True,
         },
     },
     # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
@@ -107,7 +107,7 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "codex": (
         ("gpt-6.2-sol", "high"),
         ("gpt-6.2-sol", "xhigh"),
-        ("gpt-6-astra", "high"),
+        ("gpt-6.2-astra", "high"),
     ),
     "cursor": (
         ("composer-2.5", None),
@@ -375,7 +375,8 @@ def pin_only_models(vendor: str) -> tuple[str, ...]:
 def codex_min_cli() -> tuple[str, str] | None:
     """(version, model_id) for the highest `min_cli` floor declared among the codex models actually
     reachable by default selection (any matrix cell, raw ladder rung, or peer value). Compared
-    numerically (never as a string). None when no such model declares a floor. Never raises."""
+    numerically (never as a string). A tie goes to the first-declared row in `_MODELS["codex"]`.
+    None when no such model declares a floor. Never raises."""
     reachable: set[str] = set()
     for row in _MATRIX.values():
         cell = row.get("codex")
@@ -386,7 +387,9 @@ def codex_min_cli() -> tuple[str, str] | None:
     reachable.update(_CODEX_PEER_BY_CLAUDE.values())
     best: tuple[str, str] | None = None
     best_key: tuple[int, ...] | None = None
-    for model_id in reachable:
+    for model_id in _MODELS.get("codex", {}):
+        if model_id not in reachable:
+            continue
         rec = _MODELS.get("codex", {}).get(model_id)
         if not rec:
             continue
