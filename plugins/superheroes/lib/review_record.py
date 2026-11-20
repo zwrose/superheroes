@@ -2280,7 +2280,7 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
             if isinstance(by, dict) and by.get("kind") in finding_outcomes.LINKED_KINDS and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
                 ref = by.get("ref")
             url = ref.get("url") if isinstance(ref, dict) else None
-            parts = finding_outcomes.comment_permalink(url, a["repo"], by.get("kind"))[0] if isinstance(url, str) else None
+            parts = finding_outcomes.comment_permalink(url, a["repo"])[0] if isinstance(url, str) else None
             if parts is not None and url not in docs:
                 try:
                     docs[url] = rd["owner_ruling_comment"](a["repo"], parts[3])

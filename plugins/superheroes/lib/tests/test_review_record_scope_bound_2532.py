@@ -199,11 +199,16 @@ def test_a_receipt_linked_by_its_pull_request_permalink_resolves(kind, words, li
     assert the_finding(rec)["outcome"] == "ruling" and rec["leftForOwner"] == []
 
 
-def test_an_owner_ruling_never_takes_a_pull_request_permalink():
-    # Axis: the /pull/ form widens only the scope ruling and the advisor's bound; an owner ruling's link keeps its form.
+def test_every_linked_kind_takes_a_pull_request_permalink():
+    # Axis: a pull request comment's /pull/ link names the same comment, so an owner ruling recorded on a PR resolves too.
+    sources = {"repo": "o/r", "reviewPr": 7, "ownerRulings": {PU: doc_of(chat(SW))}}
     by = {"kind": fo.OWNER_RULING, "ref": {"url": PU, "words": SW}}
-    assert fo.on_record(by, {"repo": "o/r", "ownerRulings": {PU: doc_of(chat(SW))}}) == (False, L1)
-    assert fo.on_record(cite(SCOPE, url=PU), {"repo": "o/r", "reviewPr": 7, "ownerRulings": {PU: doc_of(chat(SW))}})[0]
+    assert fo.on_record(by, sources) == (True, 'owner ruling "%s" (%s)' % (SW, PU))
+    assert fo.on_record(cite(SCOPE, url=PU), sources)[0]
+    # the comment read must still be that comment on that issue: a /pull/ link to another number is not
+    other = "https://github.com/o/r/pull/8#issuecomment-777"
+    assert fo.on_record({"kind": fo.OWNER_RULING, "ref": {"url": other, "words": SW}},
+                        {"repo": "o/r", "ownerRulings": {other: doc_of(chat(SW))}}) == (False, L3)
 
 
 def _kept_repeat(earlier, **over):

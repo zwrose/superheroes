@@ -85,7 +85,7 @@ L5 = "the ruling's comment does not hold the owner's words"
 L6 = "the ruling's comment is not a chat-ruling record"
 NOT_ON_RECORD = "; the owner ruling it cites is not on record (%s)"
 FAILS = [
-    pytest.param({"url": "https://github.com/o/r/pull/12#issuecomment-555"}, {}, L1, id="L1-not-a-comment-permalink"),
+    pytest.param({"url": "https://github.com/o/r/discussions/12#issuecomment-555"}, {}, L1, id="L1-not-a-comment-permalink"),
     pytest.param({"url": "https://github.com/o/r/issues/12"}, {}, L1, id="L1-no-comment-anchor"),
     pytest.param({"url": "https://github.com/o/r/issues/12#issuecomment-555x"}, {}, L1, id="L1-trailing-text"),
     pytest.param({"url": "https://github.com/x/y/issues/12#issuecomment-555"}, {}, L2, id="L2-another-repository"),
@@ -345,7 +345,7 @@ def test_t8_extras_ownerrulings_that_is_not_a_list_is_refused(tmp_path):
 def test_t9_the_reader_is_not_called_for_a_link_that_fails_the_permalink_or_repository_leg():
     # Axis: nothing is fetched for a foreign or malformed link; each distinct good link is fetched once.
     calls = []
-    for url in ("https://github.com/o/r/pull/12#issuecomment-555", "https://github.com/x/y/issues/12#issuecomment-555",
+    for url in ("https://github.com/o/r/discussions/12#issuecomment-555", "https://github.com/x/y/issues/12#issuecomment-555",
                 "https://example.com/o/r/issues/12#issuecomment-555"):
         build([entry(url=url)], calls=calls)
     assert calls == []

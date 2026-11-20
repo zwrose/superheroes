@@ -44,9 +44,8 @@ _BOUND_MARKER = re.compile(r"<!-- superheroes:advisor-bound rounds=([1-9][0-9]*)
 _ROUND_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 _ROUNDS_STATED = re.compile(r"\b([1-9][0-9]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:review\s+)?rounds?\b", re.IGNORECASE)
 _RECEIPT_WORDS_MIN = 12
-_COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
-# A pull request's comment is an issue comment on the same number; GitHub links it under /pull/.
-_PULL_COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/(?:issues|pull)/([0-9]+)#issuecomment-([0-9]+)")
+# A pull request's comment is an issue comment on the same number; GitHub links it under /pull/, so both forms name it.
+_COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/(?:issues|pull)/([0-9]+)#issuecomment-([0-9]+)")
 
 
 RESTS_ON_RULING_FIELD = "restsOnRuling"
@@ -246,17 +245,15 @@ def decided_by_well_formed(decided_by):
     return isinstance(ref, str) and ref.strip() != ""
 
 
-def comment_permalink(url, repo, kind=OWNER_RULING):
+def comment_permalink(url, repo):
     """The comment a ruling's link points at, as (owner, repo, issue number, comment id), or the reason it cannot be one.
 
-    The link must be an issue-comment permalink (leg L1) in the pull request's own repository, compared
-    case-insensitively (leg L2). A scope ruling or an advisor's bound may also link a pull request's comment
-    (`/pull/<n>#issuecomment-<id>`, the form a vet receipt's link takes); an owner ruling may not. Returns (parts, None)
-    or (None, why). Never raises."""
+    The link must be a comment permalink (leg L1), `/issues/<n>#issuecomment-<id>` or the `/pull/<n>#issuecomment-<id>`
+    form a pull request's comment takes (a vet receipt's link, or a ruling recorded on a pull request), in the pull
+    request's own repository, compared case-insensitively (leg L2). Returns (parts, None) or (None, why). Never raises."""
     # axis: the link must be a comment permalink — see bite-proof record wo_a_1958_owner_ruling
-    # axis: only a scope ruling or an advisor's bound accepts a pull request comment's link — see bite-proof record i2532_scope_bound (E-pull-link)
-    form = _PULL_COMMENT_PERMALINK if kind in (SCOPE_RULING, ADVISOR_BOUND) else _COMMENT_PERMALINK
-    found = form.fullmatch(url) if isinstance(url, str) else None
+    # axis: a pull request comment's /pull/ link names the same comment and is accepted for every linked kind — see bite-proof record i2532_scope_bound (E-pull-link)
+    found = _COMMENT_PERMALINK.fullmatch(url) if isinstance(url, str) else None
     if found is None:
         return None, "the ruling's link is not a comment permalink"
     owner, name, number, comment = found.groups()
@@ -266,16 +263,15 @@ def comment_permalink(url, repo, kind=OWNER_RULING):
     return (owner, name, number, int(comment)), None
 
 
-def _linked_comment(ref, sources, kind=OWNER_RULING):
+def _linked_comment(ref, sources):
     """The comment a linked kind's ref points at, as ((url, words, issue number, body), None), or (None, why).
 
     The comment legs every linked kind shares: the ref names a link and words, the link is a comment permalink in the
-    pull request's own repository (see comment_permalink for the forms each kind accepts), and the comment read
-    (sources["ownerRulings"][url]) is that comment on that issue."""
+    pull request's own repository, and the comment read (sources["ownerRulings"][url]) is that comment on that issue."""
     url, words = (ref.get("url"), ref.get("words")) if isinstance(ref, dict) else (None, None)
     if not (isinstance(url, str) and url.strip() and isinstance(words, str) and words.strip()):
         return None, "the ruling names no link or words"
-    parts, why = comment_permalink(url, sources.get("repo"), kind)
+    parts, why = comment_permalink(url, sources.get("repo"))
     if parts is None:
         return None, why
     owner, name, number, comment_id = parts
@@ -353,7 +349,7 @@ def _scope_or_bound_on_record(kind, ref, sources):
     # axis: a Critical finding is never settled by a scope ruling or the advisor's bound, checked before the comment is read — see bite-proof record i2532_scope_bound (E-critical)
     if sources.get("findingSeverity") == "Critical":
         return False, "a Critical finding is never settled by a scope ruling or the advisor's bound"
-    got, why = _linked_comment(ref, sources, kind)
+    got, why = _linked_comment(ref, sources)
     if got is None:
         return False, why
     url, words, number, body = got
