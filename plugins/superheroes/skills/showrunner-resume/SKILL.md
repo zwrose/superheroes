@@ -116,7 +116,7 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 **Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
-**Re-check the waits before you arm.** An app exit or restart killed every watcher the last seat armed, with no marker. Re-list the waits the session ledger records (`waiting on X; on X do Y`) and re-check each against the world directly; a wait whose X already happened is acted on now, not left to the new watcher (`wave-watch.md` § The boundary the owner accepted).
+**Re-check the waits before you arm.** An app exit or restart since the last seat armed its watchers kills every one of them silently, with no marker. Re-list the waits the session ledger records (`waiting on X; on X do Y`) and re-check each against the world directly; a wait whose X already happened is acted on now, not left to the new watcher (`wave-watch.md` § The boundary the owner accepted).
 
 The reference's one-off check returns at once and is safe to run before arming, but a mistyped batch id reads as a quiet batch (`timer`), so check the batch id against the launch record rather than trusting the check.
 

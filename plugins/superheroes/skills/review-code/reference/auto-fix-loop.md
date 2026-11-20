@@ -507,13 +507,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    (`--run-dir`, `--max-wait`, originating-verb continuation) — a round that used it **still owes
 >    that disclosure**.
 >
-> **A native seat reviews whatever tree your working folder holds.** A claude native subagent seat
-> (panel, audit, verifier) inherits only the dispatching session's working folder. When that folder
-> is a worktree detached at the base commit, the seat reads the stale tree silently and its line
-> anchors point at code the diff does not have. Name the branch-head worktree's absolute path in
-> every native-seat order, confirm before dispatch that `git -C <that path> rev-parse HEAD` is the
-> head under review, and check one returned seat's anchor against that head's file before trusting
-> the rest.
+> **A native panel seat reviews whatever tree your working folder holds.** The panel order
+> (`rubric/orders/dispatch-panel.md`) names no tree path, so a claude native panel seat reads the
+> dispatching session's working folder. When that folder is a worktree detached at the base commit,
+> the seat reads the stale tree silently and its line anchors point at code the diff does not have.
+> Name the branch-head worktree's absolute path in every native panel order, confirm before dispatch
+> that `git -C <that path> rev-parse HEAD` is the head under review, and check one returned seat's
+> anchor against that head's file before trusting the rest. Audit and verifier orders already name
+> their checked `{{VERIFICATION_ROOT}}`; for those seats, run the same head check on that root.
 >
 > **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout.** Prefer the
 > supervised runner above: the sanctioned call is `engine_dispatch.py dispatch-review`, and a
