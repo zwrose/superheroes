@@ -4936,6 +4936,59 @@ def test_an_author_family_seat_keeps_its_liveness_rule():
     assert _maker_family_seats(SM.verify(_live_alternatives(m), "anthropic")) == ["test-role"]
 
 
+def test_an_author_family_seat_keeps_its_liveness_rule_when_the_map_names_the_author():
+    # axis: the author's own family is never an "other maker", even when the map's makerFamilies names it,
+    # so an author seat with no live alternative stays a same-family degradation — see bite-proof record
+    # wo_2537_any_maker_seat (K6)
+    claude = _seat_cfg("claude")
+    for makers in (["anthropic"], ["anthropic", "openai"]):
+        m = dict(_outside_panel("codex", **{"test-role": claude}), makerFamilies=makers,
+                 liveVendors=["claude"], liveCellsSource="synthesized", livenessPinScoped=False)
+        assert "test-role" not in _maker_family_seats(SM.verify(m, "anthropic")), makers
+        assert "test-role" not in _maker_family_seats(SM.verify(m, "anthropic", extra_makers=("anthropic",))), makers
+        assert any(d["seat"] == "test-role" for d in SM.same_family_degradations(m, "anthropic")), makers
+
+
+def test_a_malformed_maker_list_never_lets_the_liveness_excusal_clear_critical_diversity():
+    # axis: a malformed makerFamilies is unusable maker evidence, so a recorded critical-diversity is never
+    # excused by liveness on it, with or without a session maker — see bite-proof record wo_2537_any_maker_seat (K5)
+    seats = {seat: _seat_cfg("cursor") for seat in SM.PANEL_ROSTER}
+    for bad in ("openai", ["anthropic", 5], "xai", None, [""]):
+        for extra, live in ((("openai",), list(THREE_VENDORS)), ((), ["claude", "cursor"])):
+            m = {
+                "seats": dict(seats), "roster": list(SM.PANEL_ROSTER), "authorFamily": "anthropic",
+                "makerFamilies": bad, "violations": [{"constraint": "critical-diversity"}],
+                "liveVendors": live, "liveCellsSource": "synthesized", "livenessPinScoped": False,
+            }
+            got = SM.classify_violations(m, None, extra_makers=extra)
+            cd = [v for v in got["unexcused"] if v.get("constraint") == "critical-diversity"]
+            assert cd == [{"constraint": "critical-diversity", "evidence": "unproven-liveness"}], (bad, extra)
+            assert got["excusedByLiveness"] == [], (bad, extra)
+    # a well-formed list keeps the excusal (only claude and cursor live, no second family outside the makers)
+    ok = {
+        "seats": dict(seats), "roster": list(SM.PANEL_ROSTER), "authorFamily": "anthropic",
+        "makerFamilies": ["anthropic", "openai"], "violations": [{"constraint": "critical-diversity"}],
+        "liveVendors": ["claude", "cursor"], "liveCellsSource": "synthesized", "livenessPinScoped": False,
+    }
+    seats_ok = dict(ok, seats={**seats, "test-role": {"vendor": "not-a-vendor", "model": "x", "effort": None,
+                                                     "tier": "reviewer", "source": "rotated"}})
+    assert SM.classify_violations(seats_ok)["excusedByLiveness"] == [{"constraint": "critical-diversity"}]
+
+
+def test_a_malformed_maker_list_keeps_the_pin_excusal():
+    # the order leaves the pin excusal as it is: pinned critical seats are excused by pin whatever makerFamilies holds
+    seats = {seat: _seat_cfg("cursor", source="pinned") if seat in SM.CRITICAL_SEATS else _seat_cfg("cursor")
+             for seat in SM.PANEL_ROSTER}
+    m = {
+        "seats": seats, "roster": list(SM.PANEL_ROSTER), "authorFamily": "anthropic", "makerFamilies": "openai",
+        "violations": [{"constraint": "critical-diversity"}],
+        "liveVendors": ["claude", "cursor"], "liveCellsSource": "synthesized", "livenessPinScoped": False,
+    }
+    got = SM.classify_violations(m)
+    assert [r["constraint"] for r in got["excusedByPin"]] == ["critical-diversity"]
+    assert not [v for v in got["unexcused"] if v.get("constraint") == "critical-diversity"]
+
+
 def test_the_liveness_excusal_does_not_count_a_session_maker_as_a_live_alternative():
     # axis (V953-a): the session's makers are makers in the excusal arithmetic, never live alternatives —
     # safe since a seat in any of them is a maker-family breach — see bite-proof record wo_2537_any_maker_seat

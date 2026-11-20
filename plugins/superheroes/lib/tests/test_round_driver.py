@@ -4106,6 +4106,42 @@ def test_a_panel_outside_every_maker_family_certifies_as_before():
         assert state["certification"]["shapeDrivers"] == [], pinned
 
 
+def _all_cursor_recorded_map(maker_families, live):
+    """An unpinned all-cursor (xai) panel, author anthropic, `critical-diversity` recorded, the given
+    `makerFamilies` (well-formed or not) and live vendors proven by the synthesized cell source."""
+    SM = _load("seat_map")
+    stored = SM.to_receipt(SM.build(SM.PANEL_ROSTER, ["cursor"], "anthropic", 0), "anthropic")
+    stored.update(_nonpanel_cell_proof(["cursor"]))
+    stored["seats"] = dict(stored["seats"])
+    for seat in SM.CRITICAL_SEATS:
+        assert stored["seats"][seat]["vendor"] == "cursor" and stored["seats"][seat]["source"] != "pinned"
+    stored["makerFamilies"] = maker_families
+    stored["violations"] = [{"constraint": "critical-diversity"}]
+    stored["liveVendors"] = list(live)
+    stored["liveCellsSource"] = "synthesized"
+    stored["livenessPinScoped"] = False
+    return stored
+
+
+@pytest.mark.parametrize("maker_families", ["openai", ["anthropic", 5], "xai"])
+def test_a_malformed_maker_list_with_a_session_maker_never_certifies_cleaner_than_main(maker_families):
+    # axis: a malformed makerFamilies never lets the liveness excusal clear a recorded critical-diversity, so
+    # with the former fixer openai a maker the panel reads as on main (constraint-violated); the head before
+    # vet 982's fix read full-panel-confirmed — see bite-proof record wo_2537_any_maker_seat (K5)
+    stored = _all_cursor_recorded_map(maker_families, ["claude", "codex", "cursor"])
+    state, receipt = _certify_session([stored], former_fixer_families=["openai"])
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
+
+
+def test_a_string_maker_list_with_only_claude_and_cursor_live_now_reads_constraint_violated():
+    # the stricter reading (TRANSITION.md): on main and before vet 982's fix this read full-panel-confirmed
+    # (critical-diversity excused by liveness); a malformed makerFamilies is unusable evidence, so no longer
+    stored = _all_cursor_recorded_map("openai", ["claude", "cursor"])
+    state, _ = _certify_session([stored])
+    assert state["certification"]["shape"] == "full-panel-confirmed-constraint-violated"
+
+
 def test_a_malformed_former_fixer_families_names_no_extra_maker():
     # E5: absent, a scalar, or a list with a non-string / empty member adds no maker — the healthy shape holds
     stored = _legacy_pinned_single_vendor_map()

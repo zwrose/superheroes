@@ -1318,6 +1318,11 @@ def classify_violations(
             rec = dict(v)
             rec["excusedSeats"] = sorted(pinned_seats)
             excused_by_pin.append(rec)
+        elif _maker_families_malformed(seat_map):
+            # axis: a malformed makerFamilies is unusable maker evidence, so the liveness excusal never clears critical-diversity on it — see bite-proof record wo_2537_any_maker_seat (K5)
+            stamped = dict(v)
+            stamped["evidence"] = "unproven-liveness"
+            unexcused.append(stamped)
         else:
             excused_by_liveness.append(dict(v))
 
@@ -1345,6 +1350,15 @@ def _named_makers(seat_map: dict, extra_makers=()) -> set[str]:
     named = {f for f in (raw if isinstance(raw, list) else []) if isinstance(f, str) and f}
     named.update(f for f in extra_makers if isinstance(f, str) and f)
     return named
+
+
+def _maker_families_malformed(seat_map: dict) -> bool:
+    """True when a map carries `makerFamilies` that is not a list of non-empty strings — the same
+    unusable-evidence test `panel_outside_makers` applies."""
+    if not isinstance(seat_map, dict) or "makerFamilies" not in seat_map:
+        return False
+    raw = seat_map["makerFamilies"]
+    return not isinstance(raw, list) or not all(isinstance(f, str) and f for f in raw)
 
 
 def verify(seat_map: dict, author_family: str | None, extra_makers=()) -> list[dict]:
