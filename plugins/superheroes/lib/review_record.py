@@ -1916,6 +1916,11 @@ def _apply_owner_rulings(findings, raw, entries):
     return out
 
 
+# How an unmet linked decision is named in the reason of the finding that cites it.
+_LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
+                 finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
+
+
 def _recheck_decisions(findings, sources):
     """Check every cited decision against what is on record now. A ruling whose cited decision is not on record
     goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
@@ -1929,16 +1934,19 @@ def _recheck_decisions(findings, sources):
         new, unmet, refreshed = None, None, None
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
-            ok, text = finding_outcomes.on_record(by, sources())
+            # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
+            ok, text = finding_outcomes.on_record(
+                by, dict(sources(), findingKey=_key(f), findingSeverity=f.get("severity")))
             if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
-            elif outcome == _RULING and ok and by.get("kind") == finding_outcomes.OWNER_RULING:
+            elif outcome == _RULING and ok and by.get("kind") in finding_outcomes.LINKED_KINDS:
                 refreshed = text
-            elif outcome == _LEFT_FOR_OWNER and by.get("kind") == finding_outcomes.OWNER_RULING and not ok:
+            elif outcome == _LEFT_FOR_OWNER and by.get("kind") in finding_outcomes.LINKED_KINDS and not ok:
                 # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
-                unmet = f"the owner ruling it cites is not on record ({text})"
+                # axis: the same for a scope ruling and an advisor's bound, each named by its own words — see bite-proof record i2532_scope_bound (E-recheck)
+                unmet = f"the {_LINKED_LABEL[by.get('kind')]} it cites is not on record ({text})"
         if new is None:
             if refreshed:
                 # axis: an already-ruling finding whose owner-ruling citation resolves shows the citation as its reason, once, and keeps its outcome — see bite-proof record wo_a_1958_owner_ruling
@@ -2257,7 +2265,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         docs = {}
         for f in findings:
             by, ref = f.get("decidedBy"), None
-            if isinstance(by, dict) and by.get("kind") == finding_outcomes.OWNER_RULING and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
+            # axis: the cited comment of a scope ruling and an advisor's bound is read like an owner ruling's, one read per distinct link — see bite-proof record i2532_scope_bound (E-fetch)
+            if isinstance(by, dict) and by.get("kind") in finding_outcomes.LINKED_KINDS and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
                 ref = by.get("ref")
             url = ref.get("url") if isinstance(ref, dict) else None
             parts = finding_outcomes.comment_permalink(url, a["repo"])[0] if isinstance(url, str) else None
@@ -2279,7 +2288,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
             import calibration_pin
             # axis: a session's record settles cited residuals on the read the session pinned, never the live store
             base = calibration_pin.overlay_residuals(dict(base if isinstance(base, dict) else {}), a.get("pinnedResiduals"))
-            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments())
+            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments(),
+                                   reviewPr=a["pr"], reviewRounds=a["rounds"]["count"])
         return held["sources"]
 
     def canon_on_record(g):

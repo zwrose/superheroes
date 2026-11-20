@@ -379,7 +379,7 @@ def test_without_ownerrulings_nothing_changes_and_the_reader_is_never_called():
 
 def test_t10_decided_by_well_formed_takes_exactly_the_owner_ruling_shape():
     # Axis: the shared shape check names the 4th kind and nothing looser.
-    assert fo.DECISION_KINDS == ("canon", "residual", "sheet-answer", "owner-ruling")
+    assert fo.DECISION_KINDS == ("canon", "residual", "sheet-answer", "owner-ruling", "scope-ruling", "advisor-bound")
     good = {"kind": "owner-ruling", "ref": {"url": U, "words": W}}
     assert fo.decided_by_well_formed(good)
     for ref in ({"url": U}, {"words": W}, {"url": U, "words": W, "extra": 1}, {"url": " ", "words": W}, {"url": U, "words": ""},

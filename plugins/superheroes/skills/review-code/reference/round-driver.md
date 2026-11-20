@@ -582,10 +582,11 @@ prompt** — the driver carries live guidance in the `apply-fixes` step's guidan
 out-of-scope keys from the fix batch.
 
 An entry may also carry `decidedBy`, the decision the ruling rests on:
-`{"kind": "canon" | "residual" | "sheet-answer" | "owner-ruling", "ref": ...}` and nothing else. For `canon` and
+`{"kind": "canon" | "residual" | "sheet-answer" | "owner-ruling" | "scope-ruling" | "advisor-bound", "ref": ...}` and
+nothing else. For `canon` and
 `residual` the `ref` is a non-blank string (the Canon entry's id, or the residual's text); for
-`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`; for `owner-ruling` it is
-`{"url": <non-blank string>, "words": <non-blank string>}`. A `decidedBy` of any other shape
+`sheet-answer` it is `{"pr": <int>, "card": <non-blank string>}`; for `owner-ruling`, `scope-ruling` and
+`advisor-bound` it is `{"url": <non-blank string>, "words": <non-blank string>}`. A `decidedBy` of any other shape
 is refused with `ruling-decided-by-malformed`. `rule` only records it in `rulingsLog`; it does not
 decide the finding's outcome — the end of the loop does (§ Dispositions). An out-of-scope entry cites
 its source in `decidedBy`: a verifier refutation that rests on an out-of-scope ruling (its `reason`

@@ -12,7 +12,13 @@ case it is decided by a named ruling. A decision is on record only when it is an
 entry, a recorded residual, a settled saved sheet answer for the pull request, or an owner ruling
 whose pointer resolves: a readable comment in the pull request's own repository, at the exact
 permalink, that is a standard chat-ruling record whose quoted block holds the owner's words (its
-author is not checked, since every session posts as the owner). Severity never decides an outcome.
+author is not checked, since every session posts as the owner). Two more recorded decisions use the
+same pointer: a scope ruling (an out-of-scope ruling) and the advisor's bound (a prose-contract
+definition of done). Each resolves through a chat-ruling record that holds its words, or through a vet
+receipt on this pull request whose marker line names the finding's key (scope ruling) or states the
+rounds (bound) with the words on the line above; the bound also needs the review's round count to be
+at least the number it states. Severity never decides an outcome, except that a Critical is never
+settled by a scope ruling or the advisor's bound.
 
 The rules are pure: they read no file, run no git or subprocess and touch no network. Callers
 pass text and dicts in. The one reader is decision_sources, which gathers the Canon and residual
@@ -25,8 +31,20 @@ import review_findings_schema
 import session_contract  # no cycle: session_contract's imports never reach this module
 
 OWNER_RULING = "owner-ruling"
-DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING)
-_COMMENT_PERMALINK = re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
+SCOPE_RULING = "scope-ruling"
+ADVISOR_BOUND = "advisor-bound"
+# The kinds whose ref is a comment link and the words: each is read from the cited comment at write time.
+LINKED_KINDS = (OWNER_RULING, SCOPE_RULING, ADVISOR_BOUND)
+DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING, SCOPE_RULING, ADVISOR_BOUND)
+# By value, not imported from vet_slot: a test asserts the two are equal.
+VET_RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
+# Each is matched against one whole line, stripped; the scope key runs to the closing " -->" like the cap-choice marker's.
+_SCOPE_MARKER = re.compile(r"<!-- superheroes:scope-ruling key=(.+) -->")
+_BOUND_MARKER = re.compile(r"<!-- superheroes:advisor-bound rounds=([1-9][0-9]*) -->")
+_ROUND_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_ROUNDS_STATED = re.compile(r"\b([1-9][0-9]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:review\s+)?rounds?\b", re.IGNORECASE)
+_RECEIPT_WORDS_MIN = 12
+_COMMENT_PERMALINK =re.compile(r"https://github\.com/([^/\s#?]+)/([^/\s#?]+)/issues/([0-9]+)#issuecomment-([0-9]+)")
 
 
 RESTS_ON_RULING_FIELD = "restsOnRuling"
@@ -211,7 +229,7 @@ def _sheet_ref_text(ref):
 def decided_by_well_formed(decided_by):
     """True only for {"kind": <DECISION_KINDS>, "ref": ...} with nothing else: ref is a non-blank
     string for canon and residual, {"pr": int, "card": non-blank string} for a sheet answer, and
-    {"url": non-blank string, "words": non-blank string} for an owner ruling."""
+    {"url": non-blank string, "words": non-blank string} for an owner ruling, a scope ruling and an advisor's bound."""
     if not isinstance(decided_by, dict) or set(decided_by) != {"kind", "ref"}:
         return False
     kind, ref = decided_by["kind"], decided_by["ref"]
@@ -220,7 +238,7 @@ def decided_by_well_formed(decided_by):
     if kind == "sheet-answer":
         return (isinstance(ref, dict) and set(ref) == {"pr", "card"} and _is_int(ref["pr"])
                 and isinstance(ref["card"], str) and ref["card"].strip() != "")
-    if kind == OWNER_RULING:
+    if kind in LINKED_KINDS:
         return isinstance(ref, dict) and set(ref) == {"url", "words"} and all(
             isinstance(ref[k], str) and ref[k].strip() != "" for k in ("url", "words"))
     return isinstance(ref, str) and ref.strip() != ""
@@ -242,22 +260,34 @@ def comment_permalink(url, repo):
     return (owner, name, number, int(comment)), None
 
 
-def _owner_ruling_on_record(ref, sources):
-    """(True, text) when the ruling's pointer resolves through every leg, else (False, why); see on_record."""
+def _linked_comment(ref, sources):
+    """The comment a linked kind's ref points at, as ((url, words, issue number, body), None), or (None, why).
+
+    The comment legs every linked kind shares: the ref names a link and words, the link is a comment permalink in the
+    pull request's own repository, and the comment read (sources["ownerRulings"][url]) is that comment on that issue."""
     url, words = (ref.get("url"), ref.get("words")) if isinstance(ref, dict) else (None, None)
     if not (isinstance(url, str) and url.strip() and isinstance(words, str) and words.strip()):
-        return False, "the ruling names no link or words"
+        return None, "the ruling names no link or words"
     parts, why = comment_permalink(url, sources.get("repo"))
     if parts is None:
-        return False, why
+        return None, why
     owner, name, number, comment_id = parts
     read = sources.get("ownerRulings")
     doc = read.get(url) if isinstance(read, dict) else None
     # axis: the comment read must be the one the link names, on the issue the link names — see bite-proof record wo_a_1958_owner_ruling
+    # axis: the same holds for a scope ruling and an advisor's bound, whose comment is read the same way — see bite-proof record i2532_scope_bound (E-link)
     if not (isinstance(doc, dict) and _is_int(doc.get("id")) and doc["id"] == comment_id and isinstance(doc.get("issue_url"), str)
             and doc["issue_url"].lower().endswith(f"/repos/{owner}/{name}/issues/{number}".lower())):
-        return False, "the ruling's comment could not be read"
-    body = doc.get("body")
+        return None, "the ruling's comment could not be read"
+    return (url, words, int(number), doc.get("body")), None
+
+
+def _owner_ruling_on_record(ref, sources):
+    """(True, text) when the ruling's pointer resolves through every leg, else (False, why); see on_record."""
+    got, why = _linked_comment(ref, sources)
+    if got is None:
+        return False, why
+    url, words, _, body = got
     quoted = canon.ruling_record_words(body)
     # axis: only a standard chat-ruling record is a ruling, since every session posts as the owner — see bite-proof record wo_a_1958_owner_ruling
     if quoted is None:
@@ -268,16 +298,111 @@ def _owner_ruling_on_record(ref, sources):
     return True, 'owner ruling "%s" (%s)' % (words, url)
 
 
+def _stated_rounds(words):
+    """The number of rounds ``words`` state (an int), or None: the first digits or number word before `round(s)`."""
+    found = _ROUNDS_STATED.search(words)
+    if found is None:
+        return None
+    return int(found.group(1)) if found.group(1).isdigit() else _ROUND_WORDS[found.group(1).lower()]
+
+
+def _receipt_decision(kind, lines, words, key):
+    """(True, rounds) when a decision line of the vet receipt records this decision, else (False, None).
+
+    A line counts only when it is a marker line of the cited kind (a scope ruling's key equals ``key``, a non-blank
+    string; a bound's marker states its rounds, returned) and the nearest non-blank line above it holds the squashed
+    words, which must be at least `_RECEIPT_WORDS_MIN` visible characters. Text elsewhere in the receipt never counts."""
+    held = _squash(words)
+    # axis: words under the minimum count for no line, so a short boilerplate phrase the receipt happens to hold is never a decision — see bite-proof record i2532_scope_bound (E-receipt-line)
+    if len(held) < _RECEIPT_WORDS_MIN:
+        return False, None
+    for at, line in enumerate(lines):
+        text = line.strip()
+        if kind == SCOPE_RULING:
+            marked = _SCOPE_MARKER.fullmatch(text)
+            # axis: a scope-ruling marker line names this finding's key, never another finding's — see bite-proof record i2532_scope_bound (E-receipt-line)
+            if marked is None or not (isinstance(key, str) and key.strip() and marked.group(1) == key):
+                continue
+            rounds = None
+        else:
+            marked = _BOUND_MARKER.fullmatch(text)
+            if marked is None:
+                continue
+            rounds = int(marked.group(1))
+        above = next((l for l in reversed(lines[:at]) if l.strip()), "")
+        # axis: the words sit on the nearest non-blank line above the marker line, so no marker adopts words from elsewhere in the receipt — see bite-proof record i2532_scope_bound (E-receipt-line)
+        if held in _squash(above):
+            return True, rounds
+    return False, None
+
+
+def _scope_or_bound_on_record(kind, ref, sources):
+    """(True, text) when a scope ruling's or an advisor's bound's pointer resolves through every leg, else (False, why).
+
+    The legs, in order: a Critical never settles this way; the shared comment legs; then the comment is either a
+    standard chat-ruling record whose quoted block holds the words (a bound's words also state a number of rounds),
+    or a vet receipt on this pull request holding a decision line of the kind (see _receipt_decision); any other body
+    is refused. A bound also needs the review's round count to be at least the rounds it states."""
+    # axis: a Critical finding is never settled by a scope ruling or the advisor's bound, checked before the comment is read — see bite-proof record i2532_scope_bound (E-critical)
+    if sources.get("findingSeverity") == "Critical":
+        return False, "a Critical finding is never settled by a scope ruling or the advisor's bound"
+    got, why = _linked_comment(ref, sources)
+    if got is None:
+        return False, why
+    url, words, number, body = got
+    quoted = canon.ruling_record_words(body)
+    lines = body.splitlines() if isinstance(body, str) else []
+    receipt = quoted is None and bool(lines) and lines[0].rstrip() == VET_RECEIPT_MARKER
+    # axis: a body that is neither a chat-ruling record nor a vet receipt is no ruling or bound — see bite-proof record i2532_scope_bound (E-neither)
+    if quoted is None and not receipt:
+        return False, "the ruling's comment is neither a chat-ruling record nor a vet receipt"
+    stated = None
+    if quoted is not None:
+        # axis: the quoted block of the chat-ruling record must hold the words — see bite-proof record i2532_scope_bound (E-chat)
+        if _squash(words) not in _squash(quoted):
+            return False, "the ruling's comment does not hold the owner's words"
+        if kind == ADVISOR_BOUND:
+            stated = _stated_rounds(words)
+            # axis: a bound's words must state a number of rounds — see bite-proof record i2532_scope_bound (E-chat-rounds)
+            if stated is None:
+                return False, "the bound's words state no number of rounds"
+    else:
+        pr = sources.get("reviewPr")
+        # axis: a vet receipt counts only on the pull request under review — see bite-proof record i2532_scope_bound (E-receipt-pr)
+        if not (_is_int(pr) and number == pr):
+            return False, "the vet receipt is not on this pull request"
+        found, stated = _receipt_decision(kind, lines, words, sources.get("findingKey"))
+        if not found:
+            if kind == SCOPE_RULING:
+                return False, "the vet receipt records no scope ruling for this finding with these words"
+            return False, "the vet receipt records no advisor's bound with these words"
+    if kind == ADVISOR_BOUND:
+        count = sources.get("reviewRounds")
+        if not _is_int(count):
+            return False, "the review's round count is unknown"
+        # axis: the review must have run at least the rounds the bound states — see bite-proof record i2532_scope_bound (E-bound-rounds)
+        if count < stated:
+            return False, "the review ran %d rounds, fewer than the bound's %d" % (count, stated)
+        return True, 'advisor\'s bound "%s" (%s)' % (words, url)
+    return True, 'scope ruling "%s" (%s)' % (words, url)
+
+
 def on_record(decided_by, sources):
     """Decide whether a cited owner decision is on record: (True, what) or (False, why).
 
-    decided_by is {"kind": canon | residual | sheet-answer | owner-ruling, "ref": ...}; sources may hold
-    canonText, residualText, residualSource, sheetAnswers, pr, and for an owner ruling repo and ownerRulings
-    ({link: the comment's JSON}). An owner ruling is on record only when its link is an issue-comment permalink in
+    decided_by is {"kind": canon | residual | sheet-answer | owner-ruling | scope-ruling | advisor-bound, "ref": ...};
+    sources may hold canonText, residualText, residualSource, sheetAnswers, pr, and for the three linked kinds repo and
+    ownerRulings ({link: the comment's JSON}), and for a scope ruling or an advisor's bound also reviewPr (the pull
+    request number), reviewRounds (the review's round count), findingKey (the finding's stored key) and findingSeverity.
+    An owner ruling is on record only when its link is an issue-comment permalink in
     the pull request's own repository, the comment read is that comment on that issue, its body is a standard
-    chat-ruling record (canon.ruling_record_words), and that record's quoted block holds the words. The comment's
-    author_association is not read: every session posts as the owner, and on an organisation-owned repository the
-    owner's own comment reads MEMBER. Never raises.
+    chat-ruling record (canon.ruling_record_words), and that record's quoted block holds the words. A scope ruling or an
+    advisor's bound needs the same comment legs and then either a chat-ruling record that holds the words (a bound's
+    words also state a number of rounds), or a vet receipt on pull request reviewPr whose decision line (a scope-ruling
+    marker line naming findingKey, or an advisor-bound marker line stating its rounds) has the words on the line
+    above; a bound also needs reviewRounds to be at least the rounds it states, and a Critical finding is never settled
+    by either. The comment's author_association is not read: every session posts as the owner, and on an
+    organisation-owned repository the owner's own comment reads MEMBER. Never raises.
     """
     if not isinstance(decided_by, dict):
         return False, "no decision was cited"
@@ -291,6 +416,8 @@ def on_record(decided_by, sources):
         return False, "the cited decision names no reference"
     if kind == OWNER_RULING:
         return _owner_ruling_on_record(ref, sources)
+    if kind in (SCOPE_RULING, ADVISOR_BOUND):
+        return _scope_or_bound_on_record(kind, ref, sources)
     if kind == "canon":
         text = sources.get("canonText")
         if not isinstance(text, str):
