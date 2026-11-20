@@ -1759,6 +1759,10 @@ def validate_recoveries(bundle, recoveries):
                         % type(recoveries).__name__])
     surfaced_ids = {s.get("id") for s in (bundle or {}).get("surfaced") or []
                     if isinstance(s, dict) and isinstance(s.get("id"), str)}
+    # The decisions resolve a surfaced id through `guardian_ledger.match`, which compares the
+    # line-drift-tolerant identity, so the overlap check compares that identity too.
+    surfaced_identities = {guardian_ledger.normalize_id(sid) for sid in surfaced_ids}
+    surfaced_identities.discard("")
     errors = []
     seen = set()
     for i, entry in enumerate(recoveries):
@@ -1783,9 +1787,9 @@ def validate_recoveries(bundle, recoveries):
         if rid in seen:
             errors.append("%s: duplicate id — name each record once" % label)
         seen.add(rid)
-        # Axis: an id that also surfaced this sweep is refused — that finding goes through
-        # its disposition, never through a recovery.
-        if rid in surfaced_ids:
+        # Axis: an id that also surfaced this sweep, exactly or as the same line-drifted
+        # identity, is refused — that finding goes through its disposition, never a recovery.
+        if rid in surfaced_ids or guardian_ledger.normalize_id(rid) in surfaced_identities:
             errors.append("%s: also surfaced this sweep — that finding goes through its "
                           "disposition, not a recovery" % label)
     return (len(errors) == 0, errors)
@@ -1978,7 +1982,7 @@ def main(argv=None):
     clp.add_argument("--dispositions", required=True)
     clp.add_argument("--recoveries", default=None)
 
-    vp =sub.add_parser("verify-config")
+    vp = sub.add_parser("verify-config")
     vp.add_argument("--cwd", default=".")
     vp.add_argument("--root", default=None)
 

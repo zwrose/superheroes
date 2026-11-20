@@ -4405,10 +4405,46 @@ def test_commit_ledger_without_recoveries_writes_the_same_bytes_and_adds_two_emp
 
     def norm(repo, root, bundle):
         text = open(gs.ledger_path(repo, root), encoding="utf-8").read()
-        return re.sub(r"updated=\S+|created=\S+", "", text).replace(bundle["sweepId"], "SWEEP")
+        # The two fixture repos commit at their own clock times, so their swept commits differ;
+        # the comparison is about the recovery input, not the commit, so both are normalized.
+        text = re.sub(r"updated=\S+|created=\S+", "", text).replace(bundle["sweepId"], "SWEEP")
+        return text.replace(bundle["sweptSha"], "SWEPT-SHA")
 
     assert norm(repo_a, root_a, bundle_a) == norm(repo_b, root_b, bundle_b)
     assert _record(repo_a, root_a, QUIET)["disposition"] == "declined"
+
+
+@pytest.mark.parametrize("surfaced_id,recovery_id", [
+    ("deadcode:x:a.py:20", "deadcode:x:a.py:10"),
+    ("deadcode:x:a.py:20", "deadcode:x:a.py:20"),
+])
+def test_validate_recoveries_refuses_an_id_that_is_a_surfaced_finding_after_line_drift(
+        surfaced_id, recovery_id):
+    # Axis: the overlap check compares the identity `guardian_ledger.match` resolves (line
+    # numbers stripped), so a recovery cannot name the record a surfaced disposition settles.
+    bundle = {"surfaced": [{"id": surfaced_id}]}
+    ok, errors = gsw.validate_recoveries(bundle, [{"id": recovery_id, "issue": "#7"}])
+    assert ok is False
+    assert errors == ["%s: also surfaced this sweep — that finding goes through its "
+                      "disposition, not a recovery" % recovery_id]
+
+
+def test_validate_recoveries_accepts_an_id_whose_identity_did_not_surface():
+    # Axis: a different file's finding is not refused by the identity overlap check.
+    bundle = {"surfaced": [{"id": "deadcode:x:a.py:20"}]}
+    assert gsw.validate_recoveries(
+        bundle, [{"id": "deadcode:x:b.py:10", "issue": "#7"}]) == (True, [])
+
+
+def test_commit_ledger_refuses_a_recovery_that_aliases_a_surfaced_declined_record(tmp_path):
+    # Axis: end to end, a line-drifted surfaced decision and a recovery naming the stored record
+    # are refused together, and the ledger keeps its declined record.
+    bundle = {"surfaced": [{"id": "deadcode:x:a.py:20"}], "sweepId": "s1"}
+    res = gsw.commit_ledger(str(tmp_path), bundle, [{"id": "deadcode:x:a.py:20",
+                                                      "verdict": "rejected", "reason": "noise"}],
+                            recoveries=[{"id": "deadcode:x:a.py:10", "issue": "#7"}])
+    assert res["ok"] is False
+    assert res["reason"] == "invalid-recoveries"
 
 
 def test_cli_commit_ledger_threads_recoveries_file_through(tmp_path):
