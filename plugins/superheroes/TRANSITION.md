@@ -18,6 +18,21 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed: `review_record.py` gains the verb `read-all --pr <n>`, and `read` answers as before.** The advisor's gardening pass now gathers every review record of a PR with it. See [Review record: read-all returns every review record of a PR](#review-record-read-all-returns-every-review-record-of-a-pr).
+
+### Review record: read-all returns every review record of a PR
+
+- **The verb.** `python3 -B lib/review_record.py read-all --pr <n>` answers `{"ok", "pr", "records", "unreadable"}`. `records` lists every record of the PR that parses, oldest first, each with its `url`. `unreadable` lists each record comment that does not, as `{"id", "url", "detail"}`. It refuses `review-record-missing` when the PR has no record comment and `review-record-gh-failed` when the comments cannot be listed. Exit 0 when `ok`, else 1.
+- **The reading.** A record comment that does not parse, or raises while parsing, is named in `unreadable` and never costs another record. A record changed in transit that still parses is in `records` with its `transitDamage`.
+- **The gardening pass.** Duty 3 feeds `records` plus every `unreadable` entry to the tally and to the measures row, so a PR with an unreadable record reads as incomplete evidence, never as a short list.
+- Replacement. None: no existing key, token or shape changes; `read` is unchanged.
+
 ## 0.51.1
 
 ### Before you upgrade
