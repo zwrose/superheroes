@@ -545,3 +545,15 @@ FAILED plugins/superheroes/lib/tests/test_review_record_scope_bound_2532.py::tes
 - **raw red** (exit 1): `E   assert (True, 'owner...comment-777)') == (False, "the ...nt permalink")` at `test_review_record_scope_bound_2532.py:205`; `1 failed in 0.42s`
 
 **restore receipts:** `ok, text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), f))`; `if not held:`; `form = _PULL_COMMENT_PERMALINK if kind in (SCOPE_RULING, ADVISOR_BOUND) else _COMMENT_PERMALINK`. `git status --porcelain` on the probe worktree read empty after the last restore.
+
+## Review round 3 change (orchestrator-typed fix, commit `369d8b5`)
+
+**Superseded:** the two E-pull-link entries above. Round 3 made every linked kind (an owner ruling too) take the `/pull/` link, so the kind-chosen form, its `_PULL_COMMENT_PERMALINK` constant and the test `test_an_owner_ruling_never_takes_a_pull_request_permalink` are gone; the E-pull-link (accept) detector still stands and is unchanged. The leg is now the one `_COMMENT_PERMALINK` pattern.
+
+### E-pull-link (every linked kind)
+
+- **file:** `plugins/superheroes/lib/finding_outcomes.py` (`_COMMENT_PERMALINK`, read by `comment_permalink`)
+- **detector:** `test_every_linked_kind_takes_a_pull_request_permalink`
+- **neutralization:** `/(?:issues|pull)/([0-9]+)#issuecomment` → `/issues/([0-9]+)#issuecomment` (the pre-change form), one Edit-tool edit in a detached probe worktree at `369d8b5`
+- **raw red** (exit 1): `E   assert (False, "the ...nt permalink") == (True, 'owner...comment-777)')` at `test_review_record_scope_bound_2532.py:206`; `1 failed in 15.56s`
+- **restore:** the inverse Edit-tool edit; `git status --porcelain` read empty. **raw green** (exit 0): `1 passed in 0.94s`.
