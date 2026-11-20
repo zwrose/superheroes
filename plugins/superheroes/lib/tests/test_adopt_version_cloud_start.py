@@ -71,10 +71,11 @@ def calibration_stamp(files):
 # A stand-in whose `stamped_files` answers a view of bytes, holding the inventory entry as given.
 _BYTES_SETUP_TEXT = '''\
 INVENTORY = {inventory!r}
+STEPS = {steps!r}
 
 
 def stamped_files(cwd, root):
-    return {{"setup-steps": b"steps\\n", "setup-plugin-inventory": INVENTORY}}
+    return {{"setup-steps": STEPS, "setup-plugin-inventory": INVENTORY}}
 '''
 
 # A stand-in that, like a release's own code, reads the pin hook with its own reader (here one that
@@ -331,9 +332,10 @@ def test_a_project_with_no_pin_hook_gets_no_override(capsys, tmp_path):
     assert data["cloudStartChanged"] is True
 
 
-def _old_inventory_trees(cache, first, second, **second_change):
-    _tree(cache, "0.1.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=first))
-    _tree(cache, "0.2.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=second), **second_change)
+def _old_inventory_trees(cache, first, second, steps=(b"steps\n", b"steps\n"), **second_change):
+    _tree(cache, "0.1.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=first, steps=steps[0]))
+    _tree(cache, "0.2.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=second, steps=steps[1]),
+          **second_change)
 
 
 def test_an_older_definitions_inventory_is_re_read_under_the_current_one(capsys, tmp_path):
@@ -346,6 +348,19 @@ def test_an_older_definitions_inventory_is_re_read_under_the_current_one(capsys,
     assert entry["stampDefinitionChanged"] is False
     assert entry["setupSteps"] is False
     assert data["cloudStartChanged"] is False
+
+
+def test_an_older_definitions_re_read_keeps_a_setup_step_change(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    # axis: re-reading an older inventory replaces only that entry; a setup-step change still counts
+    _old_inventory_trees(cache, b"agent one\n", b"agent one\n",
+                         steps=(b"install tool@1\n", b"install tool@2\n"))
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    entry = data["cloudStart"][0]
+    assert entry["startLoaded"] == []
+    assert entry["stampDefinitionChanged"] is False
+    assert entry["setupSteps"] is True
+    assert data["cloudStartChanged"] is True
 
 
 def test_an_older_definitions_inventory_moves_with_the_start_hook(capsys, tmp_path):
