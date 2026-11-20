@@ -31,6 +31,22 @@ LENS_SEATS = (
 LEGACY_SEAT_ALIASES = {"test-reviewer": "test-role"}
 # Every seat a roster may name, the architecture reviewer included.
 KNOWN_SEATS = LENS_SEATS
+
+
+def unknown_pin_seats(keys):
+    """The string keys in `keys` that no roster may name: not in KNOWN_SEATS and not a key of
+    LEGACY_SEAT_ALIASES (a live alias, never stale). Sorted; non-string keys are ignored. Pure and
+    never raises on any iterable of keys (a dict passes its keys); an input that cannot be iterated
+    yields []. Report only: nothing here writes, rewrites or drops a pin."""
+    try:
+        return sorted({k for k in keys
+                       if isinstance(k, str)
+                       and k not in KNOWN_SEATS
+                       and k not in LEGACY_SEAT_ALIASES})
+    except Exception:
+        return []
+
+
 # The risky full-lane roster: the default for any caller that names no roster, and the roster a
 # change with a touched or unclear risk gets. The architecture reviewer is not on it.
 PANEL_ROSTER = tuple(s for s in KNOWN_SEATS if s != "architecture-reviewer")
