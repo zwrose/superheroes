@@ -4789,17 +4789,18 @@ def test_assertable_seat_map_allows_excused_derived_violations():
     m = _assertable_seat_map(["claude", "codex"], "codex")
     assert SM.unexcused_violations(m, "openai") == []
     # #2530: this panel (all claude, author openai) is outside every maker's family, so it carries no
-    # critical-diversity record at all. The excused derived violation this test pins needs a panel that
-    # is not: the same map with its one shared family (anthropic) also named a maker, the record stored.
+    # critical-diversity record at all. #2537: naming its family a maker would make every seat a
+    # maker-family breach, so the excused derived violation this test pins is a pinned strong-tier seat
+    # below reviewer-deep, its record stored — excused by pin, the panel still outside every maker.
     assert SM.derived_violations(m, "openai") == []
+    seat = "security-reviewer"
     held = dict(
-        m, makerFamilies=sorted(set(m["makerFamilies"]) | {"anthropic"}),
-        violations=[{"constraint": "critical-diversity"}],
+        m, seats={**m["seats"], seat: {**m["seats"][seat], "tier": "reviewer", "source": "pinned"}},
+        violations=[{"constraint": "strong-tier", "seat": seat}],
     )
-    # #2537: the claude seats now sit in a named maker's family, so each carries a maker-family breach;
-    # the critical-diversity record this test pins stays excused
-    assert [v for v in SM.unexcused_violations(held, "openai") if v.get("constraint") != "maker-family"] == []
-    assert SM.derived_violations(held, "openai") != []
+    assert SM.unexcused_violations(held, "openai") == []
+    assert {"constraint": "strong-tier", "seat": seat} in SM.derived_violations(held, "openai")
+    assert SM.classify_violations(held, "openai")["excusedByPin"]
 
 
 def _all_run_status(dims=None):
