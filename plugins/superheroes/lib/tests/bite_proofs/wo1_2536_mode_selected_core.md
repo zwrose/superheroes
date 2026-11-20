@@ -406,3 +406,31 @@ FAILED plugins/superheroes/lib/tests/test_mode_selected_core_2536.py::test_a_mod
 ...........                                                              [100%]
 11 passed in 1.26s
 ```
+
+---
+
+## G2a the in-repo direction against a disagreeing fallback (review round 1 fix)
+
+The review's test seat found the G2 in-repo test passing without the in-repo override, because its winning layer's
+own core was already the in-repo core. The test now lets the global layer win the branch, so the fallback names the
+global core. Run by the build session (orchestrator) with the same command; the test unedited between red and green.
+
+**Guarded element:** `_mode_selected_core`, the in-repo arm of the return. Axis: with the mode in-repo, `dispatch_core`
+is the in-repo core even when the winning branch's own core is the global one.
+
+**Neutralization:** `    return in_repo if mode == mode_registry.IN_REPO else global_path` changed to
+`    return None if mode == mode_registry.IN_REPO else global_path`.
+
+**Raw red:**
+```
+FAILED plugins/superheroes/lib/tests/test_mode_selected_core_2536.py::test_both_cores_in_repo_mode_dispatches_the_in_repo_core
+1 failed, 10 passed in 4.80s
+```
+
+**Restore:** inverse Edit. **Restore receipt:** `git status --porcelain plugins/superheroes/lib/calibration_resolve.py`
+printed nothing after the restore.
+
+**Raw green:**
+```
+11 passed in 1.00s
+```

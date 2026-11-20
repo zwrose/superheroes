@@ -135,11 +135,17 @@ def test_both_cores_global_mode_dispatches_the_global_core(repo):
     assert len(got) == 1 and got[0]["path"] == _global_core(repo) and got[0]["sha256"] == _sha(_global_core(repo))
 
 
-def test_both_cores_in_repo_mode_dispatches_the_in_repo_core(repo):
+def test_both_cores_in_repo_mode_dispatches_the_in_repo_core(bare):
     # axis: with both cores regular files and the mode in-repo, dispatch_core is the in-repo core, not the global one
-    _record_mode(repo, mode_registry.IN_REPO)
-    assert _dispatch_core(repo) == _inrepo_core(repo)
-    assert calibration_read.resolved_paths(repo)[0] == _inrepo_core(repo)
+    # the global layer wins the branch, so the branch's own core (the fallback) is the global core and disagrees
+    _put_core(_global_core(bare), _GLOBAL_VERIFY)
+    _put_core(_inrepo_core(bare), _STALE_VERIFY)
+    _put(_global_layer(bare), _LAYER_TEXT)
+    _record_mode(bare, mode_registry.IN_REPO)
+    info = calibration_resolve.resolve(bare)
+    assert info["core_path"] == _global_core(bare)  # premise: the fallback names the other core
+    assert info["dispatch_core"] == _inrepo_core(bare)
+    assert calibration_read.resolved_paths(bare)[0] == _inrepo_core(bare)
 
 
 def test_mode_is_read_without_writing_a_registry(unrecorded):
