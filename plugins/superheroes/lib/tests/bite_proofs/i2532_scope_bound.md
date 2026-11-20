@@ -509,3 +509,39 @@ FAILED plugins/superheroes/lib/tests/test_review_record_scope_bound_2532.py::tes
 .                                                                        [100%]
 1 passed in 0.35s
 ```
+
+---
+
+## Review round 1 additions (orchestrator-typed fix, commit `90801f8`)
+
+**Provenance:** the build orchestrator (claude), at the review loop's apply-fixes step; run from a detached probe worktree at `5f283fb`, an unpushed first cut of the same fix that was remade as `90801f8` only to drop one trailing newline the break-it test file had gained in extraction (production code identical; the test file now holds the test role's bytes exactly). Same command shape as above (`pytest "<node>" -q -p no:xdist --tb=line`), one Edit-tool neutralization each, restored by the inverse Edit-tool edit, each run sequential. The two E-repeat detectors are the review's own break-it test (`test_review_scope_bound_critical_repeat_break_it.py`, written by the test role, kept byte for byte); the E-pull-link detectors are in `test_review_record_scope_bound_2532.py`. The green for all four is one run of both detector files on the restored tree: `63 passed in 0.65s`. Nothing quoted is a secret, token, private URL or personal detail; nothing is redacted.
+
+### E-repeat
+
+- **file:** `plugins/superheroes/lib/review_record.py` (`_follow_repeats`, the repeat's own check)
+- **detector:** `test_critical_recipient_keeps_its_owner_card[repeat-advisor-bound]`
+- **neutralization:** `_finding_sources(sources(), f)` → `sources()` in the repeat's `on_record` call
+- **raw red** (exit 1): `E   AssertionError: assert 'ruling' == 'left-for-owner'` at `test_review_scope_bound_critical_repeat_break_it.py:41`; `1 failed in 0.50s`
+
+### E-repeat-member
+
+- **file:** `plugins/superheroes/lib/review_record.py` (`_follow_repeats`, each merged member's own check)
+- **detector:** `test_critical_recipient_keeps_its_owner_card[member-scope-ruling]`
+- **neutralization:** `if not held:` → `if False and not held:`
+- **raw red** (exit 1): `E   AssertionError: assert 'ruling' == 'left-for-owner'` at `test_review_scope_bound_critical_repeat_break_it.py:41`; `1 failed in 0.50s`
+
+### E-pull-link (accept)
+
+- **file:** `plugins/superheroes/lib/finding_outcomes.py` (`comment_permalink`)
+- **detector:** `test_a_receipt_linked_by_its_pull_request_permalink_resolves` (both kinds)
+- **neutralization:** the kind-chosen form → `form = _COMMENT_PERMALINK` for every kind
+- **raw red** (exit 1): `E   AssertionError: assert [] == [('o/r', 777)]` at `test_review_record_scope_bound_2532.py:198`, for both parameters; `2 failed in 3.86s`
+
+### E-pull-link (owner refuses)
+
+- **file:** `plugins/superheroes/lib/finding_outcomes.py` (`comment_permalink`)
+- **detector:** `test_an_owner_ruling_never_takes_a_pull_request_permalink`
+- **neutralization:** the kind-chosen form → `form = _PULL_COMMENT_PERMALINK` for every kind
+- **raw red** (exit 1): `E   assert (True, 'owner...comment-777)') == (False, "the ...nt permalink")` at `test_review_record_scope_bound_2532.py:205`; `1 failed in 0.42s`
+
+**restore receipts:** `ok, text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), f))`; `if not held:`; `form = _PULL_COMMENT_PERMALINK if kind in (SCOPE_RULING, ADVISOR_BOUND) else _COMMENT_PERMALINK`. `git status --porcelain` on the probe worktree read empty after the last restore.
