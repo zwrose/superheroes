@@ -696,10 +696,11 @@ def test_the_cli_status_remove_and_write(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize("verb", ["write", "remove"])
 def test_write_and_remove_refuse_a_commit_they_would_not_use(tmp_path, monkeypatch, capsys, verb):
     root = _repo(tmp_path / "p", {})
-    monkeypatch.setattr(pin_mod, "installed_pin", lambda cwd, env=None: (PIN, None))
+    installed = {**PIN, "commit": "b" * 40, "version": "1.2.4"}
+    monkeypatch.setattr(pin_mod, "installed_pin", lambda cwd, env=None: (installed, None))
     assert pin_mod.sync(str(root), PIN)["action"] == "written"
     _commit_all(root)
-    before = {p: (root / p).read_bytes() for p in (SCRIPT_PATH, SETTINGS_PATH)}
+    before = {p: (root / p).read_bytes() for p in (SCRIPT_PATH, SETTINGS_PATH, PIN_PATH)}
     assert pin_mod.main([verb, "--cwd", str(root), "--commit", "37965f6c"]) == 1
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "refused" and out["reason"] == "commit-not-used" and out["changed"] == []
