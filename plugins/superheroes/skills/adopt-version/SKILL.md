@@ -163,8 +163,12 @@ record from the new root: `lib/cloud_setup.py` `read --cwd <project>` for the la
 owes nothing here. Where a record's `pluginVersion` is not **to**, read the project's plugin pin
 hook (`lib/cloud_plugin_pin.py` `status --cwd <project>`) and run `plan` again with
 `--project <project>`. Its `cloudStart` entries, one per installed release in range, each name the
-parts a cloud session loads at start that changed (`startLoaded`) and whether the project's setup
-stamp, computed by each release's own code, differs (`setupSteps`); `cloudStartChanged` sums them,
+changed parts a cloud session reads from the setup-text copy before the pin hook swaps the plugin:
+the plugin's SessionStart registrations and the start hook's read set (`startLoaded`). They also say
+whether the project's setup stamp, computed by each release's own code with the project's pin hook
+read as valid for that release, differs (`setupSteps`). `stampDefinitionChanged` is true when the
+two releases define the stamp differently, and a change of the stamp's definition owes a paste:
+`setupSteps` is true whenever it is. `cloudStartChanged` sums them,
 and a null in either counts as changed. The two owed steps add up, as the after-release
 rule in `skills/configure/reference/set-up.md` ("The plugin pin hook", *When a pin commit is
 enough, and when a paste is still needed*) says; that page is the rule's home. Per environment:
