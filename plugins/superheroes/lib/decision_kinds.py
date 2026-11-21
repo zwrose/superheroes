@@ -24,6 +24,7 @@ DECISION_KINDS = (
     "break-it-correction-unseatable",
     "break-it-kept",
     "break-it-restore-failed",
+    "break-it-restore-transit-redacted",
     "break-it-run",
     "break-it-test-malformed",
     "break-it-test-mismatch",

@@ -26,6 +26,16 @@ Check these in a consuming project when it adopts the next release. Each step na
 
 - **After switching.** **Nothing is owed by a caller: a seat map with a seat in a maker's family other than the author's (one the map's `makerFamilies` or the session's makers name) now carries a `maker-family` violation for that seat, so its certificate reads `-constraint-violated` where it read the plain shape or `-degraded` before. A map whose `makerFamilies` is malformed never has its `critical-diversity` excused by liveness, so some such maps that read clean now read `-constraint-violated` too.** No key, token or result shape changes. See [Seat map: a seat in any maker's family is a maker seat](#seat-map-a-seat-in-any-makers-family-is-a-maker-seat).
 - **After switching.** **Nothing is owed: `review_record.py` gains the verb `read-all --pr <n>`, and `read` answers as before.** The advisor's gardening pass now gathers every review record of a PR with it. See [Review record: read-all returns every review record of a PR](#review-record-read-all-returns-every-review-record-of-a-pr).
+- **After switching.** **Nothing is owed: a PR that conflicts with its base now goes back to its builder, and the advisor no longer commits a conflict resolution.** No command, argument or result changes. See [Merge train: a conflicting PR goes back to its builder](#merge-train-a-conflicting-pr-goes-back-to-its-builder).
+- **After switching.** **Nothing is owed by a caller: `head_coverage.py check` gains `--union-proof FILE`, and every answer without it is unchanged.** A vet that merged a PR with its base to test the union may record a proof so a later bring-current identical to that merge keeps the owner's word. See [Head coverage: a bring-current identical to the vet's tested union keeps the owner's word](#head-coverage-a-bring-current-identical-to-the-vets-tested-union-keeps-the-owners-word).
+
+### Merge train: a conflicting PR goes back to its builder
+
+- **What changes in the advisor's practice.** When an open PR, a single PR or a layer of a stack, conflicts with its base, or bringing it current meets a conflict, the advisor sends it back to its builder (a cloud lane by a send-back order in the issue's STATE line plus the relay, a local lane by its own session, a lane whose session is gone by an adoption, except a stack layer above the bottom, which cannot be adopted before it holds the layer below's head and so is parked to the owner). The builder makes the merge commit, runs the returning review on the merge and hands back. Before, duty 6 listed conflict resolution under an advisor-authored recipe among the mechanical duties a subagent could do, and the merge-train guide sent only a conflicting stack layer back.
+- **Why.** The head-coverage check clears only a move the builder made, so an advisor-authored resolution read `needs-review`, put the PR outside the owner's merge word, and sent its sheet back unsigned though nothing material changed.
+- **Unchanged.** The red train's craft fix and a union fix riding the last open PR.
+- Homes: `skills/showrunner/SKILL.md` duty 6, `skills/showrunner/reference/merge-train.md` § A PR that conflicts with its base goes back to its builder, `skills/showrunner/reference/excuses.md`, `rubric/review-discipline.md` (post-handback merges).
+- Replacement. None: no key, token, argument or result shape changes.
 
 ### Seat map: a seat in any maker's family is a maker seat
 
@@ -41,6 +51,13 @@ Check these in a consuming project when it adopts the next release. Each step na
 - **The reading.** A record comment that does not parse, or raises while parsing, is named in `unreadable` and never costs another record. A record changed in transit that still parses is in `records` with its `transitDamage`.
 - **The gardening pass.** Duty 3 feeds `records` plus every `unreadable` entry to the tally and to the measures row, so a PR with an unreadable record reads as incomplete evidence, never as a short list.
 - Replacement. None: no existing key, token or shape changes; `read` is unchanged.
+
+### Head coverage: a bring-current identical to the vet's tested union keeps the owner's word
+
+- **The proof.** `lib/head_coverage.py check` takes `--union-proof FILE` beside `--proof FILE`: `{"schema": "union-probe/1", "probe": <full commit sha>, "tree": <full tree sha>, "base": <full commit sha>, "receipt": {"command": <non-blank string>, "exitCode": 0, "tree": <full tree sha>}}`. The vet writes it when it merged the PR with its base, or with a PR about to land in it, and ran the tests on that merge in a clean detached worktree. An unreadable file is a usage error (exit 2); a readable file of the wrong shape is ignored with reason `malformed`.
+- **The rule.** The proof is consulted only when the check without it does not answer `proven` and the review record is an ok, unabandoned record with a full final commit sha (otherwise `not-consulted`). Git then checks, in order: the shape (`malformed`); the receipt, with exactly the keys `command`, `exitCode` and `tree`, a non-blank command, exit code 0 and the proof's tree (`no-receipt`); that the check's `--base` is exactly the proof's `base` commit, an equal tree not being enough (`other-base`); that the probe reads as a commit (`probe-unreadable`); that git's tree of the probe is the proof's `tree` (`tree-unconfirmed`); that the probe has exactly two parents, the base and one other commit that is the commit the record certifies or one the check, with no union proof, answers `proven` from that commit (`other-commit`); that the base is an ancestor of the head (`head-not-current`); and that the head's tree is git's tree of the probe, every file identical byte for byte and mode for mode (`other-tree`).
+- **What a reader sees differently.** A code bring-current whose head tree is the vet's tested union probe on the same base now answers `proven` with why token `proven-union`, so the carry check covers it and the sheet is republished carried, with the owner's word kept. Before, it answered `needs-review` and the owner re-signed. Anything else, one byte or one mode different included, is unchanged, and a failing test adds only the why line `union-probe-ignored: <probe> <reason>`. The result gains `unionProbe` (with `covers`, the files the check had left) only when a proof was given. Two why tokens are new: `proven-union` and `union-probe-ignored`. The vet passes the same proof on the coverage check and on the carry check.
+- Replacement. None: no key, token, argument or result shape changes without the new argument.
 
 ## 0.51.1
 
@@ -58,6 +75,7 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **After switching.** **Nothing is owed by a caller that does not use the new edge or the new flag: a Guardian ledger record that is `declined` or `triaged-out` may now advance to `filed` when it carries a non-empty `issue`, and `guardian_sweep.py commit-ledger` takes an optional `--recoveries <file>`.** Every other move off a `triaged-out`, `declined`, `accepted` or `verified-fixed` record is still refused. The `commit-ledger` result gains the keys `recoveries` and `recoveriesSkipped`, both `[]` when no file is given. See [Guardian: a declined or triaged-out finding advances to filed when an issue is filed for it](#guardian-a-declined-or-triaged-out-finding-advances-to-filed-when-an-issue-is-filed-for-it).
 - **After switching.** **Nothing is owed by a caller that writes no new kind: a finding's `decidedBy` may now be of kind `scope-ruling` or `advisor-bound`, the vet receipt gains the marker lines `<!-- superheroes:scope-ruling key=<findingKey> -->` and `<!-- superheroes:advisor-bound rounds=<n> -->`, and the decision sources the record writer hands `finding_outcomes.on_record` gain the keys `reviewPr`, `reviewRounds`, `findingKey` and `findingSeverity`.** See [Review record: an out-of-scope ruling and the advisor's bound are recorded decisions](#review-record-an-out-of-scope-ruling-and-the-advisors-bound-are-recorded-decisions).
 - **Before switching.** **Upgrade the Codex CLI to 0.166.0 or later on every machine and cloud environment that runs codex seats.** The codex default is `gpt-6.2-sol` (GPT-6.2 Sol), and an older CLI is refused at preflight with `codex-cli-too-old`, before any codex seat runs. See [Codex: GPT-6.2 Sol default, GPT-6.2 Astra top rung, Codex CLI 0.166.0](#codex-gpt-62-sol-default-gpt-62-astra-top-rung-codex-cli-01660).
+- **After switching.** **Nothing is owed: a cloud build now makes its build worktree under the session's working directory and never moves the session into it.** See [Cloud builds: the build worktree sits under the working directory, and the session never enters it](#cloud-builds-the-build-worktree-sits-under-the-working-directory-and-the-session-never-enters-it).
 
 ### Field gotchas: five doctrine lines move into the plugin
 
@@ -67,6 +85,12 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **An app exit or restart kills every watcher silently.** The wait is written into the session ledger before a watcher is armed, and every resume re-checks the waits directly. Homes: `skills/showrunner/reference/wave-watch.md` § The boundary the owner accepted and `skills/showrunner-resume/SKILL.md` Step 6.
 - **A worktree's directory name is not evidence.** A wrong tree is reported only on the git checks, never on the name. Home: `rubric/launch-doctrine.md` § Check for a sibling build at a clean-base intake.
 - Replacement. None: the lines are additive.
+
+### Cloud builds: the build worktree sits under the working directory, and the session never enters it
+
+- **The change.** The workhorse charter (§2) and `skills/workhorse/reference/cloud.md` § Workspace say a cloud build makes its build worktree under the session's working directory (`<root>/.claude/worktrees/<name>`), never switches the session's directory into it, and names the worktree by absolute path in every command, the review included (`git -C`, `--repo-root`, `--cwd`). The charter no longer tells a builder to switch to the worktree it creates.
+- **Why.** Moving a headless session into a worktree outside its working directory waits on an approval prompt nobody can answer, so a cloud lane stalled until a message woke it.
+- Replacement. None: no CLI, flag or result key changes.
 
 ### Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off
 
@@ -140,6 +164,10 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **Cloud setup.** `cloud_setup_text.py` composes a global project's setup only with a valid registry when the store holds a hero layer: it records a mode inferred from agreeing evidence first, and refuses `storage-mode-unrecorded` when the mode cannot be recorded or is only provisional. A store with no hero layer is placed as before.
 - **What a project with old in-repo files sees.** A project in global storage that kept an old in-repo `.claude/superheroes/review-crew.md`, `.claude/superheroes/core.md` or `.claude/review-profile.md` now reviews on the global settings, and a configure change to the layer reaches the next review. The old in-repo files are not removed; delete them when they are no longer wanted.
 - Replacement. None: the keys and their shapes are unchanged, and the refusal is additive.
+
+### Review loop: a transit-redacted break-it test is never restored
+
+- **The change.** The audit fold, the correction fold, intake and the final kept check read a transit redaction placeholder in a break-it test's text, as well as the stamp, and record the test not run, `transit-redacted`. A mismatched target whose test is damaged takes no restore-only step: the round records `breakItTransitRedacted` and the driver decides `break-it-restore-transit-redacted`, and the kept check answers `unresolved` with reason `transit-redacted` without running it. Replacement. None: no argument or result key a caller passes changes.
 
 ## 0.51.0
 
