@@ -749,6 +749,8 @@ rule's one home).
 is not a receipt the advisor can see. **Keep the PR body current**, edited in place. **You never
 merge.** Hand back to the owner.
 
+**An upgrade note is its own file.** When the project is the superheroes source repository and the change owes consumers an upgrade note (the plugin's `TRANSITION.md` header says when), write the note as its own file in the plugin's `transition-notes/` folder, named for the issue, in the shape that header gives, and never add it to `TRANSITION.md` itself. The release doc pass assembles the files into `TRANSITION.md`, and CI fails a note written straight into `TRANSITION.md`.
+
 **Read `skills/workhorse/reference/handback.md` when you compose or rewrite the PR body.**
 
 **Read `skills/workhorse/reference/cloud.md` § Handback when the launch prompt says `Place: cloud session`.**

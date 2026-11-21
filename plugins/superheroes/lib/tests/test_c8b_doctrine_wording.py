@@ -10,9 +10,16 @@ the old meaning in other words passes.
 """
 import os
 import re
+import sys
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _REPO = os.path.dirname(os.path.dirname(_PLUGIN))
+_LIB = os.path.join(_PLUGIN, "lib")
+
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import transition_notes  # noqa: E402
 SET_UP = os.path.join(_PLUGIN, "skills", "configure", "reference", "set-up.md")
 OWNER_DECISIONS = os.path.join(_PLUGIN, "skills", "showrunner", "reference", "owner-decisions.md")
 TRANSITION = os.path.join(_PLUGIN, "TRANSITION.md")
@@ -38,7 +45,7 @@ def _ledger_row(name):
 
 
 def _transition_section(heading):
-    text = _read(TRANSITION)
+    text = transition_notes.transition_text(_PLUGIN)
     match = re.search(r"^### %s\n(.*?)(?=^### |^## |\Z)" % re.escape(heading), text, re.MULTILINE | re.DOTALL)
     assert match, "TRANSITION.md has no section %r" % heading
     return " ".join(match.group(1).split())

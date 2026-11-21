@@ -541,7 +541,8 @@ def test_stop_and_delete_rule_has_one_home(sentence):
 
 def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
     # The invariant census: whatever carries or cites the delete rule also carries or cites the
-    # stop-and-delete rule. TRANSITION.md and CHANGELOG.md are history and are skipped.
+    # stop-and-delete rule. TRANSITION.md and CHANGELOG.md are history and are skipped, and so is the
+    # transition-notes folder, whose files are TRANSITION.md's history-to-be.
     delete_text = " ".join(CR.DELETE_RULE.split())
     stop_text = " ".join(CR.STOP_AND_DELETE_RULE.split())
     offenders = []
@@ -551,6 +552,8 @@ def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
             if not name.endswith((".py", ".md", ".json", ".txt")):
                 continue
             if name in ("TRANSITION.md", "CHANGELOG.md"):
+                continue
+            if root == os.path.join(_PLUGIN_ROOT, "transition-notes"):
                 continue
             path = os.path.join(root, name)
             with open(path, encoding="utf-8", errors="replace") as fh:
@@ -745,7 +748,8 @@ _PLAIN_COMMAND_SENTENCES = [
 
 def test_plain_command_rule_has_one_home():
     # A copy of any sentence anywhere in the shipped plugin outside its home is a second copy;
-    # prose consumers cite the home instead. TRANSITION.md and CHANGELOG.md are history and are skipped.
+    # prose consumers cite the home instead. TRANSITION.md and CHANGELOG.md are history and are skipped,
+    # and so is the transition-notes folder, whose files are TRANSITION.md's history-to-be.
     assert len(_PLAIN_COMMAND_SENTENCES) >= 8
     home = os.path.join("lib", "command_refusals.py")
     copies = []
@@ -755,6 +759,8 @@ def test_plain_command_rule_has_one_home():
             if not name.endswith((".py", ".md", ".json", ".txt")):
                 continue
             if name in ("TRANSITION.md", "CHANGELOG.md"):
+                continue
+            if root == os.path.join(_PLUGIN_ROOT, "transition-notes"):
                 continue
             path = os.path.join(root, name)
             rel = os.path.relpath(path, _PLUGIN_ROOT)

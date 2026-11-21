@@ -27,6 +27,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_cleanup  # noqa: E402
+import transition_notes  # noqa: E402
 # `main` just before the cloud-builders stack merged: this layer's base must stay reachable from
 # `main` after the stack's squash merge, which leaves the layer heads it was built on unreachable.
 _BASE = "458cc409ac56bcf2b23a04bd8dfe0a33d805deb9"
@@ -78,6 +79,13 @@ def _shipped(extensions, *, skip_tests=True):
 
 def _collapsed(path):
     return " ".join(_read(path).split())
+
+
+def _plugin_text(rel):
+    """A plugin-relative doc's text; TRANSITION.md comes with the unassembled upgrade notes rendered in."""
+    if rel == _TRANSITION:
+        return transition_notes.transition_text(_PLUGIN)
+    return _read(os.path.join(_PLUGIN, rel))
 
 
 def _negated_in_clause(line, start):
@@ -162,11 +170,12 @@ def test_reviewer_pass_gardening_line_has_no_new_reader():
                 py_readers.append((rel, line.strip()))
     assert py_readers == [], f"shipped callers of the gardening line: {py_readers}"
 
-    md_readers = sorted(
-        rel
+    # A note file waiting for its release counts as TRANSITION.md, so the set reads the same before and after assembly.
+    md_readers = sorted({
+        _TRANSITION if rel.split("/")[0] == transition_notes.NOTES_DIRNAME else rel
         for rel, path in _shipped((".md",))
         if re.search(r"cloud_setup\.py gardening", _collapsed(path))
-    )
+    })
     assert md_readers == sorted([_OWNER_DECISIONS, _TRANSITION]), md_readers
 
 
@@ -267,15 +276,15 @@ def _added_lines(rel):
     assert commit.returncode == 0, f"the base commit {_BASE} is not in this repository"
     present = subprocess.run(["git", "-C", _REPO, "cat-file", "-e", f"{_BASE}:plugins/superheroes/{rel}"], capture_output=True)
     if present.returncode != 0:  # the file is new since the base, so every line of it is added
-        return _read(os.path.join(_PLUGIN, rel)).split("\n")
-    base = subprocess.run(
+        return _plugin_text(rel).split("\n")
+    base =subprocess.run(
         ["git", "-C", _REPO, "show", f"{_BASE}:plugins/superheroes/{rel}"],
         capture_output=True,
         text=True,
     )
     assert base.returncode == 0, f"cannot read {rel} at {_BASE}: {base.stderr}"
     before = base.stdout.split("\n")
-    now = _read(os.path.join(_PLUGIN, rel)).split("\n")
+    now = _plugin_text(rel).split("\n")
     return [
         line
         for tag, _, _, j1, j2 in difflib.SequenceMatcher(None, before, now, autojunk=False).get_opcodes()

@@ -19,6 +19,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_builder as cb  # noqa: E402
+import transition_notes  # noqa: E402
 
 _PLUGIN = os.path.abspath(os.path.join(_LIB, ".."))
 _CLOUD = os.path.join(_PLUGIN, "skills", "workhorse", "reference", "cloud.md")
@@ -30,6 +31,8 @@ _TRANSITION_HEADING = "### Wave watch: a cloud builder's progress comment"
 
 
 def _read(path):
+    if path == _TRANSITION:
+        return transition_notes.transition_text(_PLUGIN)
     # Strict decoding on purpose: a file that cannot be read fails the test, never passes it.
     with open(path, encoding="utf-8") as handle:
         return handle.read()

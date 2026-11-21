@@ -47,14 +47,23 @@ import importlib.util
 import json
 import os
 import re
+import sys
 
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
+_LIB_DIR = os.path.join(PLUGIN, "lib")
+
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import transition_notes  # noqa: E402
 
 
 def _read(rel):
+    if rel == "TRANSITION.md":
+        return transition_notes.transition_text(PLUGIN)
     with open(os.path.join(PLUGIN, rel), encoding="utf-8") as f:
         return f.read()
 
