@@ -22,6 +22,7 @@ if _LIB not in sys.path:
 import adopt_version as av  # noqa: E402
 import cloud_plugin_pin  # noqa: E402
 import cloud_setup_text  # noqa: E402
+import transition_notes  # noqa: E402
 
 # A stand-in for a release's own setup-text code: `stamped_files` reads the project's calibration,
 # builds the setup steps and reaches a store root through an import made inside a function.
@@ -451,8 +452,7 @@ def test_skill_brief_names_the_owed_cloud_step():
 def test_transition_unreleased_says_what_the_advisor_now_sees():
     # The release checklist renames "## Unreleased" to the version at each cut,
     # so find the note's own release section rather than a fixed heading.
-    with open(_TRANSITION, encoding="utf-8") as fh:
-        text = fh.read()
+    text = transition_notes.transition_text(_PLUGIN)
     note = text.index("\n### Adopt-version: the cloud environments' setup text is an owed step\n")
     start = text.rindex("\n## ", 0, note)
     end = text.find("\n## ", note)

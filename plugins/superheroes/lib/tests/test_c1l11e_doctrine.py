@@ -7,10 +7,16 @@ with the handback check refusing `stack-not-caught-up` until it has.
 """
 import os
 import re
+import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 _PLUGIN = os.path.dirname(_LIB)
+
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import transition_notes  # noqa: E402
 
 _NATIVE_STACKS = os.path.join(_PLUGIN, "rubric", "native-stacks.md")
 _REVIEW_SKILL = os.path.join(_PLUGIN, "skills", "review-code", "SKILL.md")
@@ -138,7 +144,7 @@ def test_handback_reference_names_the_pr_mode_handback_check():
 
 def test_transition_has_the_catch_up_note_and_no_retired_token():
     # axis: TRANSITION.md carries the catch-up subsection (wherever release day moved it) and never the retired lower-layer-moved token
-    text = _text(_TRANSITION)
+    text = transition_notes.transition_text(_PLUGIN)
     heading = "### Review: a stacked layer catches up at handback"
     start = text.index(heading)
     following = re.search(r"^#{2,3} ", text[start + len(heading):], re.M)

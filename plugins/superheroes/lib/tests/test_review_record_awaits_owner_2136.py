@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import review_record as rr
+import transition_notes
 from test_pr_sheet import BIG, bundle as sheet_bundle, build as sheet_build, fill
 from test_review_record import RED, Fake, _fix_round_account, _fix_round_runs, account, build, finding, reviewer, send
 import test_review_record_owner_ruling as ruling
@@ -292,7 +293,11 @@ DOCTRINE = (
 
 def test_the_doctrine_names_awaits_owner_and_says_it_never_clears_a_gate():
     # axis: the doctrine; a reference or the transition note that stops naming the status, or stops saying it clears nothing
-    texts = {name: (LIB.parent / name).read_text(encoding="utf-8") for name in DOCTRINE}
+    texts = {
+        name: transition_notes.transition_text(str(LIB.parent)) if name == "TRANSITION.md"
+        else (LIB.parent / name).read_text(encoding="utf-8")
+        for name in DOCTRINE
+    }
     for name, text in texts.items():
         assert "awaits-owner" in text, name
     for name in (DOCTRINE[0], DOCTRINE[3]):

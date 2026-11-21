@@ -31,6 +31,9 @@ _ALLOWED = {
     os.path.join("skills", "review-code", "reference", "round-driver.md"): 2,
     os.path.join("lib", "round_driver.py"): 1,
 }
+# A note file waiting for its release is TRANSITION.md's history-to-be, so any file under the notes
+# folder may hold any number of the string, the way TRANSITION.md does.
+_ALLOWED_DIRS = ("transition-notes",)
 
 
 def test_a1_round_phases_has_no_fixer_phase():
@@ -90,7 +93,10 @@ def test_a6_the_retired_phase_name_stands_only_where_the_allowlist_says():
             count = fh.read().count(_RETIRED)
         if count:
             found[os.path.relpath(path, _PLUGIN_ROOT)] = count
-    stray = sorted(rel for rel in found if rel not in _ALLOWED)
+    stray = sorted(
+        rel for rel in found
+        if rel not in _ALLOWED and rel.split(os.sep)[0] not in _ALLOWED_DIRS
+    )
     assert not stray, "the retired phase name stands in %s" % stray
     for rel, want in _ALLOWED.items():
         if want is not None:
