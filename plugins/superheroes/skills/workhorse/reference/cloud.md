@@ -84,14 +84,17 @@ history. There is no app to bring up on the owner's machine and no slot.
 
 **The build worktree lives under the session's working directory, and the session never moves into
 it.** Make it with `git -C <root> worktree add <root>/.claude/worktrees/<name> <branch>`, where
-`<root>` is the session's working directory (the clone intake checked). Never switch the session's
+`<root>` is the session's working directory (the clone intake checked); on a fresh launch, add
+`-b <branch>` and the base commit to create the build branch in the worktree. On an adoption,
+intake left the clone on the adopted branch, and git refuses a second worktree for a branch already
+checked out, so run `git -C <root> checkout --detach` first. Never switch the session's
 directory: no host worktree-entering tool, and no `cd` into the worktree. Address the worktree by
 absolute path in every command, the review included: `git -C <worktree>`, `--repo-root <worktree>`,
 `--cwd <worktree>`, and the worktree's path for every file you read or edit. Where a skill's block
 runs a bare `git` or `gh` command against the current directory, run it with `git -C <worktree>`
-or the helper's path flag instead. Pass `round_driver.py` `--repo-root <worktree>` on every call:
-without it the driver checks the session's own directory against the review's recorded root and
-refuses `base-repo-root-mismatch`.
+or the helper's path flag instead. Pass `--repo-root <worktree>` on every `round_driver.py next`
+call (only `next` takes it; the other verbs read the root the session recorded): without it `next`
+checks the session's own directory against that root and refuses `base-repo-root-mismatch`.
 
 Why: the host asks for approval before a worktree-entering tool moves the session into a worktree
 outside its working directory, in auto mode too, and a headless session cannot answer, so the lane
