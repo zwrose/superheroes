@@ -20,6 +20,12 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 _PLUGIN_ROOT = os.path.join(_REPO_ROOT, "plugins", "superheroes")
 _MODULE_PATH = os.path.join(_PLUGIN_ROOT, "lib", "definition_doc.py")
 
+_LIB_DIR = os.path.join(_PLUGIN_ROOT, "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import transition_notes  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location("lifecycle_definition_doc", _MODULE_PATH)
 DD = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(DD)
@@ -346,6 +352,8 @@ AMENDMENTS_SCOPE = "This path covers a spec that is approved and not yet deliver
 
 
 def _read(rel):
+    if rel == "TRANSITION.md":
+        return " ".join(transition_notes.transition_text(_PLUGIN_ROOT).split())
     with open(os.path.join(_PLUGIN_ROOT, rel), encoding="utf-8") as fh:
         return " ".join(fh.read().split())
 

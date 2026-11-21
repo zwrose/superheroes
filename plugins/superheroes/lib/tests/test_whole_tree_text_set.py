@@ -45,9 +45,6 @@ EXEMPT = {
     _P + "test_adopt_version.py": (
         _NO_MARKDOWN_DIR + "snapshots a temp plugin-cache tree built under tmp_path",
         ('for dp, _, fns in os.walk(root):',)),
-    _P + "test_adopt_version_cloud_start.py": (
-        _NO_MARKDOWN_DIR + "snapshots a temp project directory under tmp_path",
-        ('for dp, _, fns in os.walk(directory):',)),
     _P + "test_adopt_version_retired_seats_2529.py": (
         _NO_MARKDOWN_DIR + "snapshots temp version trees and a temp project under tmp_path",
         ('for dp, dns, fns in os.walk(str(root)):',)),
@@ -130,9 +127,6 @@ EXEMPT = {
     _P + "test_review_findings_schema.py": (
         _NO_MARKDOWN_DIR + "walks the plugin lib/ directory for Python sources",
         ('for root, dirs, files in os.walk(_LIB):',)),
-    _P + "test_review_record_awaits_owner_2136.py": (
-        _NO_MARKDOWN_DIR + "globs the plugin lib/ directory for Python sources",
-        ('for path in sorted(LIB.rglob("*.py")):',)),
     _P + "test_review_record_carried_recheck.py": (
         _NO_MARKDOWN_DIR + "lists the git refs of a temp sentinel repository under tmp_path",
         ('assert not list((sentinel / ".git" / "refs" / "heads").iterdir())',)),
@@ -160,10 +154,6 @@ EXEMPT = {
         "globs theme/ sample-*.json only and opens no Markdown by pattern (read from the file, "
         "not measured)",
         ('@pytest.mark.parametrize("sample", sorted(p.name for p in THEME.glob("sample-*.json")))',)),
-    _P + "test_spec_lifecycle.py": (
-        "globs the repository's docs/superheroes/*/spec.md, outside the plugin (read from the file, "
-        "not measured)",
-        ('paths = sorted(glob.glob(os.path.join(_REPO_ROOT, "docs/superheroes/*/spec.md")))',)),
 }
 
 
@@ -252,6 +242,12 @@ def _imported_modules(tree):
     return names
 
 
+def _reads_transition_notes(tree):
+    """(d) the file imports `transition_notes`, the module a reader calls to read TRANSITION.md's
+    wording with the unassembled upgrade notes rendered in, so it reads plugin Markdown."""
+    return "transition_notes" in _imported_modules(tree)
+
+
 def _repo_root(plugin_root):
     return os.path.dirname(os.path.dirname(os.path.abspath(plugin_root)))
 
@@ -266,7 +262,7 @@ def scan(plugin_root, test_trees):
     normalised enumeration lines (in file order) for every candidate.
 
     A test file is a candidate when it has an enumeration line and a Markdown-suffix filter, a literal
-    naming a Markdown root, or a literal containing TRANSITION; or when it imports a local helper (a
+    naming a Markdown root, or a literal containing TRANSITION; or when it imports `transition_notes`; or when it imports a local helper (a
     non-test module directly in a test tree) that is itself a candidate by that rule."""
     roots = markdown_roots(plugin_root)
     if not roots:
@@ -289,6 +285,8 @@ def scan(plugin_root, test_trees):
                 lines = enumeration_lines(source)
                 direct = bool(lines) and (_has_markdown_filter(tree_ast, literals)
                                           or _names_a_root_or_transition(literals, roots))
+                # axis: a test file that imports transition_notes reads TRANSITION.md's wording, so it is a candidate with no enumeration line needed (#2590)
+                direct = direct or _reads_transition_notes(tree_ast)
                 record = {"lines": lines, "direct": direct, "imports": _imported_modules(tree_ast)}
                 if name.startswith("test_"):
                     tests[_rel(path, repo_root)] = record
@@ -662,6 +660,22 @@ def test_a_comment_mentioning_a_root_does_not_make_a_file_a_candidate(tmp_path):
     }
     _test_files, candidates = _scan_synthetic(tmp_path, files)
     assert list(candidates) == ["test_control.py"]
+
+
+@pytest.mark.parametrize("statement", [
+    "import transition_notes",
+    "from transition_notes import transition_text",
+    "import transition_notes as tn",
+])
+def test_a_test_importing_transition_notes_is_a_candidate(tmp_path, statement):
+    files = {
+        "test_reads_notes.py": "%s\n\ndef test_a():\n    assert True\n" % statement,
+        "test_other_import.py": "import transition_notes_other\n\ndef test_b():\n    assert True\n",
+        "test_names_it_only.py": "def test_c():\n    assert \"transition_notes\"\n",
+    }
+    test_files, candidates = _scan_synthetic(tmp_path, files)
+    assert sorted(test_files) == ["test_names_it_only.py", "test_other_import.py", "test_reads_notes.py"]
+    assert candidates == {"test_reads_notes.py": ()}
 
 
 def test_a_test_importing_a_local_helper_that_enumerates_skills_is_a_candidate(tmp_path):
