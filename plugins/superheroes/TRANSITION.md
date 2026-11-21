@@ -148,6 +148,10 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **What a project with old in-repo files sees.** A project in global storage that kept an old in-repo `.claude/superheroes/review-crew.md`, `.claude/superheroes/core.md` or `.claude/review-profile.md` now reviews on the global settings, and a configure change to the layer reaches the next review. The old in-repo files are not removed; delete them when they are no longer wanted.
 - Replacement. None: the keys and their shapes are unchanged, and the refusal is additive.
 
+### Review loop: a transit-redacted break-it test is never restored
+
+- **The change.** The audit fold, the correction fold, intake and the final kept check read a transit redaction placeholder in a break-it test's text, as well as the stamp, and record the test not run, `transit-redacted`. A mismatched target whose test is damaged takes no restore-only step: the round records `breakItTransitRedacted` and the driver decides `break-it-restore-transit-redacted`, and the kept check answers `unresolved` with reason `transit-redacted` without running it. Replacement. None: no argument or result key a caller passes changes.
+
 ## 0.51.0
 
 ### Before you upgrade
