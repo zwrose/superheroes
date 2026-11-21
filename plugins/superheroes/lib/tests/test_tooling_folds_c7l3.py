@@ -161,7 +161,7 @@ def test_p5_an_unreadable_prompt_is_left_to_the_callers_handling():
 
 # --- a malformed live cell: m1 / m2 / m3 --------------------------------------------------------
 
-_GOOD = ["codex", "gpt-6.1-sol", "xhigh"]
+_GOOD = ["codex", "gpt-6.2-sol", "xhigh"]
 _UNHASHABLE_EFFORTS = [["high"], {"e": 1}]
 _CONFIG = {"vendors": ["claude", "codex"]}
 
@@ -173,14 +173,14 @@ def _cell_map(*cells):
 @pytest.mark.parametrize("effort", _UNHASHABLE_EFFORTS, ids=["list", "dict"])
 def test_m1_the_chokepoint_returns_none_for_a_non_string_effort(effort):
     # axis: a malformed effort never reaches a set as an unhashable triple — see bite-proof record c7l3_wo4_tooling
-    assert SM._normalize_live_cell(["codex", "gpt-6.1-sol", effort]) is None
-    assert SM._normalize_live_cell(_GOOD) == ("codex", "gpt-6.1-sol", "xhigh")
-    assert SM._normalize_live_cell(["codex", "gpt-6.1-sol", None]) == ("codex", "gpt-6.1-sol", None)
+    assert SM._normalize_live_cell(["codex", "gpt-6.2-sol", effort]) is None
+    assert SM._normalize_live_cell(_GOOD) == ("codex", "gpt-6.2-sol", "xhigh")
+    assert SM._normalize_live_cell(["codex", "gpt-6.2-sol", None]) == ("codex", "gpt-6.2-sol", None)
 
 
 @pytest.mark.parametrize("effort", _UNHASHABLE_EFFORTS, ids=["list", "dict"])
 def test_m1_m2_nonpanel_cell_proven_skips_the_malformed_cell_and_uses_the_sibling(effort):
-    bad = ["codex", "gpt-6.1-sol", effort]
+    bad = ["codex", "gpt-6.2-sol", effort]
     assert RDISC.nonpanel_cell_proven(_CONFIG, _cell_map(bad), "codex", "verifier") is False
     assert RDISC.nonpanel_cell_proven(_CONFIG, _cell_map(bad, _GOOD), "codex", "reviewer-deep") is True
 
@@ -197,10 +197,10 @@ def test_m1_m2_nonpanel_candidates_skips_the_malformed_cell_and_uses_the_sibling
 def test_m1_m2_build_skips_the_malformed_cell_and_uses_the_sibling(effort):
     seat_map = SM.build(
         SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0,
-        live_cells=[["claude", "opus-5.5", "xhigh"], ["codex", "gpt-6.1-sol", effort], _GOOD],
+        live_cells=[["claude", "opus-5.5", "xhigh"], ["codex", "gpt-6.2-sol", effort], _GOOD],
         live_cells_source="probed",
     )
-    assert ["codex", "gpt-6.1-sol", "xhigh"] in seat_map["liveCells"]
+    assert ["codex", "gpt-6.2-sol", "xhigh"] in seat_map["liveCells"]
     assert all(isinstance(cell[2], (str, type(None))) for cell in seat_map["liveCells"])
 
 
@@ -210,7 +210,7 @@ def test_m1_m3_same_family_degradations_keeps_its_fail_closed_result(effort):
         SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0,
         live_cells=[["claude", "opus-5.5", "xhigh"], _GOOD], live_cells_source="probed",
     )
-    seat_map["liveCells"] = list(seat_map["liveCells"]) + [["codex", "gpt-6.1-sol", effort]]
+    seat_map["liveCells"] = list(seat_map["liveCells"]) + [["codex", "gpt-6.2-sol", effort]]
     seat = next(s for s in SM.PANEL_ROSTER if isinstance(seat_map["seats"].get(s), dict))
     cfg = seat_map["seats"][seat]
     # a map with any malformed live cell is unusable evidence: the existing `None`
@@ -221,7 +221,7 @@ def test_m1_m3_same_family_degradations_keeps_its_fail_closed_result(effort):
 # --- the codex grouping cell: g1 / g2 ----------------------------------------------------------
 
 def test_the_registry_lists_a_codex_synthesis_cell_on_the_panels_model():
-    assert MR.matrix_config("synthesis", "codex") == ("gpt-6.1-sol", "high")
+    assert MR.matrix_config("synthesis", "codex") == ("gpt-6.2-sol", "high")
     assert MR.matrix_config("synthesis", "cursor") is None
 
 
@@ -232,7 +232,7 @@ def _claude_built_map(*cells):
 
 
 def test_g1_a_claude_built_prs_grouping_pass_seats_on_codex_when_the_map_proves_the_cell():
-    seat_map = _claude_built_map(["codex", "gpt-6.1-sol", "high"])
+    seat_map = _claude_built_map(["codex", "gpt-6.2-sol", "high"])
     vendor, family = RDISC.nonpanel_reviewer(
         _CONFIG, seat_map, "synthesis", "codex",
         maker_families=frozenset({"anthropic"}), fixer_vendor="cursor",
@@ -241,7 +241,7 @@ def test_g1_a_claude_built_prs_grouping_pass_seats_on_codex_when_the_map_proves_
 
 
 def test_g2_with_no_proven_codex_cell_the_grouping_pass_stays_unseatable():
-    seat_map = _claude_built_map(["codex", "gpt-6.1-sol", "xhigh"])
+    seat_map = _claude_built_map(["codex", "gpt-6.2-sol", "xhigh"])
     assert RDISC.nonpanel_reviewer(
         _CONFIG, seat_map, "synthesis", "codex",
         maker_families=frozenset({"anthropic"}), fixer_vendor="cursor",

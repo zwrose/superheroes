@@ -340,21 +340,21 @@ def test_codex_cli_floor_probe_below_floor_refused():
     assert below in result["detail"]
 
 
-# bite-axis: the gpt-6.1-sol floor literal 0.159.0 — a 0.158.0 CLI is refused with the spelled-out detail
-def test_codex_cli_floor_probe_refuses_0_158_0_with_the_gpt61_sol_floor_literal():
+# bite-axis: the gpt-6.2-sol floor literal 0.166.0 — a 0.165.0 CLI is refused with the spelled-out detail
+def test_codex_cli_floor_probe_refuses_0_165_0_with_the_gpt62_sol_floor_literal():
     def _run_below(argv, **kwargs):
-        return SimpleNamespace(returncode=0, stdout="codex-cli 0.158.0\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.165.0\n", stderr="")
 
     assert pp.codex_cli_floor_probe(run=_run_below)["detail"] == (
-        "codex-cli-too-old: codex-cli 0.158.0 is older than 0.159.0, the minimum for gpt-6.1-sol; "
-        "upgrade the Codex CLI to 0.159.0 or later"
+        "codex-cli-too-old: codex-cli 0.165.0 is older than 0.166.0, the minimum for gpt-6.2-sol; "
+        "upgrade the Codex CLI to 0.166.0 or later"
     )
 
 
-# bite-axis: a CLI exactly at the gpt-6.1-sol floor 0.159.0 is accepted (the floor is inclusive)
-def test_codex_cli_floor_probe_accepts_0_159_0_at_the_gpt61_sol_floor():
+# bite-axis: a CLI exactly at the gpt-6.2-sol floor 0.166.0 is accepted (the floor is inclusive)
+def test_codex_cli_floor_probe_accepts_0_166_0_at_the_gpt62_sol_floor():
     def _run_at(argv, **kwargs):
-        return SimpleNamespace(returncode=0, stdout="codex-cli 0.159.0\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.166.0\n", stderr="")
 
     assert pp.codex_cli_floor_probe(run=_run_at) is None
 
