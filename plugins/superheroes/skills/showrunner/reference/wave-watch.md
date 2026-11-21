@@ -669,6 +669,12 @@ or close included, goes through the same steps (`ensure`, `compose`, the post wi
   re-arms. It is not a background service and does not survive the app closing.
 - **After a resume, re-arm** — the watcher does not persist across compaction or session recovery on
   its own.
+- **An app exit or restart kills every watcher silently.** Background tasks live inside the host
+  app's process, so an exit or restart stops each one with no marker, and the stopped notice arrives
+  only when the next session opens (a ten-hour hole was seen this way). A watcher is a convenience,
+  never the guarantee: before arming one, write the wait into the session ledger as
+  `waiting on X; on X do Y`, and on every resume re-list those waits and re-check the world directly
+  (the issue, the PR, the lane) before trusting any watcher's silence.
 - **PR-set baseline:** within one `loop` invocation, the PR baseline threads across internal arms, so
   a PR change landing between timer arms **is** reported (as a passed-over `pr-set-changed` entry at
   loop exit). The gap remains **open between separate invocations**. Bare `run` never reports a PR
