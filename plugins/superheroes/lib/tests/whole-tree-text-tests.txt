@@ -22,5 +22,6 @@ plugins/superheroes/lib/tests/test_skill_helper_call_form_2158.py
 plugins/superheroes/lib/tests/test_spec_review_gate.py
 plugins/superheroes/lib/tests/test_ssot_drift.py
 plugins/superheroes/lib/tests/test_test_role_seat.py
+plugins/superheroes/lib/tests/test_transition_notes.py
 plugins/superheroes/lib/tests/test_vet_record_checks.py
 plugins/superheroes/lib/tests/test_whole_tree_text_set.py
