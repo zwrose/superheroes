@@ -119,15 +119,15 @@ def _conflicted_catch_up(repo, resolved):
     return moved, repo.commit("resolve by hand")
 
 
-def test_row_3_a_hand_resolved_conflict_reads_needs_review(tmp_path):
-    # axis: a file is reconstructed only when the three-way merge reproduces the head blob, so a hand resolution stays changed — see bite-proof record i2496_wo_a_head_coverage (E-recon)
+def test_row_3_a_hand_resolved_conflict_by_the_builder_reads_judgement_as_a_conflict_fix(tmp_path):
+    # axis: a file is reconstructed only when the three-way merge reproduces the head blob, so a hand resolution stays changed (here it is read as the builder's conflict fix, not reconstructed) — see bite-proof record i2496_wo_a_head_coverage (E-recon)
     repo = TR.Repo(tmp_path)
     base, reviewed, earlier = TR.returning(repo, first={SHARED: pr_edit_text()})
     moved, head = _conflicted_catch_up(repo, pr_edit_text("resolved = 1\n"))
     got = run_check(repo, moved, earlier, head)
-    assert got["answer"] == "needs-review" and got["files"] == [SHARED] and got["reconstructed"] == []
-    assert tokens(got) == [HC.WHY_BEHAVIOUR_CHANGE] and got["hunks"] == []
-    assert HC.outcome(got["answer"], "green") == {"outcome": "NOT-READY", "why": "needs-review", "review": "returning", "sheet": "none"}
+    assert got["answer"] == "judgement" and got["files"] == [SHARED] and got["reconstructed"] == []
+    assert tokens(got) == [HC.WHY_CONFLICT_FIX] and [h["file"] for h in got["hunks"]] == [SHARED]
+    assert HC.outcome(got["answer"], "green") == {"outcome": "NOT-READY", "why": "judged-meaningful", "review": "returning", "sheet": "none"}
 
 
 # --- row 4: a stack, the layer below changed and was merged up -----------------------------------------
