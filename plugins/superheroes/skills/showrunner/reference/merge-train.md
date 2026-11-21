@@ -115,7 +115,10 @@ sends its sheet back unsigned though nothing material changed.
 - **A local lane.** Send the order to the lane's own session while it is still live.
 - **A lane whose session is gone.** Launch an adoption of the PR's branch (a premise with
   `adoptsBranch` and `adoptsHead`), by `rubric/launch-doctrine.md` § Recovery and
-  `orchestration.md` § Adoption mechanics.
+  `orchestration.md` § Adoption mechanics. A layer above the bottom of a stack cannot be adopted
+  until its branch holds the layer below's head (that section's *Adopt a layer that is behind its
+  base*), and with a conflict that catch-up is the resolution itself. So park that layer to the
+  owner, stating both facts, and never resolve the conflict to get the launch through.
 
 The builder merges the base (for a stack layer, the layer below) into its branch with `--no-ff`,
 resolves the conflict in that merge commit, pushes it plainly, runs the returning review on the
