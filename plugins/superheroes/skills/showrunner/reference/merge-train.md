@@ -348,7 +348,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 
    - `republish-carried`: republish the stack's single sheet with `carriedForward.fromSheet` naming its
      previous revision and `heads` giving the new head of every PR the sheet covers. The answers and
-     the verdict carry, the sheet shows no note, and the stack's word stands.
+     the verdict carry, the sheet shows no note except the one line `carriedForward.conflictFix` adds
+     for a carry cleared as a judged code-conflict fix, and the stack's word stands.
    - `take-down`: take the sheet down with `lib/pr_sheet.py hold --sheet <published sheet.json> --out
      <file>` and publish that file. The word covers nothing while the sheet is held, and the PR goes
      back for a returning-round review of the files the check lists.
