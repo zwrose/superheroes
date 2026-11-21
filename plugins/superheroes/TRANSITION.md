@@ -18,6 +18,22 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed by a caller: a seat map with a seat in a maker's family other than the author's (one the map's `makerFamilies` or the session's makers name) now carries a `maker-family` violation for that seat, so its certificate reads `-constraint-violated` where it read the plain shape or `-degraded` before. A map whose `makerFamilies` is malformed never has its `critical-diversity` excused by liveness, so some such maps that read clean now read `-constraint-violated` too.** No key, token or result shape changes. See [Seat map: a seat in any maker's family is a maker seat](#seat-map-a-seat-in-any-makers-family-is-a-maker-seat).
+
+### Seat map: a seat in any maker's family is a maker seat
+
+- **The rule.** `verify()` (and so a receipt's stored `violations`, `derived_violations`, `classify_violations` and the driver's projections) raises `maker-family` for a filled seat whose family is any maker family other than the author's that the map's `makerFamilies` or the session's makers (`extra_makers`) name, whatever the liveness evidence says, because the composer never seats one. A non-string or empty member names no maker. The author's own family keeps its rule: a breach only when an alternative family was live, otherwise the `same-family` degradation.
+- **What a reader sees differently.** A panel seated in another maker's family read `full-panel-confirmed` (unpinned seats, a submitted `critical-diversity` excused by liveness) or `-degraded` (pinned seats, excused by pin), independent. It now reads `full-panel-confirmed-constraint-violated` (or `audited-chain-constraint-violated`) with driver `seat-map-violation`, and the degraded prose names `maker-family (seat …)`. The review record already demoted such reviewers, so no merge path opens or closes; only the certificate label changes. A panel with every seat outside every maker's family and a well-formed `makerFamilies` (or none) reads as before.
+- **The liveness excusal.** `classify_violations` now counts the session's makers, as well as the map's, as makers when it asks whether a second critical family was reachable, so a maker's family is never counted as a live alternative (registry row V953-a). With a seat in any maker's family already a breach, this cannot clear a panel seated in a maker's family.
+- **A malformed maker list.** When a map carries `makerFamilies` that is not a list of non-empty strings (a string, say, or a list with a number in it), its `critical-diversity` is never excused by liveness: the record stays unexcused with evidence `unproven-liveness`, as for an unknown author. The pin excusal is unchanged. This is stricter than before: an all-cursor panel whose `makerFamilies` is a string, with only claude and cursor live, read `full-panel-confirmed` (its `critical-diversity` excused by liveness) and now reads `full-panel-confirmed-constraint-violated`.
+- Replacement. None: no key, token, argument or result shape changes.
+
 ## 0.51.1
 
 ### Before you upgrade
