@@ -818,7 +818,9 @@ Follow-up: `/superheroes:configure`.
 - **What else the preview lists:** `setAside` (superseded copies the flip moves into a dated backup
   folder, undoable with `leftover_settings.py restore`), `leftInPlace` (copies the flip does not
   move, with the reason) and `overwrites` (target files the flip replaces). Retire leftover copies
-  (fix § 5) before a flip so nothing on the target side is overwritten.
+  (fix § 5) before a flip so no settings copy on the target side is overwritten; a definition
+  document that exists on both sides is still listed under `overwrites`, so read that list before
+  confirming.
 - **In-flight work:** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
