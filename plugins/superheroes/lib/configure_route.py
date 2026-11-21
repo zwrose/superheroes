@@ -28,7 +28,7 @@ def _review_layer_missing(cwd, root):
     missing one means an incomplete set-up. (The-architect doc-policy is the OTHER light layer
     but is not a .md file — its absence surfaces through the doc-policy-provisional signal.)"""
     try:
-        layer = os.path.join(os.path.dirname(core_md.core_path(cwd, root)), "review-crew.md")
+        layer = core_md.layer_path(cwd, "review-crew", root)
     except core_md.RepoRootUnavailable:
         # Git could not be run — repo root unknown; treat layer as missing (route to fix).
         return True

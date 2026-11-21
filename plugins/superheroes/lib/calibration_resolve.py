@@ -5,7 +5,7 @@ The unified layout is canonical after configure (#81). Legacy `.claude/review-pr
 no longer a migration source; it remains resolvable as a calibration path, and its presence
 produces the legacy-profile-unsupported refusal from core_md.resolve_shared. Consumers read
 core.md + `.claude/superheroes/review-crew.md` (or their global equivalents in the
-control-plane project store).
+control-plane project store). The layer and the dispatch core follow the storage mode.
 """
 import os
 import sys
@@ -104,8 +104,46 @@ def _legacy_global_profile_path(cwd, legacy_root=None):
         legacy_root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, ident["gitdir_hash"], review_store.FILENAMES["profile"])
 
 
+def regular_core(cwd, root=None):
+    """The regular-file core.md the dispatch reads, or None. Writes nothing; never raises.
+
+    When both candidates are present, the one the storage mode picks; when exactly one is, that one. The
+    pick is returned only when it is a regular file: a picked core.md that is a directory or a dangling
+    link gives None, never its peer, so a broken active core is not replaced by a stale copy."""
+    # axis: dispatch_core is the present core.md the storage mode picks, and only when it is a regular file
+    try:
+        in_repo, global_path = core_md._core_candidates(cwd, root)
+        in_present, global_present = os.path.lexists(in_repo), os.path.lexists(global_path)
+        if in_present and global_present:
+            picked = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
+            chosen = in_repo if picked == mode_registry.IN_REPO else global_path
+        elif in_present:
+            chosen = in_repo
+        elif global_present:
+            chosen = global_path
+        else:
+            return None
+        return chosen if os.path.isfile(chosen) else None
+    except Exception:
+        return None
+
+
+def _mode_layer(cwd, hero, root):
+    """The layer file configure writes (core_md.layer_path) when it is a regular file, else None. Writes nothing."""
+    try:
+        path = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+        return path if os.path.isfile(path) else None
+    except Exception:
+        return None
+
+
 def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
-    """The ordered profile-source candidates resolve() considers, EXISTING OR NOT."""
+    """The ordered profile-source candidates resolve() considers, EXISTING OR NOT.
+
+    The layer the storage mode picks (when it is a file) comes first, except that a present candidate
+    that is not a regular file and that today's order ranks ahead of it stays ahead of it, so the tier
+    gate meets and refuses that unreadable candidate. A picked layer that is present but not a regular
+    file comes first itself, for the same reason."""
     legacy_root = review_store.store_root()
     candidates = [
         _unified_in_repo_layer_path(cwd, hero),
@@ -113,7 +151,21 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
         _unified_global_layer_path(cwd, hero, root),
         _legacy_global_profile_path(cwd, legacy_root),
     ]
-    return [c for c in candidates if c is not None]
+    candidates = [c for c in candidates if c is not None]
+    try:
+        picked = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+    except Exception:
+        picked = None
+    if picked and os.path.lexists(picked) and not os.path.isfile(picked):
+        # axis: a picked layer that is present but not a regular file is listed first, so the tier gate refuses it instead of reading a stale copy
+        return [picked] + [c for c in candidates if c != picked]
+    mode_layer = _mode_layer(cwd, hero, root)
+    if mode_layer is None:
+        return candidates
+    ahead = candidates[:candidates.index(mode_layer)] if mode_layer in candidates else []
+    # axis: an unreadable candidate today's order ranks ahead of the mode layer is listed first, so the tier gate refuses it
+    blockers = [c for c in ahead if os.path.lexists(c) and not os.path.isfile(c)]
+    return blockers + [mode_layer] + [c for c in candidates if c != mode_layer and c not in blockers]
 
 
 def _core_beside_layer(layer_p, cwd, root):
@@ -149,7 +201,8 @@ def _with_dispatch_fields(out, cwd=None, root=None):
     layer_ok = layer and os.path.isfile(layer)
     out["dispatch_layer"] = layer or (legacy if leg_ok else None)
     out["dispatch_core"] = (
-        out.get("core_path")
+        regular_core(cwd, root)
+        or out.get("core_path")
         or (legacy if leg_ok else None)
         or (layer if layer_ok else None)
     )
@@ -173,6 +226,18 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
     """
     legacy_root = legacy_root or review_store.store_root()
     legacy_in = _legacy_in_repo(cwd, hero)
+
+    global_layer = _unified_global_layer_path(cwd, hero, root)
+    # axis: the mode layer is read only when the global layer is a file, so an in-repo-only resolve never touches the global store
+    mode_layer = _mode_layer(cwd, hero, root) if os.path.isfile(global_layer) else None
+    if mode_layer is not None and mode_layer == global_layer:
+        # axis: the review reads the layer configure writes (core_md.layer_path), so a stale in-repo copy never beats the mode's layer
+        return _with_dispatch_fields({
+            "location": mode_registry.GLOBAL, "exists": True, "layout": "unified",
+            "core_path": _core_beside_layer(mode_layer, cwd, root),
+            "layer_path": mode_layer, "legacy_path": None,
+            "healed": False, "entry_id": None,
+        }, cwd, root)
 
     layer_p = _unified_in_repo_layer(cwd, hero)
     if layer_p:
