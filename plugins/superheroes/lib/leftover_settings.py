@@ -152,7 +152,7 @@ def _gather(picked, unpicked, family, *, aligned=True, admitted=True, layer_only
         if slot in legacy and not (reads == layer and os.path.isfile(reads) and populated()):
             continue
         # axis: a legacy profile with blocks or manifests beside it is never listed, since retiring it would strand them
-        if slot in legacy and legacy_veto is not None and legacy_veto(slot):
+        if legacy_veto is not None and legacy_veto(slot):
             continue
         out.append((slot, family, reads))
     return out
@@ -229,14 +229,22 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
         def tp_vetoed(slot, layer=layer):
             return _tp_artifacts_beside(slot) or not tp_layer_usable(layer)
 
+        in_tp_layer = os.path.join(d_in, _TEST_PILOT)
+
+        def tp_veto(slot, pool=tp_legacy):
+            if slot not in pool:
+                # axis: with no legacy profile, store.resolve reads the in-repo layer first, with the in-repo blocks and manifests, so that layer stays while they hold entries
+                return (slot == in_tp_layer and not any(_present(p) for p in pool)
+                        and _holds_entries(os.path.join(repo, os.path.dirname(_LEGACY_TP_IN_REL))))
+            return any(tp_vetoed(other_slot) for other_slot in [slot] + [p for p in pool if _present(p)])
+
         found += _gather(
             _slots(layer, legacy_tp[mode]),
             _slots(os.path.join(d_o, _TEST_PILOT), legacy_tp[other]),
             "test-pilot", aligned=aligned, layer_only=True, layer=layer,
             legacy=tp_legacy, populated=populated,
             # axis: the present legacy test-pilot profiles are listed all together or none is, since store.resolve reads the first it finds and a retire must not change which
-            legacy_veto=lambda slot, pool=tp_legacy: any(
-                tp_vetoed(other_slot) for other_slot in [slot] + [p for p in pool if _present(p)]))
+            legacy_veto=tp_veto)
 
         dec_in = os.path.join(repo, _DEC_IN_REL)
         dec_gl = os.path.join(d_gl, _DECISIONS)

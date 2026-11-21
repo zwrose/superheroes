@@ -237,7 +237,12 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     entries, left = [], []
     # paths are compared resolved, so two spellings of one file through a linked directory meet
     real = os.path.realpath
-    used = {real(p) for f in files for p in (f["src"], f["dst"])}
+
+    def real_dst(path):
+        # axis: a destination is the name atomic_write replaces, so only its folder is resolved and a link at it is not followed
+        return os.path.join(real(os.path.dirname(path)), os.path.basename(path))
+
+    used = {real(f["src"]) for f in files} | {real_dst(f["dst"]) for f in files}
 
     def present(path):
         return bool(path) and os.path.lexists(path)
@@ -249,7 +254,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
 
     def take(src, dst, role, family):
         # axis: a settings entry never shares a resolved file with another entry, nor its dst with its own src
-        targets = [real(src)] + ([real(dst)] if dst is not None else [])
+        targets = [real(src)] + ([real_dst(dst)] if dst is not None else [])
         if any(t in used for t in targets):
             leave(src, WHY_SHARED_PATH)
             return False
@@ -268,10 +273,17 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     m_side = [dec_in] if to_global else [dec_gl, dec_legacy]
     t_first = dec_gl if to_global else dec_in
     carried = False
+    m_review = (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE) if to_global else
+                os.path.join(review_entry, review_store.FILENAMES["profile"]) if review_entry else None)
+    # axis: decisions follow the review calibration, so they stay while the moving side's legacy review profile stays (no review layer moves)
+    dec_stays = present(m_review) and real(os.path.join(m_cal, "review-crew.md")) not in {
+        real(f["src"]) for f in files}
     for path in m_side:
         if not present(path):
             continue
-        if not _is_regular(path):
+        if dec_stays:
+            leave(path, WHY_RETAINED)
+        elif not _is_regular(path):
             leave(path, WHY_NOT_REGULAR)
         elif not carried:
             carried = take(path, t_first, ROLE_CARRY, "decisions")
@@ -452,7 +464,10 @@ def execute(migration, *, root=None):
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
         for n, f in enumerate(journal["files"]):
-            if f["preexisting"] and os.path.isfile(f["dst"]):
+            if f["preexisting"] and os.path.islink(f["dst"]):
+                # axis: a destination that is a link, live or dangling, is recorded as its link text, so a back-out puts the link itself back
+                f["link"] = os.readlink(f["dst"])
+            elif f["preexisting"] and os.path.isfile(f["dst"]):
                 f["snapshot"] = os.path.join(store_dir, _SNAPSHOT_DIRNAME, "%03d" % n)
                 _copy_bytes(f["dst"], f["snapshot"])
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
@@ -513,6 +528,13 @@ def _backout_flip(files):
     for f in files:
         # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
         if f.get("preexisting"):
+            if f.get("link") is not None:
+                stage = f["dst"] + ".link-restore.tmp"
+                if os.path.lexists(stage):
+                    os.unlink(stage)
+                os.symlink(f["link"], stage)
+                os.replace(stage, f["dst"])
+                continue
             snap = f.get("snapshot")
             if snap and os.path.isfile(snap):
                 _copy_bytes(snap, f["dst"])
