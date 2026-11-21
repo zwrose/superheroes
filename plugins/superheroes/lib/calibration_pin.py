@@ -17,6 +17,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import calibration_read  # noqa: E402
+import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import engine_pref  # noqa: E402
 import mode_registry  # noqa: E402
@@ -160,7 +161,7 @@ def capture(repo_root, session_dir):
             return first
         dispatch_core, layer_src, refusal = calibration_read.resolved_paths(repo_root)
         # axis: the pinned core is the one the storage mode selects, never a stale copy the dispatch resolver prefers
-        mode_core = _mode_core(repo_root)
+        mode_core = calibration_resolve.regular_core(repo_root) or _mode_core(repo_root)
         core_src = mode_core or dispatch_core
         claude = os.path.join(repo_root, "CLAUDE.md")
         claude_src = claude if os.path.isfile(claude) else None

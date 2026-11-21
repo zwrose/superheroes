@@ -5,7 +5,7 @@ The unified layout is canonical after configure (#81). Legacy `.claude/review-pr
 no longer a migration source; it remains resolvable as a calibration path, and its presence
 produces the legacy-profile-unsupported refusal from core_md.resolve_shared. Consumers read
 core.md + `.claude/superheroes/review-crew.md` (or their global equivalents in the
-control-plane project store).
+control-plane project store). The layer and the dispatch core follow the storage mode.
 """
 import os
 import sys
@@ -104,8 +104,39 @@ def _legacy_global_profile_path(cwd, legacy_root=None):
         legacy_root, calibration_paths.LEGACY_STORE_ENTRIES_DIRNAME, ident["gitdir_hash"], review_store.FILENAMES["profile"])
 
 
+def regular_core(cwd, root=None):
+    """The regular-file core.md the dispatch reads, or None. Writes nothing; never raises.
+
+    When both candidates are regular files, the one the storage mode picks; when exactly one is, that one."""
+    # axis: dispatch_core is a regular core.md whenever one exists, the mode-selected one when both do
+    try:
+        in_repo, global_path = core_md._core_candidates(cwd, root)
+        in_ok, global_ok = os.path.isfile(in_repo), os.path.isfile(global_path)
+        if in_ok and global_ok:
+            picked = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
+            return in_repo if picked == mode_registry.IN_REPO else global_path
+        if in_ok:
+            return in_repo
+        if global_ok:
+            return global_path
+        return None
+    except Exception:
+        return None
+
+
+def _mode_layer(cwd, hero, root):
+    """The layer file configure writes (core_md.layer_path) when it is a regular file, else None. Writes nothing."""
+    try:
+        path = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+        return path if os.path.isfile(path) else None
+    except Exception:
+        return None
+
+
 def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
-    """The ordered profile-source candidates resolve() considers, EXISTING OR NOT."""
+    """The ordered profile-source candidates resolve() considers, EXISTING OR NOT.
+
+    The layer the storage mode picks (when it is a file) comes first."""
     legacy_root = review_store.store_root()
     candidates = [
         _unified_in_repo_layer_path(cwd, hero),
@@ -113,7 +144,11 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
         _unified_global_layer_path(cwd, hero, root),
         _legacy_global_profile_path(cwd, legacy_root),
     ]
-    return [c for c in candidates if c is not None]
+    candidates = [c for c in candidates if c is not None]
+    mode_layer = _mode_layer(cwd, hero, root)
+    if mode_layer is not None:
+        candidates = [mode_layer] + [c for c in candidates if c != mode_layer]
+    return candidates
 
 
 def _core_beside_layer(layer_p, cwd, root):
@@ -125,7 +160,7 @@ def _core_beside_layer(layer_p, cwd, root):
     return global_core if os.path.isfile(global_core) else None
 
 
-def _with_dispatch_fields(out):
+def _with_dispatch_fields(out, cwd, root):
     """dispatch_core/dispatch_layer: unified paths when present, else legacy single-file."""
     legacy = out.get("legacy_path")
     layer = out.get("layer_path")
@@ -133,7 +168,8 @@ def _with_dispatch_fields(out):
     layer_ok = layer and os.path.isfile(layer)
     out["dispatch_layer"] = layer or (legacy if leg_ok else None)
     out["dispatch_core"] = (
-        out.get("core_path")
+        regular_core(cwd, root)
+        or out.get("core_path")
         or (legacy if leg_ok else None)
         or (layer if layer_ok else None)
     )
@@ -154,6 +190,16 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
     legacy_root = legacy_root or review_store.store_root()
     legacy_in = _legacy_in_repo(cwd, hero)
 
+    mode_layer = _mode_layer(cwd, hero, root)
+    if mode_layer is not None and mode_layer == _unified_global_layer_path(cwd, hero, root):
+        # axis: the review reads the layer configure writes (core_md.layer_path), so a stale in-repo copy never beats the mode's layer
+        return _with_dispatch_fields({
+            "location": mode_registry.GLOBAL, "exists": True, "layout": "unified",
+            "core_path": _core_beside_layer(mode_layer, cwd, root),
+            "layer_path": mode_layer, "legacy_path": None,
+            "healed": False, "entry_id": None,
+        }, cwd, root)
+
     layer_p = _unified_in_repo_layer(cwd, hero)
     if layer_p:
         return _with_dispatch_fields({
@@ -162,14 +208,14 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
             "layer_path": layer_p,
             "legacy_path": legacy_in if legacy_in and os.path.isfile(legacy_in) else None,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     if legacy_in and os.path.isfile(legacy_in):
         return _with_dispatch_fields({
             "location": mode_registry.IN_REPO, "exists": True, "layout": "legacy",
             "core_path": None, "layer_path": None, "legacy_path": legacy_in,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     layer_p = _unified_global_layer(cwd, hero, root)
     if layer_p:
@@ -178,7 +224,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
             "core_path": _core_beside_layer(layer_p, cwd, root),
             "layer_path": layer_p, "legacy_path": None,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     g = store_core.resolve_global(cwd, legacy_root, heal=heal, _consumer="review_store")
     if g is not None:
@@ -188,7 +234,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
                 "location": mode_registry.GLOBAL, "exists": True, "layout": "legacy",
                 "core_path": None, "layer_path": None, "legacy_path": legacy_p,
                 "healed": g["healed"], "entry_id": g["entry_id"],
-            })
+            }, cwd, root)
 
     if root is not None and _contradiction_check:
         probe = resolve(
@@ -209,7 +255,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
         "core_path": None, "layer_path": None, "legacy_path": None,
         "healed": g["healed"] if g else False,
         "entry_id": g["entry_id"] if g else None,
-    })
+    }, cwd, root)
 
 
 def resolve_profile_path(cwd=None, root=None):

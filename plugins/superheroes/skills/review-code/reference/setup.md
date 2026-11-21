@@ -72,6 +72,8 @@ NUDGE_MSG=$(printf '%s' '<the JSON the signals call printed>' | jq -r 'if . == n
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
+**Which layer and core.** When both an in-repo and a global review-crew layer exist, `$LAYER` is the one the storage mode picks, the same file configure writes; when only one core.md exists, `$CORE` is that core.md, whichever layer or legacy profile also exists.
+
 Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `$ROOT_DIR/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash

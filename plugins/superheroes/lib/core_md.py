@@ -2601,6 +2601,13 @@ def write_guardian_cadence(cwd, cadence, *, root=None):
 def layer_path(cwd, hero, root=None, *, persist_backfill=True):
     """Mode-aware path to a hero layer file, co-located with core.md."""
     keyword = {} if persist_backfill else {"persist_backfill": False}
+    in_repo_layer = os.path.join(_repo_root(cwd), calibration_paths.IN_REPO_DIR, hero + ".md")
+    global_layer = os.path.join(mode_registry.project_store_dir(cwd, root),
+                                mode_registry.CONFIG_DIRNAME, hero + ".md")
+    if os.path.isfile(in_repo_layer) and os.path.isfile(global_layer):
+        # axis: with both copies of a hero layer present, the layer is the one the storage mode picks, never the one beside a sole core.md
+        picked = mode_registry.resolve(cwd, root, **keyword)["mode"]
+        return in_repo_layer if picked == mode_registry.IN_REPO else global_layer
     return os.path.join(os.path.dirname(core_path(cwd, root, **keyword)), hero + ".md")
 
 

@@ -361,6 +361,40 @@ def _calibration(cwd, root):
     return True, _store_files(mode_registry.project_store_dir(cwd, root), top)
 
 
+def _record_mode(cwd, root):
+    """Records a global project's storage mode before its calibration is placed, or refuses.
+
+    Does nothing for an in-repo project, a project whose registry is already valid, a mode that cannot
+    be read (`_calibration` refuses that itself) and a store with no hero layer. Only `_compose` calls
+    it: `_calibration`, `calibration_files` and `stamped_files` write nothing."""
+    # axis: a global calibration that holds a hero layer is placed only with a valid registry, so a cloud session never infers its mode
+    try:
+        found = mode_registry.resolve(cwd, root, persist_backfill=False)
+    except Exception:
+        return
+    if found["mode"] != mode_registry.GLOBAL or found["source"] == "registry":
+        return
+    config = os.path.join(mode_registry.project_store_dir(cwd, root), mode_registry.CONFIG_DIRNAME)
+    if not any(os.path.isfile(os.path.join(config, name))
+               for name in mode_registry._HERO_LAYER_FILENAME.values()):
+        return
+    if found["source"] == "evidence":
+        try:
+            mode_registry.write_registry(
+                cwd, mode_registry.GLOBAL, store_core.derive_identifiers(cwd)["remote_hash"], root)
+        except Exception:
+            pass
+    try:
+        recorded = mode_registry.read_registry(cwd, root)
+    except Exception:
+        recorded = None
+    if recorded is None or recorded["storageMode"] != mode_registry.GLOBAL:
+        raise _Refused("storage-mode-unrecorded", "The project keeps its calibration outside the "
+                       "repository but its storage mode is not recorded, so a cloud session could "
+                       "read a stale in-repository copy instead. Run superheroes:configure on this "
+                       "machine to record it, then compose the setup text again.")
+
+
 def calibration_files(cwd, root=None):
     """The calibration the setup text places: relative path -> bytes, sorted; for a project whose
     repository carries its calibration, only the machine-local doc-policy.json (when it exists)."""
@@ -1033,6 +1067,7 @@ def _compose(cwd, now, stamp_fn, plugin_source, plugin_commit, plugin_subdir, pr
     if state["state"] == "broken":  # axis: a broken pin hook is refused, never composed as absent or valid
         raise _pin_broken(state)
     pin_on = state["state"] == "valid"
+    _record_mode(cwd, root)
     placed, files = _calibration(cwd, root)
     stored = _stored_setup_commands(cwd, root)
     commands = stored or []
