@@ -65,7 +65,10 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    test-pilot-init to install/record a browser tool". Never continue
    without one. A missing browser tool stops only the browser-MCP plan; the
    iPhone check, when it applies, runs and posts on its own (it needs no
-   browser MCP).
+   browser MCP). **Sign-in:** a session check that answers 200 with an empty
+   body is signed out, and a browser relaunch or a switch to another browser
+   tool loses the sign-in — read `reference/pilot-contract.md` §Mid-wave lapse
+   before you trust a session check or fall back to another tool.
 
 ## Steps 5–8 — execute, observe, report
 

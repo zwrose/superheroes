@@ -1573,6 +1573,14 @@ Infrastructure classifications **never** route to lapse — only `no-session` do
 (see [The probe vocabulary](#the-probe-vocabulary)). `lapse_step` classifies via
 `pilot_probe.classify`; infrastructure tokens defer, identity-class tokens refuse.
 
+**A lapsed sign-in can read alive.** A session endpoint can answer HTTP 200 with an empty body
+(`null`) for a lapsed session, never 401, so a probe that reads only the status reads a dead session
+as alive for as long as it runs. A session probe reads the body: a 200 whose session body is empty
+or `null` is `no-session`. The sign-in also lives in the pilot's browser instance, not in the app:
+relaunching the pilot's session, adopting a lane in a fresh session, or falling back mid-run from
+one browser tool to another starts a browser without it, silently. Treat each of those as a lapse
+event and probe again before the next step that needs the session.
+
 ### Action set
 
 | Action | Meaning |
