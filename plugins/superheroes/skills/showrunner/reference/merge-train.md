@@ -307,7 +307,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    is judged from that commit: run `check` a second time with `--record` a file naming the sheet's
    commit as its final commit (the record to check with, as
    `skills/showrunner/reference/owner-decisions.md` § When a PR's head moves after its sheet was
-   published gives it), and pass that answer to `outcome` as `--carry-answer`, adding
+   published gives it) and with the same `--union-proof` as the first check when the vet recorded a
+   tested-union proof (the vet receipt's head-coverage paragraph), and pass that answer to `outcome`
+   as `--carry-answer`, adding
    `--carry-judged-clear` when it is a judgement you cleared. A live sheet whose head moved, with no
    `--carry-answer`, is a usage error. The outcome's `sheet` action decides what happens to the sheet:
 
