@@ -483,8 +483,8 @@ def execute(migration, *, root=None):
                  "entries": [{"from": f["src"], "to": f["dst"], "family": f.get("family")}
                              for f in aside]}, indent=2))
         for f in journal["files"]:
-            with open(f["src"], encoding="utf-8") as fh:
-                store_core.atomic_write(f["dst"], fh.read())
+            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original
+            _copy_bytes(f["src"], f["dst"])
             f["done"] = True
         journal["phase"] = "committing"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))

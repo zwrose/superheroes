@@ -56,7 +56,8 @@ def _put(path, text):
 
 
 def _text(path):
-    with open(path, encoding="utf-8") as fh:
+    # newline="" keeps CRLF and lone CR, so a comparison sees the bytes on disk
+    with open(path, encoding="utf-8", newline="") as fh:
         return fh.read()
 
 

@@ -45,8 +45,17 @@ def test_failed_flip_preserves_original_decisions_bytes(
             raise OSError("simulated migration write failure")
         return real_write(path, text, *args, **kwargs)
 
+    real_copy = mm._copy_bytes
+
+    def fail_selected_copy(src, dst):
+        # the flip copies each file byte for byte, so the injected failure hits that copy too
+        if os.fspath(dst) == failure_path:
+            raise OSError("simulated migration write failure")
+        return real_copy(src, dst)
+
     with monkeypatch.context() as patch:
         patch.setattr(store_core, "atomic_write", fail_selected_write)
+        patch.setattr(mm, "_copy_bytes", fail_selected_copy)
         if failure == "registry-write":
             assert mm.execute(migration, root=w.root) == {"status": "blocked"}
         else:

@@ -38,8 +38,17 @@ def test_recovery_preserves_an_untouched_decisions_destination(
             raise OSError("simulated copy interruption")
         return real_atomic_write(path, text, *args, **kwargs)
 
+    real_copy = mm._copy_bytes
+
+    def interrupt_byte_copy(src, dst):
+        # the flip copies each file byte for byte, so the interruption hits that copy too
+        if os.fspath(dst) == str(destination):
+            raise OSError("simulated copy interruption")
+        return real_copy(src, dst)
+
     with monkeypatch.context() as patch:
         patch.setattr(store_core, "atomic_write", interrupt_copy)
+        patch.setattr(mm, "_copy_bytes", interrupt_byte_copy)
         with pytest.raises(OSError, match="simulated copy interruption"):
             mm.execute(migration, root=w.root)
 
