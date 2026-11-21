@@ -232,6 +232,22 @@ def test_r_gate_unreadable_candidate_ahead(cwd, root):
     assert (path, status) == (legacy, model_tier_overrides.TIERS_UNREADABLE)
 
 
+@pytest.mark.parametrize("shape", ["directory", "dangling-link"])
+def test_r_gate_unreadable_picked_layer(tmp_path, cwd, root, shape):
+    # axis: a picked layer that is present but not a regular file is listed first, so the tier gate refuses it instead of the stale copy
+    _register(cwd, root, mr.GLOBAL)
+    _put(_global(cwd, root, "core.md"), _CORE_TEXT)
+    _put(_in_repo(cwd, "review-crew.md"), _STALE_LAYER)
+    picked = _global(cwd, root, "review-crew.md")
+    if shape == "directory":
+        os.makedirs(picked)
+    else:
+        os.symlink(str(tmp_path / "no-such-layer.md"), picked)
+    assert cr.candidate_profile_paths(cwd, root=root)[0] == picked
+    path, status, _detail = model_tier_overrides.resolve_profile_path_for_gate(cwd, root=root)
+    assert (path, status) == (picked, model_tier_overrides.TIERS_UNREADABLE)
+
+
 def test_r_other_hero_layer_stays_beside_core(cwd, root):
     # axis: only the review-crew layer is picked by mode; another hero's layer stays beside core.md, where its readers look
     _register(cwd, root, mr.GLOBAL)

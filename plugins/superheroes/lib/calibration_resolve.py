@@ -142,7 +142,8 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
 
     The layer the storage mode picks (when it is a file) comes first, except that a present candidate
     that is not a regular file and that today's order ranks ahead of it stays ahead of it, so the tier
-    gate meets and refuses that unreadable candidate."""
+    gate meets and refuses that unreadable candidate. A picked layer that is present but not a regular
+    file comes first itself, for the same reason."""
     legacy_root = review_store.store_root()
     candidates = [
         _unified_in_repo_layer_path(cwd, hero),
@@ -151,6 +152,13 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
         _legacy_global_profile_path(cwd, legacy_root),
     ]
     candidates = [c for c in candidates if c is not None]
+    try:
+        picked = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+    except Exception:
+        picked = None
+    if picked and os.path.lexists(picked) and not os.path.isfile(picked):
+        # axis: a picked layer that is present but not a regular file is listed first, so the tier gate refuses it instead of reading a stale copy
+        return [picked] + [c for c in candidates if c != picked]
     mode_layer = _mode_layer(cwd, hero, root)
     if mode_layer is None:
         return candidates
