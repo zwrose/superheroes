@@ -273,15 +273,28 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     m_side = [dec_in] if to_global else [dec_gl, dec_legacy]
     t_first = dec_gl if to_global else dec_in
     carried = False
-    m_review = (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE) if to_global else
-                os.path.join(review_entry, review_store.FILENAMES["profile"]) if review_entry else None)
-    t_cal = _global_cal_dir(cwd, root) if to_global else _in_repo_cal_dir(cwd)
-    # axis: decisions follow the review calibration selected after the flip (calibration_resolve): they stay while the
-    # moving side's legacy review profile stays selected, i.e. no review layer moves and the target side has none to read
-    target_reads = (real(os.path.join(m_cal, "review-crew.md")) in {real(f["src"]) for f in files}
-                    or present(os.path.join(t_cal, "review-crew.md"))
-                    or (not to_global and present(os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE))))
-    dec_stays = present(m_review) and not target_reads
+    isf = os.path.isfile
+    IN, GL = mode_registry.IN_REPO, mode_registry.GLOBAL
+    l_in = isf(os.path.join(_in_repo_cal_dir(cwd), "review-crew.md"))
+    l_gl = isf(os.path.join(_global_cal_dir(cwd, root), "review-crew.md"))
+    lg_in = isf(os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE))
+    lg_gl = bool(review_entry) and isf(os.path.join(review_entry, review_store.FILENAMES["profile"]))
+    moves = real(os.path.join(m_cal, "review-crew.md")) in {real(f["src"]) for f in files}
+
+    def review_side(mode, li, lgl, lgi, lgg):
+        # calibration_resolve's order on regular files: the mode's own layer, the in-repo layer, the in-repo
+        # legacy profile, the global layer, the global legacy profile
+        if li if mode == IN else lgl:
+            return mode
+        return next((s for found, s in ((li, IN), (lgi, IN), (lgl, GL), (lgg, GL)) if found), None)
+
+    target = GL if to_global else IN
+    before = review_side(current, l_in, l_gl, lg_in, lg_gl)
+    after = review_side(target, (l_in and not moves) or (moves and not to_global),
+                        (l_gl and not moves) or (moves and to_global), lg_in and not moves, lg_gl and not moves)
+    # axis: decisions follow the review calibration that is read: they are carried only when the flip makes the
+    # target side's calibration the one read (or none is read), and stay where they are otherwise
+    dec_stays = after not in (target, None) or before == target
     for path in m_side:
         if not present(path):
             continue

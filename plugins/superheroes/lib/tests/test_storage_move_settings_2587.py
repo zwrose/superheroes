@@ -635,6 +635,35 @@ def test_a_destination_link_does_not_reserve_the_file_it_points_to(w):
     assert not os.path.lexists(legacy)
 
 
+def test_backout_of_a_link_destination_leaves_neighbouring_files_alone(w, monkeypatch):
+    # axis: restoring a destination link touches no existing file, even one at a name a staging step might pick
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    _put(w.inrepo(_DEC), '{"in": true}\n')
+    dst = w.d_gl(_DEC)
+    neighbour = _put(dst + ".link-restore.tmp", "owner file\n")
+    os.symlink(neighbour, dst)
+    m = w.plan(mr.GLOBAL)
+    monkeypatch.setattr(mm, "_commit_registry", lambda *a, **k: False)
+    assert mm.execute(m, root=w.root)["status"] == "blocked"
+    assert os.path.islink(dst) and os.readlink(dst) == neighbour
+    assert _text(neighbour) == "owner file\n"
+
+
+def test_decisions_stay_when_the_target_side_is_already_read(w):
+    # axis: a flip whose target-side calibration was already the one read carries no decisions over the read copy
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(w.inrepo("review-profile.md"), "## Threat model\nrepo\n")
+    _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nentry\n")
+    _put(w.inrepo(_DEC), '{"active": true}\n')
+    stale = _put(os.path.join(w.entry(w.rr), _DEC), '{"stale": true}\n')
+    assert mm.execute(w.plan(mr.IN_REPO), root=w.root) == {"status": "done"}
+    assert _text(w.inrepo(_DEC)) == '{"active": true}\n'
+    assert _text(stale) == '{"stale": true}\n'
+
+
 @pytest.mark.parametrize("global_layer", [False, True])
 def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_layer):
     # axis: decisions stay beside a legacy review profile that is still read after the flip, and move when a target-side layer is read instead
