@@ -60,6 +60,22 @@ jobs:
       - name: Validate STUB markers carry an issue reference
         run: python3 .github/scripts/validate_stubs.py
 
+      - name: Upgrade-note files (shape)
+        if: github.event_name != 'pull_request'
+        run: python3 .github/scripts/check_transition_notes.py
+
+      - name: Upgrade-note files (no note straight into TRANSITION.md)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 .github/scripts/check_transition_notes.py --base "$BASE_SHA"
+
+      - name: Upgrade-note files (none left unassembled on the release PR)
+        if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 .github/scripts/check_transition_notes.py --base "$BASE_SHA" --release
+
       - name: Pre-merge release-bump gate
         if: github.event_name == 'pull_request' && github.head_ref == 'release-please--branches--main--components--superheroes'
         env:

@@ -11,8 +11,11 @@ sections. Assembly puts every bullet into the version's `### Before you upgrade`
 adopt_version reads it as that version's upgrade steps) and copies every section whole.
 
 The pull-request check (`compare_pr`) reads TRANSITION.md only as a multiset of `### ` headings and a
-count of upgrade-step bullets. A heading renamed or reworded in TRANSITION.md outside an assembly
-therefore reads as an added heading, and is refused on purpose: write the change as a note file.
+count of upgrade-step bullets. A `###` heading reaches TRANSITION.md only through a note file's
+assembly: a heading added, renamed or reworded in TRANSITION.md that no removed note file's sections
+account for is refused, in the release doc pass too. To change a note's heading, edit its note file
+before the doc pass; a released section's heading cannot be renamed without CI failing. A bullet
+shortfall is refused only when the pull request removes a note file.
 
 Pure functions take text and return values; `read_notes`, `transition_text` and `assemble` touch the
 disk; `main` is the CLI, one JSON object on stdout per call.
@@ -344,14 +347,18 @@ def compare_pr(base_transition, head_transition, base_notes, head_notes):
     added = collections.Counter(head["headings"]) - collections.Counter(base["headings"])
     for heading in sorted((added - removed_headings).elements()):
         problems.append(_p(_TRANSITION, "transition-heading-added", "The heading ### " + heading + " was added to TRANSITION.md; write the note as a file in the notes folder instead."))
+    uncovered = collections.Counter(added)
     for p in removed:
         for sec in p["sections"]:
-            if sec["heading"] not in head["headings"]:
+            if uncovered[sec["heading"]] > 0:
+                uncovered[sec["heading"]] -= 1
+            else:
                 problems.append(_p(p["name"], "note-removed-unassembled", "The note was removed but its section ### " + sec["heading"] + " did not reach TRANSITION.md."))
     delta = head["bullets"] - base["bullets"]
     if delta > removed_bullets:
         problems.append(_p(_TRANSITION, "transition-bullet-added", "TRANSITION.md gained " + str(delta - removed_bullets) + " upgrade-step bullet(s) that no removed note accounts for; write them in a note file."))
-    if delta < removed_bullets:
+    # axis: a bullet shortfall is refused only on a pull request that removes a note file
+    if removed and delta < removed_bullets:
         problems.append(_p(_TRANSITION, "note-removed-unassembled", "Removed notes held " + str(removed_bullets) + " bullet(s) but TRANSITION.md gained " + str(delta) + ", a shortfall of " + str(removed_bullets - delta) + "."))
     problems.extend(check_notes(head_notes))
     return problems
