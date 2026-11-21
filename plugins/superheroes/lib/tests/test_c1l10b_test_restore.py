@@ -830,7 +830,8 @@ def test_t8_with_no_mismatch_the_audit_continues_exactly_as_before(tmp_path):
 
 def test_t6_the_decision_kinds_are_registered_and_the_restore_failure_is_a_handback_cause():
     for kind in ("break-it-test-restored", "break-it-correction-offered", "break-it-correction-none",
-                 "break-it-correction-landed", "break-it-correction-unseatable", "break-it-restore-failed"):
+                 "break-it-correction-landed", "break-it-correction-unseatable", "break-it-restore-failed",
+                 "break-it-restore-transit-redacted"):
         assert kind in decision_kinds.DECISION_KINDS, kind
     assert decision_kinds.map_terminal_cause("handed-back", "break-it-restore-failed") == {
         "kind": "non-loop", "reason": "open-findings"}

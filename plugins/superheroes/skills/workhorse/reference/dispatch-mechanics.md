@@ -1030,7 +1030,8 @@ decision rule:
   baseline explicit and strengthens it; related charter obligations are §6 (commit before the next
   order against a worktree) and §8 (commit before a mutation probe). Capture the baseline with the
   probe in § Check-runner — a plain shell task: `git rev-parse HEAD`, that empty `git status --porcelain`, and
-  `git reflog --date=iso HEAD | wc -l`. If the
+  `git reflog --date=iso HEAD | wc -l`, each run as `git -C <build worktree> …` when the session's
+  own folder is not the build worktree (a cloud build). If the
   tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
   baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
   spanning committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no
@@ -1117,8 +1118,8 @@ is `agents/check-runner.md`.
      never to an external engine. Record the resolved `model_id` and `effort`. The seat renders no
      judgment, so no independence or maker-family constraint applies.
 3. **Probe the tree before.** Commit the landed work first, so the baseline is clean. Then capture
-   `git rev-parse HEAD`, the full `git status --porcelain`, and
-   `git reflog --date=iso HEAD | wc -l`. Use the full status, never `-uno` or its long form
+   `git -C <build worktree> rev-parse HEAD`, the full `git -C <build worktree> status --porcelain`,
+   and `git -C <build worktree> reflog --date=iso HEAD | wc -l`. Use the full status, never `-uno` or its long form
    `--untracked-files=no`: a run's untracked output is exactly what you want to see.
 4. **Dispatch the seat.** Await it in-turn (§ Awaiting a dispatch — the in-turn contract).
 5. **Probe the tree after.** Capture the same three signals. Any delta is a failed verification,
