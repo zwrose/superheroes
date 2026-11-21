@@ -619,7 +619,17 @@ def test_compare_assembly_dropping_a_bullet_is_refused():
     short = head.replace(STEP_A, "")
     problems = tn.compare_pr(TRANSITION, short, NOTES, [])
     assert tokens(problems) == ["note-removed-unassembled"]
-    assert "shortfall" in problems[0]["detail"]
+    assert problems[0]["file"] == "TRANSITION.md"
+
+
+def test_compare_bullet_deletion_alone_passes():
+    extra = "- **After switching.** Second old step.\n"
+    old = "- **After switching.** Old step.\n"
+    base = TRANSITION.replace(old, old + extra)
+    head = base.replace(extra, "")
+    assert tn.structure(head)["bullets"] == tn.structure(base)["bullets"] - 1
+    assert tn.structure(base)["bullets"] >= 1
+    assert tn.compare_pr(base, head, [], []) == []
 
 
 def test_compare_removed_heading_already_at_base_must_be_added_again():
