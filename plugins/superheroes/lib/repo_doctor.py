@@ -14,6 +14,7 @@ CLI:
 
 Output (stdout, JSON):
     { "ok": true, "readable": true, "drift": [...], "unchecked": [...],
+      "staleSeatPins": [...],
       "signal_hash": "<hex or ''>", "nudge_acked": <bool>,
       "message": "<one-line nudge or null>" }
 
@@ -31,6 +32,13 @@ Material drift is ANY of:
     longer exists under root — a suite that moved or was removed without the
     command being updated;
   - the profile's default-branch no longer resolves (git rev-parse --verify).
+
+The result also carries "staleSeatPins": the sorted core.md `enginePreferences.seatPins` keys
+that name a seat no roster may name (not a known seat, not a legacy alias key);
+[] when there are none, core.md is absent or unreadable, or `seatPins` is not an object. A stale
+seat pin is a calibration note, never drift: it is never added to "drift", but it joins the
+signal_hash (so an acknowledgement covers it) and the message. Report only: nothing is
+written, rewritten or dropped.
 """
 import hashlib
 import json
@@ -43,6 +51,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core_md  # noqa: E402  (sibling, pure read)
+import seat_map  # noqa: E402  (sibling, pure)
 
 # Highest profile schema this script understands. A profile with schema lower
 # than this is behind and counts as material drift (the engine grew newer
@@ -479,13 +488,37 @@ def _hash_drift(drift):
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()
 
 
-def _message(drift, unchecked, acked):
-    """The one-line nudge: drift first, then any check that could not run. Drift the owner
-    already acknowledged is left out when a note still has to be shown."""
+def _stale_seat_pins(root):
+    """The core.md `enginePreferences.seatPins` keys that name a seat no roster may name (sorted).
+    Reads the raw keys through the gate accessor; [] when core.md is absent or unreadable, when
+    `seatPins` is not an object, or on any exception — the doctor is fail-soft. Report only."""
+    try:
+        prefs = core_md.gate_config_usable_prefs(core_md.engine_preferences_for_gate(cwd=root))
+        pins = prefs.get("seatPins")
+        if not isinstance(pins, dict):
+            return []
+        return seat_map.unknown_pin_seats(pins)
+    except Exception:
+        return []
+
+
+def _stale_entries(stale):
+    """The signal-hash entries for stale seat pins. They join the hash, never the drift list."""
+    return ["seat pin for a seat no roster has: %s" % seat for seat in stale]
+
+
+def _message(drift, unchecked, acked, stale=()):
+    """The one-line nudge: drift first, then a stale-seat-pin calibration note, then any check that
+    could not run. Drift and the stale-pin note the owner already acknowledged are left out when
+    a note still has to be shown."""
     parts = []
     if drift and not (acked and unchecked):
         parts.append("review-crew profile drift: " + "; ".join(drift)
                      + " — consider re-running review-init")
+    if stale and not (acked and unchecked):
+        parts.append("review-crew calibration note: core.md seatPins names a seat no roster has ("
+                     + ", ".join(stale) + ") — the panel never seats it; remove the pin with "
+                     "/superheroes:configure")
     if unchecked:
         parts.append("review-crew profile note: " + "; ".join(unchecked))
     return " · ".join(parts) or None
@@ -497,6 +530,7 @@ def _soft_fail():
         "readable": False,
         "drift": [],
         "unchecked": [],
+        "staleSeatPins": [],
         "signal_hash": "",
         "nudge_acked": False,
         "message": "profile unreadable — re-run superheroes:configure",
@@ -553,16 +587,18 @@ def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
     prof["verify-command"], refusal = _core_verify(root)
     unchecked = []
     drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env, unchecked)
-    signal_hash = _hash_drift(drift)
+    stale = _stale_seat_pins(root)
+    signal_hash = _hash_drift(drift + _stale_entries(stale))
     nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
     return {
         "ok": refusal is None,
         "readable": True,
         "drift": drift,
         "unchecked": unchecked,
+        "staleSeatPins": stale,
         "signal_hash": signal_hash,
         "nudge_acked": nudge_acked and not unchecked,
-        "message": refusal or _message(drift, unchecked, nudge_acked),
+        "message": refusal or _message(drift, unchecked, nudge_acked, stale),
     }
 
 
@@ -599,16 +635,18 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
             prof["verify-command"] = core_verify
         unchecked = []
         drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env, unchecked)
-        signal_hash = _hash_drift(drift)
+        stale = _stale_seat_pins(root)
+        signal_hash = _hash_drift(drift + _stale_entries(stale))
         nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
         return {
             "ok": refusal is None,
             "readable": True,
             "drift": drift,
             "unchecked": unchecked,
+            "staleSeatPins": stale,
             "signal_hash": signal_hash,
             "nudge_acked": nudge_acked and not unchecked,
-            "message": refusal or _message(drift, unchecked, nudge_acked),
+            "message": refusal or _message(drift, unchecked, nudge_acked, stale),
         }
     except Exception:
         # Internal failure mid-check → degrade to a readable-but-soft result so
@@ -618,6 +656,7 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
             "readable": True,
             "drift": [],
             "unchecked": [],
+            "staleSeatPins": [],
             "signal_hash": "",
             "nudge_acked": False,
             "message": "profile self-check failed — proceeding without staleness data",

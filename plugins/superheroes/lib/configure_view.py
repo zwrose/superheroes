@@ -27,6 +27,7 @@ import guardian_sweep  # noqa: E402
 import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
+import seat_map        # noqa: E402
 import model_tier_overrides  # noqa: E402
 import store_sweep     # noqa: E402
 
@@ -758,6 +759,12 @@ def render(cwd, *, root=None):
             out.append("Rejected seat pins (not applied — seat falls back to rotation):")
             for seat, reason in sorted(rejected_seats.items()):
                 out.append(f"  {seat}: {reason} ⚠")
+        stale_seats = seat_map.unknown_pin_seats(list(seat_pins) + list(rejected_seats))
+        if stale_seats:
+            out.append("Seat pins for seats no roster has (the panel never seats them; "
+                       "remove them from core.md seatPins):")
+            for seat in stale_seats:
+                out.append("  %s ⚠" % engine_pref.safe_config_echo(seat))
         out.append("")
         for line in _spec_reviewer_lines(eng):
             out.append(line)

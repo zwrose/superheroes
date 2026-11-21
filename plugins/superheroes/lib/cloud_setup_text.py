@@ -49,6 +49,33 @@ SETUP_INPUTS_STAMP_KEY = "setup-inputs"
 SETUP_HOOK_STAMP_KEY = "setup-dependency-hook"
 SETUP_STEPS_STAMP_KEY = "setup-steps"
 SETUP_INVENTORY_STAMP_KEY = "setup-plugin-inventory"
+# The definition of what the inventory entry counts. A release whose `cloud_setup_text` has no such
+# constant used definition 1 (each skill's frontmatter, each agent file, the whole hooks file and its
+# hook modules).
+STAMP_DEFINITION = 2
+# The plugin-relative files the plugin's own SessionStart hook reads, measured (by an audit hook over
+# the real hook's runs) rather than derived from imports; a static import closure over-counts by
+# several times. `test_start_hook_read_set.py` keeps the list true in both directions.
+START_HOOK_READS = (
+    "hooks/session_start.py",
+    "lib/break_it_key.py",
+    "lib/cache_markers.py",
+    "lib/calibration_paths.py",
+    "lib/charter_detect.py",
+    "lib/cloud_pass.py",
+    "lib/compaction_directive.py",
+    "lib/config_dir.py",
+    "lib/control_plane.py",
+    "lib/core_md.py",
+    "lib/git_origin.py",
+    "lib/host_model.py",
+    "lib/mode_registry.py",
+    "lib/review_store.py",
+    "lib/session_context.py",
+    "lib/store.py",
+    "lib/store_core.py",
+    "rubric/covenant.md",
+)
 SETUP_FILL_STAMP_KEY = "setup-dependency-fill"
 # What the setup steps entry holds in place of the plugin source, commit and subdirectory, so it
 # depends on no discovery.
@@ -155,92 +182,68 @@ def _pin_state(cwd):
         return {"state": "absent", "reason": None, "pin": None}
 
 
-def _frontmatter(data):
-    """The block from the first `---` line through the closing `---` line, or nothing."""
-    lines = data.split(b"\n")
-    if not lines or lines[0].rstrip(b"\r") != b"---":
-        return b""
-    for index, line in enumerate(lines[1:], 1):
-        if line.rstrip(b"\r") == b"---":
-            return b"\n".join(lines[:index + 1]) + b"\n"
-    return b""
-
-
 def _inventory_file(path):
     try:
         with open(path, "rb") as fh:
             return fh.read()
     except OSError:
         raise _Refused("plugin-inventory-unreadable", "A part of the plugin that a cloud session "
-                       "loads at its start cannot be read.")
+                       "reads before the pin hook swaps the plugin cannot be read.")
 
 
-def _inventory_names(directory, suffix=None):
-    try:
-        names = sorted(os.listdir(directory))
-    except (FileNotFoundError, NotADirectoryError):
-        return None
-    except OSError:
-        raise _Refused("plugin-inventory-unreadable", "A part of the plugin that a cloud session "
-                       "loads at its start cannot be read.")
-    return [n for n in names if suffix is None or n.endswith(suffix)]
+def start_read_parts(root=None):
+    """{plugin-relative path: bytes} for the parts of one plugin tree (`root`, default this
+    plugin) that a cloud session reads from the copy the setup text installed.
 
-
-def _plugin_inventory():
-    """The plugin parts a cloud session loads at its start, before the pin hook can swap the plugin:
-    each skill's frontmatter, each agent file and the hooks file. The plugin manifest is left out,
-    because its version moves every release."""
-    root = _plugin_root()
-    out = []
-    for name in _inventory_names(os.path.join(root, "skills")) or []:
-        path = os.path.join(root, "skills", name, "SKILL.md")
-        if os.path.isfile(path):
-            out += [b"skill " + name.encode("utf-8") + b"\n", _frontmatter(_inventory_file(path))]
-    agents = _inventory_names(os.path.join(root, "agents"), ".md")
-    if agents is None:
-        out.append(b"agents missing\n")
-    for name in agents or []:
-        out += [b"agent " + name[:-3].encode("utf-8") + b"\n",
-                _inventory_file(os.path.join(root, "agents", name))]
+    The premise: in a cloud session with the plugin pin hook, the host reads agents, skills, hook
+    modules and every hook event other than SessionStart after the pin hook has swapped the plugin
+    link, so from the pinned release. Only the plugin's SessionStart registrations (the
+    `SessionStart` value of `hooks/hooks.json`) and the start hook's own read set
+    (`START_HOOK_READS`) come from the copy the setup text installed, so only they can make a pin
+    commit insufficient. The plugin manifest is left out, because its version moves every release.
+    """
+    root = _plugin_root() if root is None else root
+    parts = {}
+    hooks_key = "hooks/hooks.json#SessionStart"
     hooks = os.path.join(root, "hooks", "hooks.json")
-    out.append(b"hooks\n")
-    out.append(_inventory_file(hooks) if os.path.isfile(hooks) else b"missing\n")
-    for rel, data in _hook_modules(os.path.join(root, "hooks"), hooks):
-        out += [b"module " + rel.encode("utf-8") + b"\n", data]
-    return b"".join(out)
+    if not os.path.lexists(hooks):
+        parts[hooks_key] = b"missing\n"
+    else:
+        # axis: an existing hooks file that cannot be read is refused, never counted as missing
+        raw = _inventory_file(hooks)
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            # the host reads registrations under the file's "hooks" object (`hooks.SessionStart`);
+            # a missing object or key counts as null
+            registered = data.get("hooks")
+            start = registered.get("SessionStart") if isinstance(registered, dict) else None
+            parts[hooks_key] = json.dumps(
+                start, sort_keys=True, ensure_ascii=False).encode("utf-8") + b"\n"
+        else:
+            # axis: a hooks file that cannot be parsed counts whole, so any change to it moves the stamp
+            parts[hooks_key] = raw
+    for rel in START_HOOK_READS:
+        path = os.path.join(root, *rel.split("/"))
+        # axis: an absent part counts as `missing`, so deleting one moves the stamp
+        if not os.path.lexists(path):
+            parts[rel] = b"missing\n"
+        else:
+            # axis: an existing part that cannot be read is refused, never counted as missing
+            parts[rel] = _inventory_file(path)
+    return parts
 
 
-_MODULE_IMPORT = re.compile(r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\bimport\s+)['"](\.{1,2}/[^'"]+)['"]""")
-
-
-def _hook_modules(hooks_dir, hooks_path):
-    """(path relative to the hooks directory, bytes) for each module the hooks file registers and
-    each local module those import, in path order. A loaded module is not reloaded when the pin
-    hook swaps the plugin, so a change to one must move the stamp."""
-    if not os.path.isfile(hooks_path):
-        return []
-    try:
-        declared = json.loads(_inventory_file(hooks_path)).get("modules") or []
-    except (ValueError, AttributeError):
-        return []
-    seen = {}
-    pending = [os.path.normpath(m) for m in declared if isinstance(m, str)]
-    while pending:
-        rel = pending.pop()
-        if rel in seen:
-            continue
-        path = os.path.join(hooks_dir, rel)
-        if not os.path.isfile(path):
-            for ext in (".ts", ".js", "/index.ts"):
-                if os.path.isfile(path + ext):
-                    path, rel = path + ext, os.path.normpath(rel + ext)
-                    break
-        data = _inventory_file(path)
-        seen[rel] = data
-        base = os.path.dirname(rel)
-        for spec in _MODULE_IMPORT.findall(data.decode("utf-8", "replace")):
-            pending.append(os.path.normpath(os.path.join(base, spec)))
-    return sorted(seen.items())
+def _plugin_inventory(root=None):
+    """The stamp's plugin entry: the parts a cloud session reads before the pin hook swaps the
+    plugin (`start_read_parts`), each under its path, in path order. In a cloud session with the
+    plugin pin hook, the host reads agents, skills, hook modules and every hook event other than
+    SessionStart after the swap, so from the pinned release; only the SessionStart registrations
+    and the start hook's read set come from the copy the setup text installed."""
+    return b"".join(path.encode("utf-8") + b"\n" + data
+                    for path, data in sorted(start_read_parts(root).items()))
 
 
 def _read_json(path):
@@ -594,7 +597,9 @@ def _hook_view(inputs):
 
 
 def _pin_view(cwd):
-    """The two stamp entries a valid plugin pin hook adds, read in one place for both callers."""
+    """The two stamp entries a valid plugin pin hook adds, read in one place for both callers: the
+    setup steps, and the plugin's SessionStart registrations with the start hook's read set (the
+    only plugin parts read from the setup-text copy before the pin hook swaps the plugin)."""
     steps = _steps(STEPS_SOURCE, STEPS_COMMIT, STEPS_SUBDIR, SOURCE_DIR,
                    cloud_pass.CLOUD_PLUGIN_DIR, _clone_dir(cwd))
     return {SETUP_STEPS_STAMP_KEY: ("\n".join(steps) + "\n").encode("utf-8"),
@@ -698,7 +703,8 @@ def _view_for(cwd, files, commands, inputs, hook_on, pin_on=False, root=None):
     files the setup depends on join it exactly when commands are listed, item 18 is stored and the
     dependency hook is not on (with the hook on it keeps dependencies current, so a change to those
     files needs no new paste). With the plugin pin hook valid, it also holds what a pin commit
-    cannot move: the setup text's fixed steps and the plugin parts a session loads at its start."""
+    cannot move: the setup text's fixed steps, and the plugin's SessionStart registrations and the
+    start hook's read set (the only plugin parts a session reads from the setup-text copy)."""
     if commands and hook_on:
         view = _stamp_view(files, commands, _hook_view(inputs))
     else:
@@ -723,8 +729,9 @@ def stamped_files(cwd, root=None):
     """What the stamp covers: the placed calibration with the cloud-builds setting left out, so
     switching cloud builds on or off never changes the stamp, and the project's setup commands
     when it lists any, with the files they depend on unless the dependency hook is on. With the
-    plugin pin hook valid it also covers the setup steps and the startup-loaded plugin parts; with
-    it broken it raises `_Refused`."""
+    plugin pin hook valid it also covers the setup steps, the plugin's SessionStart registrations
+    and the start hook's read set (what a session reads from the setup-text copy before the pin
+    hook swaps the plugin); with it broken it raises `_Refused`."""
     commands = _setup_commands(cwd, root)
     state = _pin_state(cwd)
     if state["state"] == "broken":
