@@ -496,3 +496,212 @@ FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_legacy
 .                                                                        [100%]
 1 passed in 0.32s
 ```
+
+# WO-5 additions (the review's held-out findings): G10 to G13
+
+Guarded-element set (declared by WO-5): G10, G11, G12 and G13, one neutralization and one red each, no grouping. Same
+method as above: targeted edit with the edit tool, inverse edit to restore, no `git checkout`, `restore`, `reset` or
+`stash`. Commands ran from the worktree root as
+`scripts/pinned-python -B -X pycache_prefix=/tmp/wo5-2587-pyc -m pytest <node> -q`. Redaction: none needed; the
+`UV_NATIVE_TLS` warning line the runner prints first is left out of each capture. Line numbers are those of the file as
+of WO-5 (the G8 and G9 line numbers above predate it; the G9 element is now the `os.path.isfile` form, see G12).
+Each red node is one parameter case of the test named; the other cases of that test share the neutralization.
+
+## G10 - the blocks/manifests gate
+
+**Guarded element:** `_gather`, `if slot in legacy and legacy_veto is not None and legacy_veto(slot): continue`
+(`leftover_settings.py:149`), fed by `_tp_artifacts_beside` for the test-pilot family - axis: a legacy test-pilot
+profile is never listed while a `blocks` or `manifests` directory beside it holds any entry, because `store.resolve`
+puts them there and retiring the profile would make them unreachable.
+
+**Neutralization:** `if slot in legacy and legacy_veto is not None and legacy_veto(slot):` became
+`if False and slot in legacy and legacy_veto is not None and legacy_veto(slot):`.
+
+**Node:** `test_leftover_settings_2587.py::test_test_pilot_profile_with_blocks_or_manifests_is_not_listed[blocks-with-a-file-in-repo]`.
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_test_pilot_profile_with_blocks_or_manifests_is_not_listed[blocks-with-a-file-in-repo] _
+
+w = <test_leftover_settings_2587.W object at 0x7ff0ab871a00>, where = 'in-repo'
+beside = {'blocks': ['b1.md']}, listed = False
+
+    (decorators and the setup lines of the test elided here; the test body is in the test file)
+>       assert w.paths() == sorted([stale_layer] + ([profile] if listed else []))
+E       AssertionError: assert ['/tmp/claude...t/profile.md'] == ['/tmp/claude...est-pilot.md']
+E         
+E         Left contains one more item: '/tmp/claude-0/pytest-of-root/pytest-35/test_test_pilot_profile_with_b0/repo/.claude/test-pilot/profile.md'
+E         Use -v to get more diff
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:641: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_test_pilot_profile_with_blocks_or_manifests_is_not_listed[blocks-with-a-file-in-repo]
+1 failed in 2.19s
+```
+(Elided: the pytest source echo of the test's decorators and setup, 25 lines; nothing else. The red is for the stated
+reason: the in-repo legacy profile with a populated `blocks/` beside it is listed.)
+
+**Restore:** inverse edit, `if False and slot in legacy and legacy_veto is not None and legacy_veto(slot):` back to
+`if slot in legacy and legacy_veto is not None and legacy_veto(slot):`.
+
+**Restore receipt:** `leftover_settings.py:149` reads `        if slot in legacy and legacy_veto is not None and legacy_veto(slot):`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.35s
+```
+
+## G11 - the regular read-slot gate for legacy files
+
+**Guarded element:** `_gather`, `if slot in legacy and not (reads == layer and os.path.isfile(reads) and populated()):`
+(`leftover_settings.py:146`) - axis: a legacy profile (review or test-pilot) is listed only when the slot the family
+reads passes `os.path.isfile` (a link to a regular file passes; a directory or a dangling link does not), so a broken
+read slot keeps every legacy profile unlisted.
+
+**Neutralization:** `os.path.isfile(reads) and ` removed, leaving `if slot in legacy and not (reads == layer and populated()):`.
+
+**Node:** `test_leftover_settings_2587.py::test_legacy_profiles_need_a_regular_read_slot[directory]`.
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_legacy_profiles_need_a_regular_read_slot[directory] ___________
+
+w = <test_leftover_settings_2587.W object at 0x7f099a0ed940>
+shape = 'directory', listed = False
+
+    (decorators and the setup lines of the test elided here; the test body is in the test file)
+>       assert [f["path"] for f in result["files"]] == sorted(stale + (legacy if listed else []))
+E       AssertionError: assert ['/tmp/claude...t/profile.md'] == ['/tmp/claude...est-pilot.md']
+E         
+E         At index 0 diff: '/tmp/claude-0/pytest-of-root/pytest-37/test_legacy_profiles_need_a_re0/repo/.claude/review-profile.md' != '/tmp/claude-0/pytest-of-root/pytest-37/test_legacy_profiles_need_a_re0/repo/.claude/superheroes/review-crew.md'
+E         Left contains 2 more items, first extra item: '/tmp/claude-0/pytest-of-root/pytest-37/test_legacy_profiles_need_a_re0/repo/.claude/superheroes/test-pilot.md'
+E         Use -v to get more diff
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:668: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_legacy_profiles_need_a_regular_read_slot[directory]
+1 failed in 1.33s
+```
+(Elided: the pytest source echo of the test's decorators and setup, 25 lines. The red is for the stated reason: with a
+directory at the picked layers, the legacy profiles are listed along with the stale layers.)
+
+**Restore:** inverse edit, `if slot in legacy and not (reads == layer and populated()):` back to
+`if slot in legacy and not (reads == layer and os.path.isfile(reads) and populated()):`.
+
+**Restore receipt:** `leftover_settings.py:146` reads `        if slot in legacy and not (reads == layer and os.path.isfile(reads) and populated()):`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.36s
+```
+
+## G12 - the regular-layer decisions gate
+
+**Guarded element:** `find`, `has_layer = os.path.isfile(os.path.join(d_m, _REVIEW_CREW))` passed as
+`admitted=has_layer` (`leftover_settings.py:234`) - axis: the decisions family is admitted only when the recorded
+side's `review-crew.md` is a regular file, not merely present; a broken layer may not be what is read, so the other
+side's decisions may be the ones read. (This is G9's element made stricter: G9 above proved presence; G12 proves
+regularity.)
+
+**Neutralization:** `has_layer = os.path.isfile(os.path.join(d_m, _REVIEW_CREW))` became
+`has_layer = _present(os.path.join(d_m, _REVIEW_CREW))` (the pre-WO-5 form).
+
+**Node:** `test_leftover_settings_2587.py::test_decisions_need_a_regular_review_layer[directory-global]`.
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_decisions_need_a_regular_review_layer[directory-global] _________
+
+w = <test_leftover_settings_2587.W object at 0x7f850b766180>, mode = 'global'
+shape = 'directory'
+
+    (decorators and the setup lines of the test elided here; the test body is in the test file)
+        listed = [f["path"] for f in w.find()["files"] if f["family"] == "decisions"]
+        if shape != "regular":
+>           assert listed == []
+E           AssertionError: assert ['/tmp/claude...cisions.json'] == []
+E             
+E             Left contains 2 more items, first extra item: '/tmp/claude-0/pytest-of-root/pytest-39/test_decisions_need_a_regular_0/repo/.claude/review-decisions.json'
+E             Use -v to get more diff
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:694: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_decisions_need_a_regular_review_layer[directory-global]
+1 failed in 0.41s
+```
+(Elided: the pytest source echo of the test's decorators and setup, 18 lines.)
+
+**Restore:** inverse edit, `has_layer = _present(os.path.join(d_m, _REVIEW_CREW))` back to
+`has_layer = os.path.isfile(os.path.join(d_m, _REVIEW_CREW))`.
+
+**Restore receipt:** `leftover_settings.py:234` reads `        has_layer = os.path.isfile(os.path.join(d_m, _REVIEW_CREW))`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.36s
+```
+
+## G13 - the re-rooted restore path
+
+**Guarded element:** `restore`, `dst = os.path.join(backup, name)` where `name` is the basename of the entry's stored
+`to` (`leftover_settings.py:433`) - axis: each backed-up file is read from the backup folder given, never from the
+stored absolute `to`, so a folder that moved with its store still restores and a crafted `to` can name nothing outside
+it.
+
+**Neutralization:** `dst = os.path.join(backup, name)` became `dst = stored_to` (the pre-WO-5 read of the stored path).
+
+**Node:** `test_leftover_settings_2587.py::test_restore_reads_the_backup_folder_it_is_given`.
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_restore_reads_the_backup_folder_it_is_given _______________
+
+w = <test_leftover_settings_2587.W object at 0x7f571dcc86b0>
+
+    (the test source up to the loop is elided here; the test body is in the test file)
+        for move in done["moved"]:
+            name = os.path.basename(move["to"])
+>           assert not os.path.lexists(os.path.join(copy, name)), name       # the copy's file was the one moved
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError: 01-review-decisions.json
+E           assert not True
+E            +  where True = <function lexists at 0x7f571ec32340>('/tmp/claude-0/pytest-of-root/pytest-41/test_restore_reads_the_backup_0/_store_isolation/projects/238a7b644f5fb344/leftover-backups/copied-elsewhere/01-review-decisions.json')
+E            (three further "where" lines of the assertion introspection elided)
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:724: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_restore_reads_the_backup_folder_it_is_given
+1 failed in 0.45s
+```
+(Elided: the test source echo, and the last three introspection lines. The red is for the stated reason: under the
+neutralization `restore` consumes the ORIGINAL folder's files through the stored absolute `to`, so the copy's files are
+left in place. The earlier assertions of the test, `restored` and the byte-for-byte check, pass under the neutralization
+on purpose: the bytes are identical in both folders, so only the "the copy's file was the one moved" assertion bites.)
+
+**Restore:** inverse edit, `dst = stored_to` back to `dst = os.path.join(backup, name)`.
+
+**Restore receipt:** `leftover_settings.py:433` reads `                dst = os.path.join(backup, name)`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.42s
+```
+
+## Not proven in this section (declared gap)
+
+WO-5's declared set is G10 to G13 only. These WO-5 detectors have no neutralization and red run of their own, and the
+test-command budget left no room for them: the `entry-invalid` skip (empty, `.`, `..` and manifest basenames) in
+`restore`; the `shlex.quote` and `--root` of `_undo_sentence`; the `retained` rows of the flip preview
+(`mode_migrate._settings_entries`); and the healable-store case of the read-only test. Their protection is unverified.

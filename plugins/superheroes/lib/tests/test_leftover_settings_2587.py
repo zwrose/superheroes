@@ -11,6 +11,8 @@ import datetime
 import hashlib
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 
@@ -604,6 +606,189 @@ def test_restore_refuses_a_foreign_or_unreadable_backup(w, tmp_path):
     assert not os.path.lexists(done["moved"][0]["from"])
 
 
+# --- 9b. WO-5: the review's held-out findings ----------------------------------------------------
+
+def _tp_profile(w, where):
+    """The legacy test-pilot profile for the recorded-global project: in the repo or in the store entry."""
+    if where == "in-repo":
+        return w.inrepo("test-pilot", "profile.md")
+    return os.path.join(w.entry(w.tr), "profile.md")
+
+
+@pytest.mark.parametrize("where", ["in-repo", "store-entry"])
+@pytest.mark.parametrize("beside,listed", [
+    pytest.param({"blocks": ["b1.md"]}, False, id="blocks-with-a-file"),
+    pytest.param({"manifests": ["m1.json"]}, False, id="manifests-with-a-file"),
+    pytest.param({"blocks": "dangling"}, False, id="blocks-dangling-link"),
+    pytest.param({"blocks": [], "manifests": []}, True, id="both-empty"),
+    pytest.param({}, True, id="neither"),
+])
+def test_test_pilot_profile_with_blocks_or_manifests_is_not_listed(w, where, beside, listed):
+    # axis: a legacy test-pilot profile is not listed while a blocks or manifests directory beside it holds an entry; empty ones do not hold it, and the stale layer is still listed
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(w.d_gl("test-pilot.md"), _PILOT)
+    stale_layer = _put(w.d_in("test-pilot.md"), _PILOT + "stale layer\n")
+    profile = _put(_tp_profile(w, where), _PILOT + "old profile\n")
+    for sub, names in beside.items():
+        directory = os.path.join(os.path.dirname(profile), sub)
+        if names == "dangling":
+            os.symlink(str(w.tmp / "no-such-blocks"), directory)
+            continue
+        os.makedirs(directory)
+        for name in names:
+            _put(os.path.join(directory, name), "x\n")
+    assert w.paths() == sorted([stale_layer] + ([profile] if listed else []))
+
+
+@pytest.mark.parametrize("shape,listed", [
+    pytest.param("directory", False, id="directory"),
+    pytest.param("dangling-link", False, id="dangling-link"),
+    pytest.param("linked-file", True, id="link-to-a-regular-file"),
+])
+def test_legacy_profiles_need_a_regular_read_slot(w, shape, listed):
+    # axis: a legacy profile is listed only when the slot read is a regular file (a link to one passes); the stale in-repo unified layer is listed either way
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    real_layer = _put(str(w.tmp / "real-layer.md"), "## Focus hints\n- real\n")
+    picked = {"review": w.d_gl("review-crew.md"), "pilot": w.d_gl("test-pilot.md")}
+    for path in picked.values():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if shape == "directory":
+            os.makedirs(path)
+        elif shape == "dangling-link":
+            os.symlink(str(w.tmp / "no-such-layer.md"), path)
+        else:
+            os.symlink(real_layer, path)
+    stale = [_put(w.d_in("review-crew.md"), "## Focus hints\n- stale\n"),
+             _put(w.d_in("test-pilot.md"), _PILOT + "stale\n")]
+    legacy = [_put(w.inrepo("review-profile.md"), "## Threat model\nold\n"),
+              _put(w.inrepo("test-pilot", "profile.md"), _PILOT + "old\n")]
+    result = w.find()
+    assert [f["path"] for f in result["files"]] == sorted(stale + (legacy if listed else []))
+    for entry in result["files"]:
+        assert entry["reads"] == picked["review" if entry["family"] == "review-crew" else "pilot"]
+
+
+@pytest.mark.parametrize("mode", [mr.GLOBAL, mr.IN_REPO])
+@pytest.mark.parametrize("shape", ["directory", "dangling-link", "regular"])
+def test_decisions_need_a_regular_review_layer(w, mode, shape):
+    # axis: the decisions family is admitted only when the recorded side's review-crew.md is a regular file; the regular layer is the control that lists the other copies
+    w.register(mode)
+    d_m, d_o = (w.d_gl, w.d_in) if mode == mr.GLOBAL else (w.d_in, w.d_gl)
+    _put(d_m("core.md"), _CORE)
+    layer = d_m("review-crew.md")
+    if shape == "directory":
+        os.makedirs(layer)
+    elif shape == "dangling-link":
+        os.makedirs(os.path.dirname(layer), exist_ok=True)
+        os.symlink(str(w.tmp / "no-such-layer.md"), layer)
+    else:
+        _put(layer, "## Focus hints\n- layer\n")
+    entry_decisions = os.path.join(w.entry(w.rr), "review-decisions.json")
+    dec_in, dec_gl = w.inrepo("review-decisions.json"), w.d_gl("review-decisions.json")
+    for path in (dec_in, dec_gl, entry_decisions):
+        _put(path, '{"copy": "%s"}\n' % os.path.basename(os.path.dirname(path)))
+    listed = [f["path"] for f in w.find()["files"] if f["family"] == "decisions"]
+    if shape != "regular":
+        assert listed == []
+    elif mode == mr.GLOBAL:
+        assert listed == sorted([dec_in, entry_decisions])
+    else:
+        assert listed == sorted([dec_gl, entry_decisions])
+
+
+def _copied_backup(w, backup, name):
+    """A copy of a backup folder (retired.json included) at a new place inside the project store's
+    leftover-backups folder, where restore's inside-the-store check passes. Nothing is removed."""
+    copy = os.path.join(w.store_dir(), "leftover-backups", name)
+    shutil.copytree(backup, copy)
+    return copy
+
+
+def test_restore_reads_the_backup_folder_it_is_given(w):
+    # axis: restore re-roots each entry's backup file under the folder given, so a copied or moved folder restores every entry and the original folder is not read
+    left = _everything_left_behind(w)
+    before = {p: _read(p) for p in left}
+    done = w.retire(w.find()["digest"])
+    assert done["status"] == "retired"
+    copy = _copied_backup(w, done["backup"], "copied-elsewhere")
+    assert os.path.isfile(os.path.join(copy, "retired.json"))
+    back = ls.restore(w.cwd, copy, root=w.root)
+    assert back["status"] == "restored" and back["skipped"] == []
+    assert sorted(r["from"] for r in back["restored"]) == sorted(left)
+    for path in left:
+        assert _read(path) == before[path]
+    for move in done["moved"]:
+        name = os.path.basename(move["to"])
+        assert not os.path.lexists(os.path.join(copy, name)), name  # the copy's file was the one moved
+        assert _read(move["to"]) == before[move["from"]]  # the original folder is untouched
+    assert os.path.isfile(os.path.join(copy, "retired.json"))
+
+
+def test_restore_never_reads_outside_the_backup_folder(w):
+    # axis: a crafted `to` reads only <backup>/<basename>, so ../escape and an absolute path name nothing outside the folder; an empty, dot-dot or manifest basename is skipped as entry-invalid
+    left = _everything_left_behind(w)
+    before = {p: _read(p) for p in left}
+    done = w.retire(w.find()["digest"])
+    copy = _copied_backup(w, done["backup"], "crafted")
+    parent = os.path.dirname(copy)
+    outside_beside = _put(os.path.join(parent, "escape"), "outside, beside the folder\n")
+    elsewhere = _put(str(w.tmp / "elsewhere" / "escape"), "outside, elsewhere\n")
+    manifest_path = os.path.join(copy, "retired.json")
+    manifest = json.loads(_read(manifest_path).decode("utf-8"))
+    entries = manifest["entries"]
+    assert len(entries) == 5
+    entries[0]["to"] = "../escape"
+    entries[1]["to"] = elsewhere
+    entries[2]["to"] = os.path.join(copy, "..")
+    entries[3]["to"] = os.path.join(copy, "retired.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh)
+    manifest_before = _read(manifest_path)
+    back = ls.restore(w.cwd, copy, root=w.root)
+    assert back["status"] == "restored"
+    assert back["skipped"] == [
+        {"from": entries[0]["from"], "why": "missing"},
+        {"from": entries[1]["from"], "why": "missing"},
+        {"from": entries[2]["from"], "why": "entry-invalid"},
+        {"from": entries[3]["from"], "why": "entry-invalid"},
+    ]
+    assert [r["from"] for r in back["restored"]] == [entries[4]["from"]]
+    assert back["restored"][0]["to"] == os.path.join(copy, os.path.basename(entries[4]["to"]))
+    assert _read(entries[4]["from"]) == before[entries[4]["from"]]
+    assert _read(outside_beside) == b"outside, beside the folder\n"
+    assert _read(elsewhere) == b"outside, elsewhere\n"
+    assert _read(manifest_path) == manifest_before
+    for entry in entries[:4]:
+        assert not os.path.lexists(entry["from"])
+
+
+def test_undo_sentence_is_shell_quoted_and_names_a_non_default_root(w, capsys):
+    # axis: the undo command round-trips through shlex.split to the restore arguments for a path with a space, and a non-default root is named as --root
+    prefix = "To undo this, run: "
+    cwd, backup, root = "/tmp/my repo", "/tmp/my store/leftover-backups/20261010T120000Z", "/tmp/my root"
+    script = os.path.abspath(ls.__file__)
+    plain = ls._undo_sentence(cwd, backup)
+    assert plain.startswith(prefix)
+    assert shlex.split(plain[len(prefix):]) == [
+        "python3", script, "restore", "--cwd", cwd, "--backup", backup]
+    assert "--root" not in plain
+    rooted = ls._undo_sentence(cwd, backup, root)
+    assert shlex.split(rooted[len(prefix):]) == [
+        "python3", script, "restore", "--cwd", cwd, "--backup", backup, "--root", root]
+    # the sentence retire prints runs: it names the root retire was given and restores through the command line
+    left = _everything_left_behind(w)
+    done = w.retire(w.find()["digest"])
+    argv = shlex.split(done["undo"][len(prefix):])
+    assert argv[:2] == ["python3", script]
+    assert argv[argv.index("--root") + 1] == w.root and argv[argv.index("--backup") + 1] == done["backup"]
+    capsys.readouterr()
+    assert ls.main(argv[2:]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "restored"
+    assert all(os.path.isfile(p) for p in left)
+
+
 # --- 10. V994's three stale-copy reads, before and after retire ----------------------------------
 
 def test_fu1_decisions_reader_follows_the_unified_copy_after_retire(w):
@@ -677,9 +862,29 @@ GIT_CALLS_CLEAN = 3
 GIT_CALLS_LEFTOVERS = 3
 
 
-@pytest.mark.parametrize("leftovers", [False, True])
+def _pointer_bytes(*roots):
+    """Every key pointer file under the given legacy store roots, by path."""
+    out = {}
+    for root in roots:
+        keys = os.path.join(root, "keys")
+        for name in sorted(os.listdir(keys)) if os.path.isdir(keys) else []:
+            out[os.path.join(keys, name)] = _read(os.path.join(keys, name))
+    return out
+
+
+def _make_healable(w, legacy_root):
+    """A legacy store entry whose remote-key pointer dangles (its entry directory is gone) while the
+    gitdir-key pointer is live, so resolve_global(heal=True) would rewrite the remote pointer."""
+    w.entry(legacy_root)
+    remote_hash = store_core.derive_identifiers(w.cwd)["remote_hash"]
+    assert remote_hash
+    store_core.write_pointer(legacy_root, remote_hash, "an-entry-that-no-longer-exists")
+    return remote_hash
+
+
+@pytest.mark.parametrize("leftovers", [False, True, "healable"])
 def test_find_is_read_only_and_makes_few_git_calls(w, monkeypatch, leftovers):
-    # axis: find writes nothing under any store root and makes a small fixed number of git calls
+    # axis: find writes nothing under any store root (a healable store's pointers stay byte-identical) and makes a small fixed number of git calls
     if leftovers:
         _everything_left_behind(w)
         w.entry(w.rr)
@@ -690,6 +895,10 @@ def test_find_is_read_only_and_makes_few_git_calls(w, monkeypatch, leftovers):
         _put(w.d_gl("review-crew.md"), "## Focus hints\n- global\n")
         w.entry(w.rr)
         w.entry(w.tr)
+    if leftovers == "healable":
+        _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nold\n")
+        _make_healable(w, w.rr)
+        _make_healable(w, w.tr)
     calls = []
     real = store_core.run_git_result
 
@@ -699,11 +908,25 @@ def test_find_is_read_only_and_makes_few_git_calls(w, monkeypatch, leftovers):
 
     monkeypatch.setattr(store_core, "run_git_result", counting)
     before = _tree(w.root, w.rr, w.tr)
+    pointers_before = _pointer_bytes(w.rr, w.tr)
     result = w.find()
     after = _tree(w.root, w.rr, w.tr)
-    assert bool(result["files"]) is leftovers
+    assert bool(result["files"]) is bool(leftovers)
     assert after == before
+    assert _pointer_bytes(w.rr, w.tr) == pointers_before
     assert len(calls) == (GIT_CALLS_LEFTOVERS if leftovers else GIT_CALLS_CLEAN), calls
+    if leftovers == "healable":
+        # find followed the live pointer through the dangling one (the entry's profile is listed) ...
+        entry_profile = os.path.join(w.rr, "entries", store_core.derive_identifiers(w.cwd)["gitdir_hash"],
+                                     "review-profile.md")
+        assert entry_profile in [f["path"] for f in result["files"]]
+        # ... and the state is healable: resolve_global with heal=True rewrites a pointer, find did not
+        remote_pointer = os.path.join(w.rr, "keys", store_core.derive_identifiers(w.cwd)["remote_hash"])
+        assert _read(remote_pointer) == b"an-entry-that-no-longer-exists"
+        healed = store_core.resolve_global(w.cwd, w.rr, heal=True)
+        assert healed["healed"] is True
+        assert _pointer_bytes(w.rr, w.tr) != pointers_before
+        assert _read(remote_pointer) == healed["entry_id"].encode("utf-8")
 
 
 # --- notice and the command line -----------------------------------------------------------------

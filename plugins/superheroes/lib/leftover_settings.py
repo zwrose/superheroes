@@ -13,12 +13,15 @@ Families (ordered slots; the first present picked slot is the one the setting re
     patterns.md, guardian.md, every hero layer except review-crew.md and test-pilot.md), gated on the
     read core.md being on the recorded side (or no core.md anywhere);
   * review-crew: the layer, then the review-crew legacy profile (legacy files listed only while the
-    layer is what is read and the core is populated); when the read slot is the recorded side's legacy
-    profile the family lists nothing, because readers do not let a legacy profile supersede the other
-    side's layer;
-  * test-pilot: the same shape, and also gated on the read core.md being on the recorded side;
-  * decisions: review-decisions.json in the three places it lives; lists nothing while the recorded
-    side has no review-crew layer, because the decisions side follows the review calibration's location.
+    layer is what is read, is a regular file (os.path.isfile) and the core is populated); when the read
+    slot is the recorded side's legacy profile the family lists nothing, because readers do not let a
+    legacy profile supersede the other side's layer;
+  * test-pilot: the same shape, also gated on the read core.md being on the recorded side, and a legacy
+    profile is never listed while a `blocks` or `manifests` directory beside it holds any entry
+    (store.resolve puts them there, so retiring the profile would strand them);
+  * decisions: review-decisions.json in the three places it lives; lists nothing unless the recorded
+    side's review-crew layer is a regular file, because the decisions side follows the review
+    calibration's location.
 
 `find` writes nothing: it reads the registry without backfill, resolves the legacy store entries
 without healing, and takes no lock. Stdlib only.
@@ -32,6 +35,7 @@ import errno
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import sys
 import uuid
@@ -96,8 +100,29 @@ def _slots(*paths):
     return [p for p in paths if p]
 
 
+def _holds_entries(directory):
+    """True when directory has a `blocks` or `manifests` subdirectory holding any entry. Fail closed:
+    one that is present but cannot be listed (a file, a dangling link) cannot be shown empty."""
+    for sub in ("blocks", "manifests"):
+        path = os.path.join(directory, sub)
+        if not _present(path):
+            continue
+        try:
+            if os.listdir(path):
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _tp_artifacts_beside(slot):
+    """A legacy test-pilot profile's blocks and manifests sit beside it (store.resolve), so
+    retiring the profile would make any that exist unreachable."""
+    return _holds_entries(os.path.dirname(slot))
+
+
 def _gather(picked, unpicked, family, *, aligned=True, admitted=True, layer_only=False, layer=None,
-            legacy=(), populated=None):
+            legacy=(), populated=None, legacy_veto=None):
     """The leftovers of one family: [(path, family, reads)]."""
     # axis: a family whose gate refuses it lists nothing
     if not aligned or not admitted:
@@ -117,8 +142,11 @@ def _gather(picked, unpicked, family, *, aligned=True, admitted=True, layer_only
         # axis: a copy that is the same file on disk as the slot read (a link either way, or a linked directory) is never listed
         if os.path.realpath(slot) == real_reads:
             continue
-        # axis: a legacy file is listed only while the layer is what is read and the core is populated
-        if slot in legacy and not (reads == layer and populated()):
+        # axis: a legacy file is listed only while the layer is a regular file that is what is read and the core is populated
+        if slot in legacy and not (reads == layer and os.path.isfile(reads) and populated()):
+            continue
+        # axis: a legacy profile with blocks or manifests beside it is never listed, since retiring it would strand them
+        if slot in legacy and legacy_veto is not None and legacy_veto(slot):
             continue
         out.append((slot, family, reads))
     return out
@@ -194,14 +222,16 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
             _slots(layer, legacy_tp[mode]),
             _slots(os.path.join(d_o, _TEST_PILOT), legacy_tp[other]),
             "test-pilot", aligned=aligned, layer_only=True, layer=layer,
-            legacy=_slots(legacy_tp[mode], legacy_tp[other]), populated=populated)
+            legacy=_slots(legacy_tp[mode], legacy_tp[other]), populated=populated,
+            legacy_veto=_tp_artifacts_beside)
 
         dec_in = os.path.join(repo, _DEC_IN_REL)
         dec_gl = os.path.join(d_gl, _DECISIONS)
         dec_legacy = os.path.join(review_entry, _DECISIONS) if review_entry else None
         # the decisions side follows the review calibration's location, so they are admitted only
-        # while the recorded side has a review-crew layer (a broken one still counts as present)
-        has_layer = _present(os.path.join(d_m, _REVIEW_CREW))
+        # while the recorded side has a review-crew layer that is a regular file (a broken one, a
+        # directory or a dangling link, may not be what is read, so the other side's decisions stay)
+        has_layer = os.path.isfile(os.path.join(d_m, _REVIEW_CREW))
         if mode == mode_registry.GLOBAL:
             found += _gather(_slots(dec_gl, dec_legacy), [dec_in], "decisions", admitted=has_layer)
         else:
@@ -270,9 +300,14 @@ def _make_backup_dir(store_dir, now):
             n += 1
 
 
-def _undo_sentence(cwd, backup):
-    return ("To undo this, run: python3 %s restore --cwd %s --backup %s"
-            % (os.path.abspath(__file__), cwd, backup))
+def _undo_sentence(cwd, backup, root=None):
+    """The shell command that undoes a retire: every path shell-quoted, `--root` named when the
+    retire was given a non-default root."""
+    parts = ["python3", shlex.quote(os.path.abspath(__file__)), "restore",
+             "--cwd", shlex.quote(cwd), "--backup", shlex.quote(backup)]
+    if root is not None:
+        parts += ["--root", shlex.quote(root)]
+    return "To undo this, run: " + " ".join(parts)
 
 
 def retire(cwd, *, owner_authorized, list_digest, root=None, review_root=None,
@@ -322,7 +357,7 @@ def retire(cwd, *, owner_authorized, list_digest, root=None, review_root=None,
                                        "detail": "%s: %s" % (type(exc).__name__, exc)}}
                 moved.append({"from": entry["from"], "to": entry["to"]})
             return {"status": "retired", "backup": backup, "manifest": manifest, "moved": moved,
-                    "undo": _undo_sentence(cwd, backup)}
+                    "undo": _undo_sentence(cwd, backup, root)}
 
 
 def _remove_object(path):
@@ -366,7 +401,9 @@ def _inside(path, directory):
 
 def restore(cwd, backup, *, root=None):
     """Put a retired backup's files back where they came from; never overwrites a present path
-    and never deletes the manifest or the folder."""
+    and never deletes the manifest or the folder. Each backed-up file is read as
+    <backup>/<basename of the stored `to`>, so a folder that moved with its store still restores; an
+    entry whose basename is empty, `.`, `..` or the manifest itself is skipped as entry-invalid."""
     if store_core.in_cloud_session():
         return _cloud_refusal()
     with store_core.repo_identity_memo():
@@ -386,7 +423,14 @@ def restore(cwd, backup, *, root=None):
             if not _inside(backup, os.path.join(store_dir, BACKUPS_DIRNAME)):
                 return {"status": "blocked", "reason": REASON_BACKUP_OUTSIDE_STORE}
             restored, skipped = [], []
-            for src, dst in pairs:
+            for src, stored_to in pairs:
+                # axis: the backed-up file is read from the folder given, by its basename alone, so a
+                # moved folder still restores and a crafted `to` can name nothing outside the folder
+                name = os.path.basename(stored_to) if isinstance(stored_to, str) else ""
+                if not isinstance(src, str) or name in ("", ".", "..", MANIFEST_FILENAME):
+                    skipped.append({"from": src, "why": "entry-invalid"})
+                    continue
+                dst = os.path.join(backup, name)
                 # axis: a path that is present (a dangling link included) is never overwritten
                 if _present(src):
                     skipped.append({"from": src, "why": "occupied"})

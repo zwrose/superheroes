@@ -48,6 +48,7 @@ ROLE_SET_ASIDE = "set-aside"
 WHY_ONLY_COPY = "only-copy"
 WHY_NOT_REGULAR = "not-a-regular-file"
 WHY_SHARED_PATH = "shared-path"
+WHY_RETAINED = "retained"
 _BACKUP_SUFFIX = "-storage-move"
 
 
@@ -212,7 +213,9 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
 
     Decisions: the first present regular M-side copy is carried to the target's first slot; every
     other present regular M-side copy, and the target-side legacy review-entry copy when the target
-    is global, is set aside. Legacy profiles: set aside when the same hero's unified layer moves in
+    is global, is set aside. Any present decisions copy that ends in no entry (as source or as the
+    carry's replaced destination) and in no other left-in-place row is named with why `retained`.
+    Legacy profiles: set aside when the same hero's unified layer moves in
     today's entries, else left in place as the only copy. A present path that is not a regular file
     is never moved."""
     import calibration_paths
@@ -275,6 +278,11 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         elif carried or present(t_first):
             # set aside only while the target's first slot holds a copy; the only copy stays read
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
+    # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
+    # aside or replaces and no other row already names stays where it is, and the preview says so
+    for path in (dec_in, dec_gl, dec_legacy):
+        if present(path) and real(path) not in used:
+            leave(path, WHY_RETAINED)
 
     # legacy profiles
     moved_srcs = {real(f["src"]) for f in files}
@@ -359,7 +367,8 @@ def preview(migration):
     Enumerates calibration, definition-docs, and non-definition-doc work-item records, with a
     one-line collaborator-visibility disclosure. A settings entry (#2587) is reported apart:
     a carried one counts as calibration, a set-aside one is listed under `setAside` (where it
-    goes), `leftInPlace` names the copies the flip does not move, and `overwrites` names every
+    goes), `leftInPlace` names the copies the flip does not move (every decisions copy that remains
+    after the move among them, with why `retained` when nothing else explains it), and `overwrites` names every
     destination of a non-set-aside entry that already exists (the flip replaces it)."""
     calibration, def_docs, work_item_records, set_aside = [], [], [], []
     for f in migration.files:

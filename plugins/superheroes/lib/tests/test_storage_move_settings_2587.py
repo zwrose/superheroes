@@ -268,6 +268,59 @@ def test_preview_names_set_asides_left_in_place_and_overwrites(w):
     assert w.inrepo("test-pilot", "profile.md") not in {f["src"] for f in m.files}
 
 
+@pytest.mark.parametrize("case", [
+    pytest.param("target-copy-stays", id="target-copy-stays"),
+    pytest.param("only-legacy-copy", id="only-legacy-copy"),
+    pytest.param("left-behind-in-repo", id="left-behind-in-repo"),
+    pytest.param("named-once", id="named-once"),
+    pytest.param("replaced-is-not-retained", id="replaced-is-not-retained"),
+])
+def test_preview_names_each_retained_decisions_copy(w, case):
+    # axis: every decisions copy that remains after the move is in leftInPlace with why retained, once, and one a carry replaces is not
+    entry_dec = None
+    if case == "target-copy-stays":
+        # in-repo -> global, no in-repo copy to carry: the global copy stays, the legacy copy is set aside over it
+        w.register(mr.IN_REPO)
+        _put(w.d_in("core.md"), _CORE)
+        entry_dec = os.path.join(w.entry(w.rr), _DEC)
+        _put(entry_dec, '{"stale": "entry"}\n')
+        _put(w.d_gl(_DEC), '{"global": true}\n')
+        target, expected = mr.GLOBAL, [(w.d_gl(_DEC), "retained")]
+    elif case == "only-legacy-copy":
+        # in-repo -> global with the legacy copy alone: nothing takes its slot, so it stays
+        w.register(mr.IN_REPO)
+        _put(w.d_in("core.md"), _CORE)
+        entry_dec = _put(os.path.join(w.entry(w.rr), _DEC), '{"only": true}\n')
+        target, expected = mr.GLOBAL, [(entry_dec, "retained")]
+    elif case == "left-behind-in-repo":
+        # global -> in-repo with the in-repo copy alone: nothing moves, and it stays
+        w.register(mr.GLOBAL)
+        _put(w.d_gl("core.md"), _CORE)
+        target, expected = mr.IN_REPO, [(_put(w.inrepo(_DEC), '{"in": true}\n'), "retained")]
+    elif case == "named-once":
+        # a directory at the in-repo slot is named not-a-regular-file only; the global copy stays and is retained
+        w.register(mr.IN_REPO)
+        _put(w.d_in("core.md"), _CORE)
+        os.makedirs(w.inrepo(_DEC))
+        target, expected = mr.GLOBAL, [(w.inrepo(_DEC), "not-a-regular-file"),
+                                       (_put(w.d_gl(_DEC), '{"global": true}\n'), "retained")]
+    else:
+        # in-repo -> global carrying over a present global copy: the copy is replaced, not retained
+        w.register(mr.IN_REPO)
+        _put(w.d_in("core.md"), _CORE)
+        _put(w.inrepo(_DEC), '{"in": true}\n')
+        _put(w.d_gl(_DEC), '{"old": true}\n')
+        target, expected = mr.GLOBAL, []
+    m = w.enumerate(target)
+    pv = mm.preview(m)
+    assert sorted((e["path"], e["why"]) for e in pv["leftInPlace"]) == sorted(expected)
+    # the rows are the whole story: no decisions copy is both retained and moved
+    moved = {p for f in m.files for p in (f["src"], f["dst"]) if f.get("family") == "decisions"}
+    assert not ({e["path"] for e in pv["leftInPlace"]} & moved)
+    if case == "target-copy-stays":
+        assert [a["from"] for a in pv["setAside"]] == [entry_dec]
+
+
 # --- edge 1: no shared path ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("direction", [mr.GLOBAL, mr.IN_REPO])
