@@ -680,7 +680,11 @@ advisor run together to keep calibration honest.
      window".
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
      escapes only, and decides nothing. Its input is every review record of each PR, as the
-     record writer reads each (the same records the measures row reads), and each review escape as its review's date
+     record writer reads each (the same records the measures row reads). The records come from
+     `python3 -B <plugin root>/lib/review_record.py read-all --pr <n>` for each PR, its `records` list;
+     each entry of its `unreadable` list is appended to the same input as it is, so the tally and the
+     measures row read that PR's evidence as incomplete rather than as a short list. The input also
+     holds each review escape as its review's date
      (`reviewedAt`), its call (`missed` or `seen-and-left`) and its kind (`kind`, spelled as in the
      entry's caught-by line). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
@@ -703,7 +707,8 @@ advisor run together to keep calibration honest.
    - **Append the review-loop measures row** for the window at every pass, before the walk:
      `python3 -B <plugin root>/lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`.
      Its docstring names the input file's keys and the counting rules. A second run for the same window
-     replaces that window's row. A measure whose input is missing or damaged reads unmeasured with its
+     replaces that window's row. The input's `records` key is built the same way (`read-all` for each PR,
+     its `records` plus every `unreadable` entry). A measure whose input is missing or damaged reads unmeasured with its
      reason, never zero. The late-finds and repeat-location measures run monthly or on a sample, and
      the row says which. The row gates nothing and is read by hand.
      Four of its measures are counted by plugin release, with no target number: owner cards per

@@ -25,6 +25,7 @@ switching, never a lane already running.
 Check these in a consuming project when it adopts the next release. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed by a caller: a seat map with a seat in a maker's family other than the author's (one the map's `makerFamilies` or the session's makers name) now carries a `maker-family` violation for that seat, so its certificate reads `-constraint-violated` where it read the plain shape or `-degraded` before. A map whose `makerFamilies` is malformed never has its `critical-diversity` excused by liveness, so some such maps that read clean now read `-constraint-violated` too.** No key, token or result shape changes. See [Seat map: a seat in any maker's family is a maker seat](#seat-map-a-seat-in-any-makers-family-is-a-maker-seat).
+- **After switching.** **Nothing is owed: `review_record.py` gains the verb `read-all --pr <n>`, and `read` answers as before.** The advisor's gardening pass now gathers every review record of a PR with it. See [Review record: read-all returns every review record of a PR](#review-record-read-all-returns-every-review-record-of-a-pr).
 
 ### Seat map: a seat in any maker's family is a maker seat
 
@@ -33,6 +34,13 @@ Check these in a consuming project when it adopts the next release. Each step na
 - **The liveness excusal.** `classify_violations` now counts the session's makers, as well as the map's, as makers when it asks whether a second critical family was reachable, so a maker's family is never counted as a live alternative (registry row V953-a). With a seat in any maker's family already a breach, this cannot clear a panel seated in a maker's family.
 - **A malformed maker list.** When a map carries `makerFamilies` that is not a list of non-empty strings (a string, say, or a list with a number in it), its `critical-diversity` is never excused by liveness: the record stays unexcused with evidence `unproven-liveness`, as for an unknown author. The pin excusal is unchanged. This is stricter than before: an all-cursor panel whose `makerFamilies` is a string, with only claude and cursor live, read `full-panel-confirmed` (its `critical-diversity` excused by liveness) and now reads `full-panel-confirmed-constraint-violated`.
 - Replacement. None: no key, token, argument or result shape changes.
+
+### Review record: read-all returns every review record of a PR
+
+- **The verb.** `python3 -B lib/review_record.py read-all --pr <n>` answers `{"ok", "pr", "records", "unreadable"}`. `records` lists every record of the PR that parses, oldest first, each with its `url`. `unreadable` lists each record comment that does not, as `{"id", "url", "detail"}`. It refuses `review-record-missing` when the PR has no record comment and `review-record-gh-failed` when the comments cannot be listed. Exit 0 when `ok`, else 1.
+- **The reading.** A record comment that does not parse, or raises while parsing, is named in `unreadable` and never costs another record. A record changed in transit that still parses is in `records` with its `transitDamage`.
+- **The gardening pass.** Duty 3 feeds `records` plus every `unreadable` entry to the tally and to the measures row, so a PR with an unreadable record reads as incomplete evidence, never as a short list.
+- Replacement. None: no existing key, token or shape changes; `read` is unchanged.
 
 ## 0.51.1
 
