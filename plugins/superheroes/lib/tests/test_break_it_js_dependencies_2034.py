@@ -129,6 +129,7 @@ def _tracked_hashes(repo):
 # T1
 @pytest.mark.parametrize("content,outcome,code", [(PASSING, "passed", 0), (FAILING, "failed", 1)])
 def test_t1_npm_script_resolves_the_installed_dependencies(tmp_path, content, outcome, code):
+    # axis: break_it.run_one runs an npm-script test against the checkout's installed node_modules, so a passing block passes and a failing one fails
     got = _run(_repo(tmp_path), content, NPM_RUN)
     assert (got["outcome"], got["exitCode"]) == (outcome, code), got
 
@@ -136,12 +137,14 @@ def test_t1_npm_script_resolves_the_installed_dependencies(tmp_path, content, ou
 # T2
 @pytest.mark.parametrize("content,outcome", [(PASSING, "passed"), (FAILING, "failed")])
 def test_t2_npx_shape_resolves_the_installed_dependencies(tmp_path, content, outcome):
+    # axis: break_it.run_one runs the npx shape against the checkout's installed node_modules, so a passing block passes and a failing one fails
     got = _run(_repo(tmp_path), content, NPX_RUN)
     assert got["outcome"] == outcome, got
 
 
 # T3
 def test_t3_no_install_is_not_run_module_not_found_and_launches_nothing(tmp_path):
+    # axis: detector 1, the JavaScript-launcher gate in break_it.run_one: declared dependencies with no node_modules read not-run `module-not-found` and launch nothing
     got = _run(_repo(tmp_path, install=False), PASSING, NPM_RUN)
     assert (got["outcome"], got["reason"]) == ("not-run", "module-not-found"), got
     assert got["exitCode"] is None
@@ -149,6 +152,7 @@ def test_t3_no_install_is_not_run_module_not_found_and_launches_nothing(tmp_path
 
 
 def test_t3_without_the_gate_precondition_the_run_time_signature_still_fails_closed(tmp_path):
+    # axis: with no declared dependencies the gate in break_it.run_one stays out, and the run-time setup-failure signature in break_it.run_one still reads the launch as not-run `command-not-found` (exit 127), never passed
     bare = dict(PACKAGE)
     del bare["devDependencies"]
     got = _run(_repo(tmp_path, install=False, package=bare), PASSING, NPM_RUN)
@@ -156,6 +160,7 @@ def test_t3_without_the_gate_precondition_the_run_time_signature_still_fails_clo
 
 
 def test_t3_an_unparseable_package_json_fires_no_gate(tmp_path):
+    # axis: the gate in break_it.run_one fires only on a package.json it can read as declaring dependencies; an unparseable one launches and never reads passed
     repo = _repo(tmp_path, install=False)
     (repo / "package.json").write_text("not json {")
     _git(repo, "add", "-A")
@@ -169,11 +174,13 @@ def test_t3_an_unparseable_package_json_fires_no_gate(tmp_path):
 
 # T4
 def test_t4_npx_with_an_empty_offline_cache_is_not_run(tmp_path):
+    # axis: detector 1, the JavaScript-launcher gate in break_it.run_one: npx with no install reads not-run `module-not-found` instead of fetching a runner
     got = _run(_repo(tmp_path, install=False), PASSING, NPX_RUN)
     assert (got["outcome"], got["reason"]) == ("not-run", "module-not-found"), got
 
 
 def test_t4_npx_with_a_global_install_holding_the_fake_is_not_run(tmp_path, monkeypatch):
+    # axis: detector 1, the JavaScript-launcher gate in break_it.run_one: npx with no install is never launched, so a global install cannot stand in for the project's dependencies
     prefix = tmp_path / "global"
     _install_fake(prefix / "lib" / "node_modules")
     (prefix / "bin").mkdir(parents=True)
@@ -188,6 +195,7 @@ def test_t4_npx_with_a_global_install_holding_the_fake_is_not_run(tmp_path, monk
 
 # T5
 def test_t5_a_tracked_file_the_run_writes_is_restored(tmp_path):
+    # axis: detector 2, the tracked-file restore in break_it (_restore_tracked): a tracked file the run writes is put back byte for byte
     repo = _repo(tmp_path)
     before = _tracked_hashes(repo)
     content = 'import fs from "node:fs"; fs.writeFileSync("README.md", "changed");\n' + PASSING
@@ -209,6 +217,7 @@ _THROUGH_THE_LINK = 'import fs from "node:fs"; fs.writeFileSync(%r, "changed");\
     ("node_modules/@s/localpkg", "../../packages/localpkg", "node_modules/@s/localpkg/index.js"),
 ])
 def test_t6_a_write_through_a_dependency_link_into_a_tracked_file_is_restored(tmp_path, link, target, written):
+    # axis: detector 2, the tracked-file restore in break_it (_restore_tracked): a write through a node_modules link into a tracked file is put back
     repo = _repo(tmp_path, install=False, tracked_local=True)
     _install_fake(repo / "node_modules")
     (repo / link).parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +231,7 @@ def test_t6_a_write_through_a_dependency_link_into_a_tracked_file_is_restored(tm
 
 
 def test_t6_a_write_through_a_dependency_folder_that_links_into_the_checkout_is_restored(tmp_path):
+    # axis: detector 2, the tracked-file restore in break_it (_restore_tracked): a write through a node_modules folder link into the checkout is put back
     repo = _repo(tmp_path, install=False)
     _write(repo, "vendor/pkg/index.js", "module.exports = 1;\n")
     _git(repo, "add", "-A")
@@ -237,6 +247,7 @@ def test_t6_a_write_through_a_dependency_folder_that_links_into_the_checkout_is_
 
 
 def test_t6_a_write_through_a_bin_entry_linking_into_tracked_files_is_restored(tmp_path):
+    # axis: detector 2, the tracked-file restore in break_it (_restore_tracked): a write through a .bin link into a tracked file is put back
     repo = _repo(tmp_path, install=False)
     _write(repo, "scripts/tool.js", "console.log(1);\n")
     _git(repo, "add", "-A")
@@ -253,6 +264,7 @@ def test_t6_a_write_through_a_bin_entry_linking_into_tracked_files_is_restored(t
 
 # T8
 def test_t8_a_block_path_under_node_modules_is_removed_after_the_run(tmp_path):
+    # axis: break_it's test-file restore removes a block written under node_modules and leaves the installed dependencies in place
     path = "node_modules/x.test.mjs"
     repo = _repo(tmp_path)
     got = _run(repo, PASSING, "npm test -- " + path, path)
@@ -264,6 +276,7 @@ def test_t8_a_block_path_under_node_modules_is_removed_after_the_run(tmp_path):
 
 # T9
 def test_t9_a_head_that_tracks_node_modules_runs_in_its_own(tmp_path):
+    # axis: break_it.run_one runs against a tracked node_modules, and the untracked restore removes what the run wrote into it
     repo = _repo(tmp_path, track_modules=True)
     got = _run(repo, PASSING, NPM_RUN)
     assert got["outcome"] == "passed", got
@@ -275,6 +288,7 @@ def test_t9_a_head_that_tracks_node_modules_runs_in_its_own(tmp_path):
 
 # T10
 def test_t10_the_run_rules_and_the_sanitized_view_notice_name_the_working_copy_and_the_dependencies():
+    # axis: break_it.RUN_RULES and sanitized_view.sanitized_view_notice tell the seat where the test runs and that the view has no installed dependencies
     assert "root of the session's own working copy, at the reviewed head" in break_it.RUN_RULES
     notice = sanitized_view.sanitized_view_notice({"headSha": "abc"})
     assert "no installed dependencies" in notice and "node_modules" in notice
