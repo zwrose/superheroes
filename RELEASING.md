@@ -28,12 +28,19 @@ release, whatever its type.
 
 ### Release day
 
-- **Land a pre-release doc pass before the release PR is clickable.** Move
-  `plugins/superheroes/TRANSITION.md`'s `## Unreleased` section (it exists only between releases)
-  under the version being cut, with its Before-you-upgrade lines (each opening with its
-  before- or after-switching marker, per `TRANSITION.md`'s header), and add the cut row to
-  [`ROADMAP.md`](ROADMAP.md) § The cut record. A release PR merged before the doc pass ships
-  stale upgrade notes.
+- **Land a pre-release doc pass before the release PR is clickable.** Assemble the upgrade notes
+  into the version being cut: from the repository root, run
+  `scripts/pinned-python -B plugins/superheroes/lib/transition_notes.py assemble --plugin-root plugins/superheroes --version <X.Y.Z>`.
+  It moves every note file in `plugins/superheroes/transition-notes/` (all but its README) into
+  `TRANSITION.md` under `## <X.Y.Z>`: the bullets into one `### Before you upgrade` list, each
+  keeping its before- or after-switching marker (per `TRANSITION.md`'s header), then each note's own
+  sections. A hand-written `## Unreleased` section, if one is left, becomes that version's section.
+  It then removes the files it assembled. Correct the assembled bullets' and sections' wording in
+  the same PR if they need it, and add the cut row to [`ROADMAP.md`](ROADMAP.md) § The cut record.
+  A `###` heading reaches `TRANSITION.md` only through a note file's assembly: to change a note's
+  heading, edit its note file in a PR before the doc pass; a released section's heading cannot be
+  renamed without CI failing. CI fails the release PR while any note file is still in the folder,
+  and fails a doc pass that deletes a note file without its sections reaching `TRANSITION.md`.
 - **After any docs-only merge, freshen the open release PR with `gh pr update-branch`.** The
   release PR is not a stack layer, so the stacked-PR bar on that command
   (`plugins/superheroes/rubric/native-stacks.md` § How a stack stays current) does not apply to

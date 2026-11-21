@@ -20,6 +20,7 @@ if _LIB not in sys.path:
 
 import cloud_builder as CB  # noqa: E402
 import cloud_recover  # noqa: E402
+import transition_notes  # noqa: E402
 
 REPO = "owner/repo"
 ISSUE = 17
@@ -242,6 +243,8 @@ def test_the_intake_texts_still_start_with_the_intake_header():
 
 # 8. doc pins
 def _doc(rel):
+    if rel == "TRANSITION.md":
+        return transition_notes.transition_text(_PLUGIN)
     with open(os.path.join(_PLUGIN, rel), encoding="utf-8") as fh:
         return fh.read()
 

@@ -123,10 +123,11 @@ cancelled by the concurrency group.
    §11.4, that every plugin-relative citation in the docs dispatched consumers read
    (`agents/`, `rubric/`, the `reference/` trees) resolves from the plugin root.
 7. `validate_stubs.py` — STUB markers carry an issue reference.
-8. Install `uv` — test-pilot block-execution tests depend on it.
-9. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
+8. `check_transition_notes.py` — upgrade-note files: every note file in `plugins/superheroes/transition-notes/` has the shape adopt-version reads; on a pull request, no new note is written straight into `TRANSITION.md` (the release doc pass's assembly excepted); on release-please's release PR, no note file is left unassembled.
+9. Install `uv` — test-pilot block-execution tests depend on it.
+10. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
    depend on it.
-10. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
+11. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
    `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
    activation-result CI gate). Schema tests
@@ -153,6 +154,7 @@ scripts/pinned-python .github/scripts/validate_marketplace.py
 scripts/pinned-python .github/scripts/validate_hosts.py
 scripts/pinned-python .github/scripts/validate_skills.py
 scripts/pinned-python .github/scripts/validate_stubs.py
+scripts/pinned-python .github/scripts/check_transition_notes.py
 scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
 ```
 

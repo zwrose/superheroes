@@ -3,9 +3,20 @@
 This file records consumer-visible shape changes across superheroes releases. Read it before you
 upgrade a caller that invokes dispatch CLIs, reads dispatch results, or depends on a result key.
 
-Add a section when a release drops, renames, or newly requires an argument, a result key, or a
-result shape a consumer depends on. Put the newest release first. Each section names the release it
-belongs to and lists every change with its replacement.
+A change owes a note when it drops, renames, or newly requires an argument, a result key, or a
+result shape a consumer depends on. The newest release comes first; each release section names the
+release it belongs to and lists every change with its replacement.
+
+A change never writes its note into this file. It writes the note as its own file in
+`transition-notes/`, named for its issue number (`<issue>.md`, or `<issue>-<slug>.md` for a second
+note from the same issue): a `### Before you upgrade` list of its bullets, each opening with its
+marker as the next paragraph says, then its own `###` section or sections. No two changes touch the
+same file, so their notes never conflict. The release doc pass assembles every note file into the
+version being cut with `lib/transition_notes.py assemble`, which removes the files it assembled.
+Until then a note lives only in its file, and a reader that needs the unreleased notes calls
+`transition_notes.transition_text`, which shows them as `## Unreleased`. CI fails a note file of the
+wrong shape, a change that adds a note to this file directly, and the release pull request while any
+note file is still unassembled.
 
 Open each bullet of a section's `### Before you upgrade` list with a marker: `**Before switching.**`
 when the adopting seat must finish it before it switches to the new version, or
