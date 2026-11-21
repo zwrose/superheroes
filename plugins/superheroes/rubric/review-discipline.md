@@ -252,10 +252,12 @@ table above and *Micro — owner authorization*.
 **Post-handback merges carry a review expectation only when they author content** (owner-ruled).
 A **content-neutral freshening** of the branch — an update-from-main that resolves no
 conflicts and authors nothing — carries **no** review expectation; re-panelling it is a race the
-branch cannot win. A post-handback commit that **authors content** — a conflict resolution, an
-advisor integration fold — keeps the union-fix **micro floor** in
+branch cannot win. A post-handback commit that **authors content** — an advisor integration
+fold — keeps the union-fix **micro floor** in
 `skills/showrunner/reference/merge-train.md`: one reviewer outside every maker's family on the final head, whose reading the
-review record shows.
+review record shows. A conflict resolution is never the advisor's: the PR goes back to its builder,
+who runs the returning review on the merge (`skills/showrunner/reference/merge-train.md` § A PR that
+conflicts with its base goes back to its builder).
 
 ## The driver mandate — the review record
 
