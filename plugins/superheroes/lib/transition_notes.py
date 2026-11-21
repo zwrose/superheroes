@@ -210,9 +210,14 @@ def _scan_byu(sec):
     fence = False
     for j in range(start + 1, end):
         ln = sec[j]
-        if _fence(ln):
-            fence = not fence
-        elif fence or not ln.strip():
+        if _fence(ln) or fence:
+            # A fenced block after a bullet is that bullet's continuation (a command it shows), so
+            # the bullet ends at the fence's close, never before its opening line.
+            if _fence(ln):
+                fence = not fence
+            if last is not None:
+                last = j
+        elif not ln.strip():
             continue
         elif ln.startswith("- "):
             last = j
