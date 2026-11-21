@@ -48,6 +48,21 @@ ignored value. A well-formed value never makes the answer worse than the check w
 each value tried, with X's change read against that value instead of the base; the first that proves answers proven,
 with a ``base-at-review`` line. With none given the check is exactly steps 1 to 9.
 
+A hand-resolved merge of the base into the pull request has no three-way reconstruction, so the caller may give a union
+proof (``--union-proof FILE``): the vet's tested probe, a two-parent commit that merged exactly the check's base with a
+commit the review covers, and the test receipt of that probe's tree. It is consulted only when the answer is not already
+proven and the check could read its inputs (a record that certifies, a valid base and head, a readable diff; otherwise
+reason ``not-consulted``). It turns the answer to proven (``proven-union``) only when git itself shows, at check time,
+eight things in this order: the proof is well formed (``malformed``); its receipt is one command with exit 0 on the
+proof's tree (``no-receipt``); its base is the check's base (``other-base``); the probe is a commit (``probe-unreadable``);
+git's tree of the probe is the proof's tree (``tree-unconfirmed``); the probe's parents are the base and one other commit
+that is the certified commit or that the check, run from the certified commit to it, proves (``other-commit``); the base
+is an ancestor of the head (``head-not-current``); and the head's tree is git's tree of the probe, mode bits included
+(``other-tree``). The first that fails leaves the answer exactly as it was, adds one ``union-probe-ignored: <first 8 of
+the probe> <reason>`` line and sets ``unionProbe.used`` false; so a proof never makes the answer worse. ``unionProbe``
+(the probe, ``used``, ``reason`` and the files it ``covers``) is in the result only when a proof was given; without one the
+result is exactly as it was.
+
 ``outcome(answer, ci, judged_clear, sheet, sheet_commit, head)`` is covered when the answer is proven, or judgement
 with ``judged_clear``. CI red is NOT-READY (``ci-red``, no review owed: the fix arrives as a new commit); not covered
 is NOT-READY (``needs-review``, or ``judged-meaningful`` for an uncleared judgement) with a returning review owed;
@@ -60,11 +75,11 @@ must be full 40-hex shas, and a live sheet whose head moved needs a carry answer
 
 CLI:
   head_coverage.py check --repo-root DIR --base SHA --record FILE --head SHA [--proof FILE] [--builder-author EMAIL]
-                         [--base-at-review SHA]...
+                         [--base-at-review SHA]... [--union-proof FILE]
   head_coverage.py outcome --answer A --ci C [--judged-clear] [--sheet none|live|held] [--sheet-commit SHA]
                            [--head SHA] [--carry-answer A] [--carry-judged-clear]
-prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record or proof
-file, a bad value)."""
+prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record, proof or
+union-proof file, a union-proof file holding null, a bad value)."""
 import argparse
 import io
 import json
@@ -98,9 +113,20 @@ WHY_BEHAVIOUR_CHANGE = "behaviour-change"
 WHY_CHECK_FAILED = "check-failed"
 WHY_BASE_AT_REVIEW = "base-at-review"
 WHY_BASE_AT_REVIEW_IGNORED = "base-at-review-ignored"
+WHY_PROVEN_UNION = "proven-union"
+WHY_UNION_IGNORED = "union-probe-ignored"
 WHY_TOKENS = (WHY_RECORD_UNUSABLE, WHY_SAME_COMMIT, WHY_INPUT_INVALID, WHY_DIFF_UNREADABLE, WHY_OWN_CHANGE_UNCHANGED,
               WHY_PROVEN_COPIES, WHY_PROSE_OR_COMMENTS, WHY_OTHER_AUTHOR, WHY_BEHAVIOUR_CHANGE, WHY_CHECK_FAILED,
-              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_IGNORED)
+              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_IGNORED, WHY_PROVEN_UNION, WHY_UNION_IGNORED)
+
+UNION_SCHEMA = "union-probe/1"
+UNION_REASONS = ("malformed", "no-receipt", "other-base", "probe-unreadable", "tree-unconfirmed", "other-commit",
+                 "head-not-current", "other-tree", "not-consulted")
+# The answers for which the check could not read its inputs; a union proof is not consulted for them.
+_UNION_UNREAD_WHY = (WHY_RECORD_UNUSABLE, WHY_INPUT_INVALID, WHY_DIFF_UNREADABLE, WHY_CHECK_FAILED)
+_UNION_KEYS = {"schema", "probe", "tree", "base", "receipt"}
+_UNION_RECEIPT_KEYS = {"command", "exitCode", "tree"}
+_HEX_PREFIX_RE = re.compile(r"[0-9a-f]{1,8}")
 
 CI_STATES = ("green", "pending", "red", "none")
 SHEETS = ("none", "live", "held")
@@ -362,20 +388,28 @@ def _authors(run, base, x, head):
     return commits
 
 
-def check(repo_root, base, record, head, proof=(), builder_author=None, git=None, base_at_review=()):
+def check(repo_root, base, record, head, proof=(), builder_author=None, git=None, base_at_review=(), union_proof=None):
     """``{"answer": "proven" | "judgement" | "needs-review", ...}``: whether the commit ``record`` certifies covers
     ``head``. Never raises: every fault reads ``needs-review`` with a reason in ``why``. ``record`` is what
     ``review_record.py read --pr N`` prints, or the bare record. ``proof`` is a list of ``{file, source, sha256}``
     copy entries. ``git`` is the test seam ``returning_review.decide`` takes, ``git(argv) -> (returncode,
     stdout_text)``; production leaves it None. ``base_at_review`` is a list of full commit shas, each a second base
     whose tree git shows equals the base's tree (the second-base paragraph of the module docstring); a value that does
-    not fit is ignored; empty, the check is as it was."""
+    not fit is ignored; empty, the check is as it was. ``union_proof`` is the vet's tested-union proof (the union
+    paragraph of the module docstring); None, the result is exactly as it was and carries no ``unionProbe`` key."""
     try:
-        return _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review)
+        got = _check_rewritten(repo_root, base, record, head, proof, builder_author, git, base_at_review)
+        # axis: with no union proof the result is the check's own, key set included, so the proof path can never change an answer it was not asked about — see bite-proof record i2589_head_coverage_union_probe (E-absent)
+        if union_proof is None:
+            return got
+        return _with_union(repo_root, base, record, head, proof, builder_author, git, base_at_review, got, union_proof)
     except Exception as exc:  # total: a fault nobody foresaw is still a review owed
         # axis: a fault of any kind reads needs-review, never an answer that covers the head — see bite-proof record i2496_wo_a_head_coverage (E-fail)
         result = _result(base, head)
-        return _needs_review(result, WHY_CHECK_FAILED, "the check failed on %s: %s" % (type(exc).__name__, exc))
+        _needs_review(result, WHY_CHECK_FAILED, "the check failed on %s: %s" % (type(exc).__name__, exc))
+        if union_proof is not None:
+            _union_ignored(result, union_proof, "not-consulted")
+        return result
 
 
 def _token_of(line):
@@ -460,6 +494,116 @@ def _ignored_reason(run, x, value, base_tree):
     if code != 0 or not returning_review._is_sha(text.strip() if isinstance(text, str) else ""):
         return "no-merge-base"
     return None
+
+
+def _lower_sha(value):
+    """True for a full sha in the lower case git prints; ``returning_review._is_sha`` also reads upper case, which would
+    never equal what git prints back."""
+    return returning_review._is_sha(value) and value == value.lower()
+
+
+def _union_probe_of(union_proof):
+    """The probe the proof names when it is a string, else None; for the report only."""
+    probe = union_proof.get("probe") if isinstance(union_proof, dict) else None
+    return probe if isinstance(probe, str) else None
+
+
+def _short(value):
+    """The first 8 characters of a hex sha for a ``why`` line, or ``none``: text that is not hex is never echoed."""
+    return value[:8] if isinstance(value, str) and _HEX_PREFIX_RE.fullmatch(value[:8]) else "none"
+
+
+def _union_ignored(result, union_proof, reason):
+    """``result`` with a ``union-probe-ignored`` line and a ``unionProbe`` that was not used; the answer is untouched."""
+    probe = _union_probe_of(union_proof)
+    result["why"].append(_line(WHY_UNION_IGNORED, "%s %s" % (_short(probe), reason)))
+    result["unionProbe"] = {"probe": probe, "used": False, "reason": reason, "covers": []}
+    return result
+
+
+def _union_other_parent(run, probe, base):
+    """The probe's parent that is not the base when git prints exactly two parents, one of them the base and the other
+    not; else None."""
+    code, text = run(["rev-list", "--parents", "-n", "1", probe])
+    words = text.split() if code == 0 and isinstance(text, str) else []
+    if len(words) != 3 or words[0] != probe or not all(returning_review._is_sha(w) for w in words):
+        return None
+    parents = words[1:]
+    if base not in parents:
+        return None
+    other = parents[0] if parents[1] == base else parents[1]
+    return other if other != base else None
+
+
+def _union_refusal(run, repo_root, base, record, head, proof, builder_author, git, base_at_review, got, union_proof):
+    """``(reason, parent)``: the reason word of the first test the union proof fails (the module docstring's union
+    paragraph), or ``(None, parent)`` when it passes all eight, with ``parent`` the probe's non-base parent."""
+    # axis: a proof that is not exactly the union-probe/1 object, with full lower-case shas, proves nothing — see bite-proof record i2589_head_coverage_union_probe (E-shape)
+    if not (isinstance(union_proof, dict) and set(union_proof) == _UNION_KEYS and union_proof["schema"] == UNION_SCHEMA
+            and all(_lower_sha(union_proof[key]) for key in ("probe", "tree", "base"))):
+        return "malformed", None
+    probe, tree = union_proof["probe"], union_proof["tree"]
+    receipt = union_proof["receipt"]
+    command = receipt.get("command") if isinstance(receipt, dict) else None
+    exit_code = receipt.get("exitCode") if isinstance(receipt, dict) else None
+    # axis: a probe counts only with a test receipt that ran a command, exited 0 and names the proof's own tree — see bite-proof record i2589_head_coverage_union_probe (E-receipt)
+    if not (isinstance(receipt, dict) and set(receipt) == _UNION_RECEIPT_KEYS and isinstance(command, str)
+            and command.strip() and isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code == 0
+            and receipt["tree"] == tree):
+        return "no-receipt", None
+    # axis: the probe merged exactly the check's base, so a probe of another base, even one with the same tree, proves nothing — see bite-proof record i2589_head_coverage_union_probe (E-base)
+    if union_proof["base"] != base:
+        return "other-base", None
+    code, text = run(["cat-file", "-t", probe])
+    # axis: the probe must be a commit git can read, so a missing object, a tree or a blob is never a probe — see bite-proof record i2589_head_coverage_union_probe (E-readable)
+    if code != 0 or not isinstance(text, str) or text.strip() != "commit":
+        return "probe-unreadable", None
+    probe_tree = _tree_of(run, probe)
+    # axis: the tree the receipt tested is git's tree of the probe, never the proof's own word for it — see bite-proof record i2589_head_coverage_union_probe (E-confirm)
+    if probe_tree is None or probe_tree != tree:
+        return "tree-unconfirmed", None
+    other = _union_other_parent(run, probe, base)
+    # axis: the probe is a two-parent merge of the base and a commit the review covers (the certified commit, or one the check proves from it), so a probe of unreviewed code proves nothing — see bite-proof record i2589_head_coverage_union_probe (E-parent)
+    if other is None or not (other == got["certified"] or _check_rewritten(
+            repo_root, base, record, other, proof, builder_author, git, base_at_review)["answer"] == PROVEN):
+        return "other-commit", None
+    code, _ = run(["merge-base", "--is-ancestor", base, head])
+    # axis: the head contains the base, so a head that only holds the probe's files is not the tested merge — see bite-proof record i2589_head_coverage_union_probe (E-current)
+    if code != 0:
+        return "head-not-current", other
+    head_tree = _tree_of(run, head)
+    # axis: the head's tree is git's tree of the probe, byte and mode for byte and mode, so a head that differs at all was not tested — see bite-proof record i2589_head_coverage_union_probe (E-tree)
+    if head_tree is None or head_tree != probe_tree:
+        return "other-tree", other
+    return None, other
+
+
+def _with_union(repo_root, base, record, head, proof, builder_author, git, base_at_review, got, union_proof):
+    """``got`` with the union proof applied (the union paragraph of the module docstring): proven when git shows the
+    head is the tree of the tested probe, else ``got`` as it was with a ``union-probe-ignored`` line. Always adds
+    ``unionProbe``."""
+    if got["answer"] == PROVEN:
+        got["unionProbe"] = {"probe": _union_probe_of(union_proof), "used": False, "reason": None, "covers": []}
+        return got
+    # axis: a check that could not read its inputs never consults the proof, so a proof cannot turn an unreadable check into an answer — see bite-proof record i2589_head_coverage_union_probe (E-consulted)
+    if got["certified"] is None or any(_token_of(line) in _UNION_UNREAD_WHY for line in got["why"]):
+        return _union_ignored(got, union_proof, "not-consulted")
+    run = git if git is not None else returning_review.production_git(repo_root)
+    reason, other = _union_refusal(run, repo_root, base, record, head, proof, builder_author, git, base_at_review, got,
+                                   union_proof)
+    if reason is not None:
+        return _union_ignored(got, union_proof, reason)
+    covers = list(got["files"])
+    probe = union_proof["probe"]
+    got["unionProbe"] = {"probe": probe, "used": True, "reason": None, "covers": covers, "tree": union_proof["tree"],
+                         "base": base, "parent": other, "receipt": union_proof["receipt"]}
+    got["answer"] = PROVEN
+    got["files"] = []
+    got["hunks"] = []
+    got["why"] = [_line(WHY_PROVEN_UNION, "the head's tree is git's tree of the vet's tested union probe %s of %s and the "
+                                          "base %s; it covers %d file(s)" % (_short(probe), _short(other), _short(base),
+                                                                              len(covers)))]
+    return got
 
 
 def _check(repo_root, base, record, head, proof, builder_author, git, x_base=None):
@@ -673,8 +817,16 @@ def _check_cli(args):
         elif not isinstance(loaded, list) or countable_lines.copies_fault(loaded, name_extra_key=True) is not None:
             return _usage_error("--proof is not a usable list of copies")
         proof = loaded
+    union_proof = None
+    if args.union_proof is not None:
+        union_proof, fault = _read_json(args.union_proof)
+        if fault is not None:
+            return _usage_error("--union-proof is not a readable JSON file: %s" % args.union_proof)
+        # None always means no flag, so a file that holds null is no proof
+        if union_proof is None:
+            return _usage_error("--union-proof file holds no proof (null): %s" % args.union_proof)
     result = check(args.repo_root, args.base, record, args.head, proof, builder_author=args.builder_author,
-                   base_at_review=args.base_at_review or [])
+                   base_at_review=args.base_at_review or [], union_proof=union_proof)
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return 0
 
@@ -701,6 +853,7 @@ def main(argv):
     cp.add_argument("--proof", default=None)
     cp.add_argument("--builder-author", default=None)
     cp.add_argument("--base-at-review", action="append", default=None)
+    cp.add_argument("--union-proof", default=None)
     op = sub.add_parser("outcome")
     op.add_argument("--answer", required=True)
     op.add_argument("--ci", required=True)

@@ -1044,8 +1044,9 @@ def _merge_same_finding(existing, incoming):
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
         # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins — see bite-proof record c1l11f_wo_e_verify_after_restore
+        # axis: the transit stamp rides the carried test through a same-anchor merge — see bite-proof record wo_a_2582_transit_restore
         for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD,
-                      TEST_CORRECTION_FIELD):
+                      TEST_CORRECTION_FIELD, break_it.TRANSIT_FIELD):
             if field in carriers[0]:
                 merged[field] = carriers[0][field]
             else:
@@ -7688,8 +7689,9 @@ def _fold_test_correction(state, config, artifact):
             reason = "no-block"
         elif block["path"] != item["path"]:
             reason = "other-path"
-        elif result.get(break_it.TRANSIT_FIELD) is True:
+        elif break_it.test_transit_damaged(result):
             # axis: a correction whose text carries a transit redaction placeholder is no correction, and is named so — see bite-proof record wo_a_2284_transit_redacted
+            # axis: the stamp or a placeholder in the correction's own text counts — see bite-proof record wo_a_2582_transit_restore
             reason = break_it.REASON_TRANSIT_REDACTED
         elif result.get(break_it.REDACTED_FIELD) is True:
             reason = "redacted"
@@ -9487,8 +9489,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
             # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
             # axis: the test role's original test rides a re-queued target, so its next audit still compares against it — see bite-proof record c1l11c_wo1_fix_groups
             # axis: the test reviewer's version and the finding's correction ride the target into the next fix batch — see bite-proof record c1l10b_wo2_test_restore
+            # axis: the transit stamp rides the target, so the fold reads a test damaged in transit — see bite-proof record wo_a_2582_transit_restore
             for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD,
-                            REVIEWER_TEST_FIELD, TEST_CORRECTION_FIELD):
+                            REVIEWER_TEST_FIELD, TEST_CORRECTION_FIELD, break_it.TRANSIT_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
             # axis: the audit compares the test committed at the audited head with the test role's version
@@ -10027,6 +10030,24 @@ def _fold_audits(state, config, artifact, session_dir=None):
         _decision(state, "spawned-audit-not-discharged", aid)
     # axis: the audit fold enters the restore before any continuation or halt can run — see bite-proof record c1l10b_wo2_test_restore
     restorable = [tid for tid in mismatch_ids if tid not in rider_ids]
+    # axis: a mismatched target whose test is transit-damaged is recorded not run and takes no restore: its bytes are never demanded — see bite-proof record wo_a_2582_transit_restore
+    damaged = []
+    for tid in restorable:
+        target = targets_by_id.get(tid)
+        facts = (target.get("breakIt") if isinstance(target, dict) else None) or {}
+        facts = facts if isinstance(facts, dict) else {}
+        # axis: the test role's version and the committed copy are read too, not the target's carried block alone — see bite-proof record wo_a_2582_transit_restore
+        if target is not None and break_it.test_transit_damaged(
+                target, facts.get("path"), facts.get("reviewerTest"), facts.get("committedTest")):
+            damaged.append(tid)
+            _record_round_append(state, "breakItTransitRedacted", {
+                "findingKey": tid, "path": facts.get("path"), "step": "restore", "outcome": "not-run",
+                "reason": break_it.REASON_TRANSIT_REDACTED})
+    if damaged:
+        _decision(state, "break-it-restore-transit-redacted",
+                  "the break-it test is damaged in transit (a redaction placeholder), so it is recorded not run and "
+                  "no restore is asked: %s" % ", ".join(damaged))
+        restorable = [tid for tid in restorable if tid not in damaged]
     # axis: a mismatch in the bounded pass takes no restore-only step or second test of its own: B1's restores ride B2's one fix step, and B2's own mismatch hands the PR back — see bite-proof records i2554_bounded_pass_b2
     if restorable and _is_bounded_audit_round(state):
         if not _bounded_mismatch(state, restorable, targets_by_id, results):

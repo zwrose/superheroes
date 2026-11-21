@@ -565,10 +565,17 @@ above).
    chat and the owner clicks. A release is never inside a PR scope. The owner may hand one over in
    the moment with a word for that release.
    **The floor.** There is no mechanical merge floor.
+   **A PR that conflicts with its base goes back to its builder.** When an open PR, a single PR or
+   a layer of a stack, conflicts with its base, or bringing it current meets a conflict, send it
+   back to its builder, who makes the merge commit, runs the returning review on the merge and
+   hands back. The advisor never commits a conflict resolution itself, and no subagent commits one
+   under its recipe. How it goes back on each kind of lane, and why:
+   [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A PR that
+   conflicts with its base goes back to its builder.
    **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties
-   around it (sequencing, branch-update, waiting for CI green on the recorded head, conflict
-   resolution under an advisor-authored recipe, and post-merge hygiene) may be handed to a subagent
-   under the three conditions below. A merge train's "green" includes post-merge `main` CI
+   around it (sequencing, a branch-update that meets no conflict, waiting for CI green on the
+   recorded head, and post-merge hygiene) may be handed to a subagent under the three conditions
+   below. A merge train's "green" includes post-merge `main` CI
    ([merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A merge
    train's "green" says when a merge is reported done without waiting for that run), and union
    fixes ride the last open PR, disclosed.
