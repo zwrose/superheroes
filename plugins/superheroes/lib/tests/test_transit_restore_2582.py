@@ -312,6 +312,36 @@ def test_r7_a_clean_finding_still_calls_the_runner_once_and_carries_no_stamp():
     assert break_it.TRANSIT_FIELD not in kept[0]
 
 
+def test_r7b_a_scrub_flagged_finding_with_a_placeholder_in_its_header_stays_suggestion_redacted():
+    # axis: G7 — the scrub flag is consulted before the text read, so the adapter's own header placeholder is not transit damage — see bite-proof record wo_a_2582_transit_restore
+    finding = _finding_with(run=C1.RUN + " --key " + PLACEHOLDER)
+    finding[break_it.REDACTED_FIELD] = True
+    assert break_it.TRANSIT_FIELD not in finding
+    assert break_it.test_transit_damaged(finding) is True, "the header placeholder is real, so only the flag keeps it off the transit path"
+    calls = []
+    kept, runs, exempt, stamped = break_it.intercept([finding], "/nowhere", "H", runner=_spy_runner(calls))
+    assert calls == []
+    record = kept[0][break_it.RUN_FIELD]
+    assert record["outcome"] == break_it.OUTCOME_NOT_RUN and record["reason"] == "suggestion-redacted"
+    assert runs[0]["outcome"] == break_it.OUTCOME_NOT_RUN and runs[0]["reason"] == "suggestion-redacted"
+    assert break_it.TRANSIT_FIELD not in kept[0], "the copy is not stamped transit-redacted"
+    assert break_it.TRANSIT_FIELD not in finding
+
+
+def test_r7b_both_flags_set_keeps_transit_redacted_and_a_content_placeholder_with_the_scrub_flag_does_not_run():
+    both = _finding_with(run=C1.RUN + " --key " + PLACEHOLDER)
+    both[break_it.REDACTED_FIELD] = True
+    both[break_it.TRANSIT_FIELD] = True
+    in_content = _finding_with(content=DAMAGED_ROLE)
+    in_content[break_it.REDACTED_FIELD] = True
+    calls = []
+    kept, runs, exempt, stamped = break_it.intercept([both, in_content], "/nowhere", "H", runner=_spy_runner(calls))
+    assert calls == []
+    assert kept[0][break_it.RUN_FIELD]["reason"] == "transit-redacted" and kept[0][break_it.TRANSIT_FIELD] is True
+    assert kept[1][break_it.RUN_FIELD]["reason"] == "suggestion-redacted"
+    assert break_it.TRANSIT_FIELD not in kept[1]
+
+
 # --- R8: the correction fold --------------------------------------------------------------------------------------
 
 def test_r8_an_unstamped_correction_whose_block_holds_the_placeholder_is_no_correction(tmp_path):
@@ -391,14 +421,42 @@ def test_r9d_a_clean_record_and_clean_files_still_reach_the_runner(repo):
     assert _got(result) == (break_it.KEPT, "body-match") and len(calls) == 1
 
 
-# --- R10: the predicate -------------------------------------------------------------------------------------------
-
 def _finding_with(**block):
     fields = {"path": TEST_PATH, "run": C1.RUN}
     content = block.pop("content", ROLE_TEST)
     fields.update(block)
     return {"title": "t", "file": TEST_PATH, "line": 1, "taxonomy": break_it.TAXONOMY,
             "suggestion": RD._break_it_block_text(fields, content)}
+
+
+# --- R11: the same-anchor merge carry -----------------------------------------------------------------------------
+
+def test_r11_a_same_anchor_merge_an_ordinary_finding_wins_carries_the_transit_stamp():
+    # axis: G8 — the transit stamp rides the carried test through a same-anchor merge — see bite-proof record wo_a_2582_transit_restore
+    run = {"outcome": break_it.OUTCOME_NOT_RUN, "reason": "transit-redacted"}
+    carrier = {"file": "f.py", "line": 1, "title": "t", "severity": "Nit", "taxonomy": break_it.TAXONOMY,
+               "suggestion": "carried", break_it.RUN_FIELD: run, break_it.TRANSIT_FIELD: True}
+    plain = {"file": "f.py", "line": 1, "title": "t", "severity": "Critical"}
+    for existing, incoming in ((carrier, plain), (plain, carrier)):
+        merged = RD._merge_same_finding(existing, incoming)
+        assert merged["severity"] == "Critical"
+        assert merged[break_it.RUN_FIELD] == run
+        assert merged[break_it.TRANSIT_FIELD] is True
+
+
+def test_r11_a_carrier_with_no_stamp_leaves_the_merged_finding_unstamped():
+    run = {"outcome": break_it.OUTCOME_PASSED}
+    carrier = {"file": "f.py", "line": 1, "title": "t", "severity": "Nit", "taxonomy": break_it.TAXONOMY,
+               "suggestion": "carried", break_it.RUN_FIELD: run}
+    plain = {"file": "f.py", "line": 1, "title": "t", "severity": "Critical"}
+    for existing, incoming in ((carrier, plain), (plain, carrier)):
+        merged = RD._merge_same_finding(existing, incoming)
+        assert merged["severity"] == "Critical"
+        assert merged[break_it.RUN_FIELD] == run
+        assert break_it.TRANSIT_FIELD not in merged
+
+
+# --- R10: the predicate -------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("finding", [

@@ -1690,8 +1690,9 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
         refusal = None if block else parse_block(copy.get("suggestion"))[1]
         # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so a per-area finding still earns the scope exemption and reaches the verifier
         # axis: a seat-supplied TRANSIT_FIELD is left in place: it can only make a test not run, the fail-closed direction
-        # axis: a placeholder in the block's own text is a transit redaction too, stamped here so every later step reads it — see bite-proof record wo_a_2582_transit_restore
-        transit = not refusal and test_transit_damaged(copy)
+        # axis: a placeholder in the block's own text is a transit redaction too, stamped here so every later step reads it; the text is read only when the scrub flag is not set, because the adapter's scrub writes its own placeholder into a header it rewrote and that finding stays suggestion-redacted — see bite-proof record wo_a_2582_transit_restore
+        transit = not refusal and (copy.get(TRANSIT_FIELD) is True
+                                   or (copy.get(REDACTED_FIELD) is not True and test_transit_damaged(copy)))
         if transit:
             copy[TRANSIT_FIELD] = True
         redacted = not refusal and not transit and copy.get(REDACTED_FIELD) is True
