@@ -293,6 +293,26 @@ def test_e_cf_unresolved_a_block_kept_verbatim_with_its_markers_keeps_needs_revi
     fails_closed(monkeypatch, s.repo, s.base, s.record, head)
 
 
+def diff3_of(repo, ours, base, theirs, path):
+    """``git merge-file``'s diff3 text for ``path`` from the three commits, with the labels the check uses."""
+    blobs = [repo.git("rev-parse", "%s:%s" % (rev, path)) for rev in (ours, base, theirs)]
+    proc = subprocess.run(["git", "-C", repo.root, "merge-file", "-p", "--diff3", "--object-id", "-L", "ours", "-L", "base",
+                           "-L", "theirs", *blobs], capture_output=True, text=True)
+    assert proc.returncode == 1 and "<<<<<<< ours" in proc.stdout, proc
+    return proc.stdout
+
+
+def test_e_cf_unresolved_whole_a_file_committed_as_gits_conflicted_merge_beside_a_resolved_one_keeps_needs_review(
+        tmp_path, monkeypatch):
+    # axis: a file identical to git's conflicted automatic merge is unresolved, never a file with nothing to list, so the other file's hunks never stand alone — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-unresolved-whole)
+    s = Scene(tmp_path, {SHARED: BASE_FUNC, OTHER_PY: BASE_FUNC}, {SHARED: PR_FUNC, OTHER_PY: PR_FUNC},
+              {SHARED: MAIN_FUNC, OTHER_PY: MAIN_FUNC})
+    unresolved = diff3_of(s.repo, s.x, s.fork, s.base, OTHER_PY)
+    head = s.merge({SHARED: RESOLVED, OTHER_PY: unresolved})
+    assert s.repo.read(OTHER_PY) == unresolved
+    fails_closed(monkeypatch, s.repo, s.base, s.record, head)
+
+
 # --- E-cf-mode --------------------------------------------------------------------------------------------------------------------------------
 
 

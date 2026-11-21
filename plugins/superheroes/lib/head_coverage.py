@@ -551,8 +551,9 @@ def _conflict_fix_file(run, path, c, p1, p2, mb):
     if not isinstance(code, int) or isinstance(code, bool) or not 0 <= code <= _MAX_CONFLICTS or not isinstance(merged, str):
         return None
     a, b = _lines_of(merged), _lines_of(texts[3])
+    # axis: a file identical to git's automatic merge has no hand-made line only when that merge was clean; one that still holds git's conflict blocks was never resolved, so it is never passed over while another file's hunks are listed — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-unresolved-whole)
     if a == b:
-        return []
+        return [] if code == 0 else None
     # axis: a file git merged without a conflict has no hand-made line to read, so an edit in it, or in a file neither parent changed, is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-clean-edit, E-cf-untouched)
     if code == 0:
         return None

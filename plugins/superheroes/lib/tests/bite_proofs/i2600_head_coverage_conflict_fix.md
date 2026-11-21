@@ -355,6 +355,29 @@ with a real hand-made resolution, so no fix is found and the old answer stands),
 **restore:** the inverse edit. **restore receipt**, quoted back:
 `    if (at_c == at_p1 and at_p2 == at_mb) or (at_c == at_p2 and at_p1 == at_mb):`. **raw green:** `2 passed, 32 deselected in 0.92s`.
 
+## E-cf-unresolved-whole: a file identical to git's conflicted merge is unresolved, not a file with nothing to list
+
+Added by the review's round-1 fix (finding: reject identical output when the automatic merge still has conflicts), typed
+and run by the build session in the build worktree.
+
+**guarded element:** `_conflict_fix_file`, `if a == b: return [] if code == 0 else None`. **Axis:** a file committed
+exactly as git's diff3 merge output, conflict blocks included, is never passed over as having no hand-made line while
+another file's hunks are listed.
+
+**neutralization:** `        return [] if code == 0 else None` became `        return []`.
+
+**raw red** (`-k unresolved_whole`, `--tb=line`):
+```
+F                                                                        [100%]
+E   AssertionError: {'answer': 'judgement', 'why': ['conflict-fix: every new commit is a merge by the builder that brings the base in; the...es'], ... }
+    assert ('judgement' == 'needs-review'
+FAILED plugins/superheroes/lib/tests/test_head_coverage_conflict_fix_2600.py::test_e_cf_unresolved_whole_a_file_committed_as_gits_conflicted_merge_beside_a_resolved_one_keeps_needs_review
+1 failed, 34 deselected in 0.76s
+```
+
+**restore:** the inverse edit. **restore receipt**, quoted back: `        return [] if code == 0 else None`. **raw green:**
+`1 passed, 34 deselected in 0.84s`.
+
 ## After the last restore
 
 `Grep` of `head_coverage.py` for `False and|True or|NEUTRALIZED`: `No matches found`. `git diff -- plugins/superheroes/lib/head_coverage.py`:
