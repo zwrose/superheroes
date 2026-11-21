@@ -306,14 +306,59 @@ def test_legacy_profile_needs_a_populated_core(w, core, listed):
 
 
 def test_legacy_file_that_is_read_is_not_listed(w):
-    # axis: when the family reads the legacy file itself, the other legacy file is kept; the stale layer is listed
+    # axis: the family reads a legacy file (the recorded side's legacy profile), so it lists nothing: neither the other legacy file nor the other side's layer
     w.register(mr.GLOBAL)
     _put(w.d_gl("core.md"), _CORE)
     review_entry = w.entry(w.rr)
     _put(os.path.join(review_entry, "review-profile.md"), "## Threat model\nread\n")
-    stale_layer = _put(w.d_in("review-crew.md"), "## Focus hints\n- stale\n")
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- stale\n")
     _put(w.inrepo("review-profile.md"), "## Threat model\nold\n")
-    assert w.paths() == [stale_layer]
+    assert w.paths() == []
+
+
+# --- 7b. a legacy read and the other side's layer ------------------------------------------------
+
+def _dispatch_layer(w):
+    return calibration_resolve.resolve(w.cwd, root=w.root, legacy_root=w.rr)["dispatch_layer"]
+
+
+def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_review_crew(w):
+    # axis: a review-crew family whose read slot is the recorded legacy profile lists nothing, since the reader still reads the other side's layer
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nread\n")
+    in_layer = _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    assert _dispatch_layer(w) == in_layer
+    assert w.paths() == []
+
+
+def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_decisions(w):
+    # axis: a decisions family lists nothing while the recorded side has no review-crew layer, since the other side's decisions may be the ones read
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nread\n")
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    _put(w.inrepo("review-decisions.json"), '{"in": true}\n')
+    _put(os.path.join(w.entry(w.rr), "review-decisions.json"), '{"legacy": true}\n')
+    assert w.paths() == []
+
+
+def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_test_pilot(w):
+    # axis: a test-pilot family whose read slot is the recorded legacy profile lists nothing
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(os.path.join(w.entry(w.tr), "profile.md"), _PILOT + "read\n")
+    _put(w.d_in("test-pilot.md"), _PILOT + "in-repo\n")
+    assert w.paths() == []
+
+
+def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_in_repo(w):
+    # axis: the in-repo mirror - a recorded in-repo legacy profile read with a global layer lists nothing
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.inrepo("review-profile.md"), "## Threat model\nread\n")
+    _put(w.d_gl("review-crew.md"), "## Focus hints\n- global\n")
+    assert w.paths() == []
 
 
 # --- 8. broken picked copy -----------------------------------------------------------------------

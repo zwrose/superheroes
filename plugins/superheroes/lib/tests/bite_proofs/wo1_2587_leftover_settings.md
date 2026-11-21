@@ -386,3 +386,113 @@ FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_retire
 .                                                                        [100%]
 1 passed in 0.41s
 ```
+
+# WO-1b additions (rework of WO-1): G8 and G9
+
+Guarded-element set (declared by WO-1b): G8 and G9, one neutralization and one red each, no grouping. Same method as
+above: targeted edit with the edit tool, inverse edit to restore, no `git checkout`, `restore`, `reset` or `stash`.
+Commands ran from the worktree root as
+`scripts/pinned-python -B -X pycache_prefix=/tmp/wo1b-2587-pyc -m pytest <node> -q -p no:randomly`. Redaction: none
+needed; the `UV_NATIVE_TLS` warning line the runner prints first is left out of each capture. Line numbers in G8 and
+G9 are those of the file as of WO-1b (the G1 to G7 line numbers above predate this rework).
+
+## G8 - the legacy-read gate
+
+**Guarded element:** `_gather`, `if layer_only and reads != layer: return []` (`leftover_settings.py:107`) - axis: a
+review-crew or test-pilot family whose read slot is the recorded side's legacy profile (not its unified layer) lists
+nothing, because readers do not let a legacy profile supersede the other side's layer.
+
+**Neutralization:** `if layer_only and reads != layer:` became `if False and layer_only and reads != layer:`.
+
+**Node:** `test_leftover_settings_2587.py::test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_review_crew`
+(test 1 of the order; the test-pilot and in-repo-mirror nodes share this neutralization and failure mode and were not
+run red separately).
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_review_crew ___
+
+w = <test_leftover_settings_2587.W object at 0x7f2a975ca720>
+
+    def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_review_crew(w):
+        # axis: a review-crew family whose read slot is the recorded legacy profile lists nothing, since the reader still reads the other side's layer
+        w.register(mr.GLOBAL)
+        _put(w.d_gl("core.md"), _CORE)
+        _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nread\n")
+        in_layer = _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+        assert _dispatch_layer(w) == in_layer
+>       assert w.paths() == []
+E       AssertionError: assert ['/tmp/claude...view-crew.md'] == []
+E         
+E         Left contains one more item: '/tmp/claude-0/pytest-of-root/pytest-18/test_legacy_read_with_a_layer_0/repo/.claude/superheroes/review-crew.md'
+E         Use -v to get more diff
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:332: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_review_crew
+1 failed in 1.57s
+```
+(The red is for the stated reason: the in-repo layer, which `calibration_resolve.resolve` reads, is listed for
+retirement. The preceding `_dispatch_layer(w) == in_layer` assertion passed.)
+
+**Restore:** inverse edit, `if False and layer_only and reads != layer:` back to `if layer_only and reads != layer:`.
+
+**Restore receipt:** `leftover_settings.py:107` reads `    if layer_only and reads != layer:`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.80s
+```
+
+## G9 - the decisions gate
+
+**Guarded element:** `find`, `has_layer = _present(os.path.join(d_m, _REVIEW_CREW))` passed as `admitted=has_layer`
+(`leftover_settings.py:200`) - axis: the decisions family lists nothing while the recorded side has no review-crew
+layer, because the decisions side follows the review calibration's location and the other side's decisions may be the
+ones read.
+
+**Neutralization:** `has_layer = _present(os.path.join(d_m, _REVIEW_CREW))` became `has_layer = True`.
+
+**Node:** `test_leftover_settings_2587.py::test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_decisions`
+(test 2 of the order).
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_decisions ____
+
+w = <test_leftover_settings_2587.W object at 0x7f81ecdb9f70>
+
+    def test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_decisions(w):
+        # axis: a decisions family lists nothing while the recorded side has no review-crew layer, since the other side's decisions may be the ones read
+        w.register(mr.GLOBAL)
+        _put(w.d_gl("core.md"), _CORE)
+        _put(os.path.join(w.entry(w.rr), "review-profile.md"), "## Threat model\nread\n")
+        _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+        _put(w.inrepo("review-decisions.json"), '{"in": true}\n')
+        _put(os.path.join(w.entry(w.rr), "review-decisions.json"), '{"legacy": true}\n')
+>       assert w.paths() == []
+E       AssertionError: assert ['/tmp/claude...cisions.json'] == []
+E         
+E         Left contains one more item: '/tmp/claude-0/pytest-of-root/pytest-20/test_legacy_read_with_a_layer_0/repo/.claude/review-decisions.json'
+E         Use -v to get more diff
+
+/home/user/wt-2587/plugins/superheroes/lib/tests/test_leftover_settings_2587.py:343: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_leftover_settings_2587.py::test_legacy_read_with_a_layer_on_the_other_side_lists_nothing_decisions
+1 failed in 0.64s
+```
+
+**Restore:** inverse edit, `has_layer = True` back to `has_layer = _present(os.path.join(d_m, _REVIEW_CREW))`.
+
+**Restore receipt:** `leftover_settings.py:200` reads `        has_layer = _present(os.path.join(d_m, _REVIEW_CREW))`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.32s
+```

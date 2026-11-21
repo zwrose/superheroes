@@ -13,9 +13,12 @@ Families (ordered slots; the first present picked slot is the one the setting re
     patterns.md, guardian.md, every hero layer except review-crew.md and test-pilot.md), gated on the
     read core.md being on the recorded side (or no core.md anywhere);
   * review-crew: the layer, then the review-crew legacy profile (legacy files listed only while the
-    layer is what is read and the core is populated);
+    layer is what is read and the core is populated); when the read slot is the recorded side's legacy
+    profile the family lists nothing, because readers do not let a legacy profile supersede the other
+    side's layer;
   * test-pilot: the same shape, and also gated on the read core.md being on the recorded side;
-  * decisions: review-decisions.json in the three places it lives.
+  * decisions: review-decisions.json in the three places it lives; lists nothing while the recorded
+    side has no review-crew layer, because the decisions side follows the review calibration's location.
 
 `find` writes nothing: it reads the registry without backfill, resolves the legacy store entries
 without healing, and takes no lock. Stdlib only.
@@ -90,14 +93,18 @@ def _slots(*paths):
     return [p for p in paths if p]
 
 
-def _gather(picked, unpicked, family, *, aligned=True, layer=None, legacy=(), populated=None):
+def _gather(picked, unpicked, family, *, aligned=True, admitted=True, layer_only=False, layer=None,
+            legacy=(), populated=None):
     """The leftovers of one family: [(path, family, reads)]."""
     # axis: a family whose gate refuses it lists nothing
-    if not aligned:
+    if not aligned or not admitted:
         return []
     reads = next((p for p in picked if _present(p)), None)
     if reads is None:
         # axis: a family with no present picked slot lists nothing, so the only copy is never retired
+        return []
+    # axis: a family whose read is a legacy profile lists nothing, since readers do not let it supersede the other side's layer
+    if layer_only and reads != layer:
         return []
     real_reads = os.path.realpath(reads)
     out = []
@@ -175,23 +182,26 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
         found += _gather(
             _slots(layer, legacy_review[mode]),
             _slots(os.path.join(d_o, _REVIEW_CREW), legacy_review[other]),
-            "review-crew", layer=layer, legacy=_slots(legacy_review[mode], legacy_review[other]),
-            populated=populated)
+            "review-crew", layer_only=True, layer=layer,
+            legacy=_slots(legacy_review[mode], legacy_review[other]), populated=populated)
 
         layer = os.path.join(d_m, _TEST_PILOT)
         found += _gather(
             _slots(layer, legacy_tp[mode]),
             _slots(os.path.join(d_o, _TEST_PILOT), legacy_tp[other]),
-            "test-pilot", aligned=aligned, layer=layer,
+            "test-pilot", aligned=aligned, layer_only=True, layer=layer,
             legacy=_slots(legacy_tp[mode], legacy_tp[other]), populated=populated)
 
         dec_in = os.path.join(repo, _DEC_IN_REL)
         dec_gl = os.path.join(d_gl, _DECISIONS)
         dec_legacy = os.path.join(review_entry, _DECISIONS) if review_entry else None
+        # the decisions side follows the review calibration's location, so they are admitted only
+        # while the recorded side has a review-crew layer (a broken one still counts as present)
+        has_layer = _present(os.path.join(d_m, _REVIEW_CREW))
         if mode == mode_registry.GLOBAL:
-            found += _gather(_slots(dec_gl, dec_legacy), [dec_in], "decisions")
+            found += _gather(_slots(dec_gl, dec_legacy), [dec_in], "decisions", admitted=has_layer)
         else:
-            found += _gather([dec_in], _slots(dec_gl, dec_legacy), "decisions")
+            found += _gather([dec_in], _slots(dec_gl, dec_legacy), "decisions", admitted=has_layer)
 
         files, seen = [], set()
         for path, family, reads in sorted(found):
