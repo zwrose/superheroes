@@ -27,6 +27,7 @@ import guardian_sweep  # noqa: E402
 import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
+import seat_map        # noqa: E402
 import model_tier_overrides  # noqa: E402
 import store_sweep     # noqa: E402
 
@@ -484,7 +485,15 @@ def collect(cwd, root=None):
         for name in sorted(os.listdir(cal_dir)):
             if name.endswith(".md") and name not in _NON_LAYER:
                 layers.append((name[:-3], _read(os.path.join(cal_dir, name)) or ""))
-    patterns = _read(os.path.join(cal_dir, "patterns.md")) if cal_dir else None
+    for hero in sorted(core_md.MODE_PICKED_LAYERS):
+        # axis: the view shows the layer copy configure writes, not a stale copy beside a sole core.md
+        try:
+            picked = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+        except Exception:
+            picked = None
+        if picked and os.path.isfile(picked) and os.path.dirname(picked) != cal_dir:
+            layers = sorted([(n, t) for n, t in layers if n != hero] + [(hero, _read(picked) or "")])
+    patterns =_read(os.path.join(cal_dir, "patterns.md")) if cal_dir else None
     if patterns is None and core is not None:
         patterns = core.get("patterns")
     try:
@@ -758,6 +767,12 @@ def render(cwd, *, root=None):
             out.append("Rejected seat pins (not applied — seat falls back to rotation):")
             for seat, reason in sorted(rejected_seats.items()):
                 out.append(f"  {seat}: {reason} ⚠")
+        stale_seats = seat_map.unknown_pin_seats(list(seat_pins) + list(rejected_seats))
+        if stale_seats:
+            out.append("Seat pins for seats no roster has (the panel never seats them; "
+                       "remove them from core.md seatPins):")
+            for seat in stale_seats:
+                out.append("  %s ⚠" % engine_pref.safe_config_echo(seat))
         out.append("")
         for line in _spec_reviewer_lines(eng):
             out.append(line)

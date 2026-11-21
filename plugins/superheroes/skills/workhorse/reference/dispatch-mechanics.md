@@ -5,16 +5,17 @@
 3. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
 4. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
 5. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
-6. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
-7. [Supervised review dispatch](#supervised-review-dispatch)
+6. [Name the worktree in every git call](#name-the-worktree-in-every-git-call)
+7. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+8. [Supervised review dispatch](#supervised-review-dispatch)
    - [Result channels](#result-channels)
    - [The conformance probe](#the-conformance-probe)
-8. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
-9. [Supervised write dispatch](#supervised-write-dispatch)
-10. [Declared items](#declared-items)
-11. [Refusal streak — shell health](#refusal-streak--shell-health)
-12. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
-13. [Check-runner — a plain shell task](#check-runner--a-plain-shell-task)
+9. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+10. [Supervised write dispatch](#supervised-write-dispatch)
+11. [Declared items](#declared-items)
+12. [Refusal streak — shell health](#refusal-streak--shell-health)
+13. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+14. [Check-runner — a plain shell task](#check-runner--a-plain-shell-task)
 
 ---
 
@@ -256,6 +257,18 @@ path or checkout — **disclose it and hold the seats off that tree**; never pro
 readers.
 
 **When the probe finishes**, remove the probe worktree with `git worktree` verbs — never `rm`.
+
+## Name the worktree in every git call
+
+A session's working folder can reset between commands: the shell's current directory can return to
+the project root mid-session with no notice, so a bare `git apply` or `git commit` then lands on the
+primary checkout, not the build worktree. **Every mutating git call in a worktree build names the
+worktree** (`git -C <worktree> …`). A `cd` holds only within the call that makes it, and a script
+sets its own directory before it does anything. `round_driver.py next` takes the repository root
+from the process's working folder unless the session recorded one, so run each `next` call where its
+working folder is the build worktree: from a script that changes into the worktree first, never on
+the strength of a `cd` made in an earlier call. When unsure, check before the write:
+`git -C <worktree> rev-parse --show-toplevel` names the build worktree.
 
 ## Launch slice vs continuation slice
 
@@ -1017,7 +1030,8 @@ decision rule:
   baseline explicit and strengthens it; related charter obligations are §6 (commit before the next
   order against a worktree) and §8 (commit before a mutation probe). Capture the baseline with the
   probe in § Check-runner — a plain shell task: `git rev-parse HEAD`, that empty `git status --porcelain`, and
-  `git reflog --date=iso HEAD | wc -l`. If the
+  `git reflog --date=iso HEAD | wc -l`, each run as `git -C <build worktree> …` when the session's
+  own folder is not the build worktree (a cloud build). If the
   tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
   baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
   spanning committed/staged/unstaged/untracked: whether **this dispatch** wrote anything at all (**no
@@ -1104,8 +1118,8 @@ is `agents/check-runner.md`.
      never to an external engine. Record the resolved `model_id` and `effort`. The seat renders no
      judgment, so no independence or maker-family constraint applies.
 3. **Probe the tree before.** Commit the landed work first, so the baseline is clean. Then capture
-   `git rev-parse HEAD`, the full `git status --porcelain`, and
-   `git reflog --date=iso HEAD | wc -l`. Use the full status, never `-uno` or its long form
+   `git -C <build worktree> rev-parse HEAD`, the full `git -C <build worktree> status --porcelain`,
+   and `git -C <build worktree> reflog --date=iso HEAD | wc -l`. Use the full status, never `-uno` or its long form
    `--untracked-files=no`: a run's untracked output is exactly what you want to see.
 4. **Dispatch the seat.** Await it in-turn (§ Awaiting a dispatch — the in-turn contract).
 5. **Probe the tree after.** Capture the same three signals. Any delta is a failed verification,

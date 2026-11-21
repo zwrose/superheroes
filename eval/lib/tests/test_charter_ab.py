@@ -449,6 +449,17 @@ def test_seat_prompt_has_one_home_and_is_identity_guarded():
     assert ab.identity_mismatch(stored, dict(stored, prompt_sha256="0" * 64)) == ["prompt_sha256"]
 
 
+def test_default_judge_model_is_gpt_6_2_sol(tmp_path, monkeypatch, git_env):
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.delenv("REPLICATES", raising=False)
+    args = ab.build_parser().parse_args(["seats", "--repo", str(repo), "--charter", "CHARTER.md",
+                                         "--scenarios", write_scenarios(tmp_path),
+                                         "--candidate", "HEAD", "--base", "HEAD"])
+    assert args.judge_model is None
+    ident, _ = ab.build_identity(args, "seats", str(repo), None)
+    assert ident["judge_model"] == "gpt-6.2-sol"
+
+
 # ---------------------------------------------------------------- extras: plumbing, E8/E9, scenario guards
 
 def test_relative_config_dir_reaches_seats_as_the_recorded_absolute_path(tmp_path, monkeypatch, git_env):

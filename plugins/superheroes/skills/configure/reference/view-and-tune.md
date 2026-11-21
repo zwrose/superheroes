@@ -616,16 +616,15 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
-  `reviewer-deep` at effort `high`; pinning it on any other role is refused
-  `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
+  model IDs are `gpt-6.2-sol`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, `gpt-6-astra` and `gpt-6.2-astra` (the two Astra models are eligible only for
+  `reviewer-deep` at effort `high`; pinning either on any other role is refused
+  `pin-role-not-eligible`). `gpt-6.2-astra` is the codex ladder's top rung for every role; a `reviewer-deep` pin to `gpt-6-astra` keeps that seat on GPT-6 Astra. A pin to the retired `gpt-5.6-terra` is refused at write time
   (`model-retired`; `model_registry.retired_model_reason` names the text). A pin must
   also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist`
   (any model on `pilot`, which has no codex cell — it remains a valid role key
   but admits no codex model).
-  Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project never
-  dispatches Astra and gpt-6.1-sol is the default deep cell. A pinned model runs at the effort its role's
-  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`
+  Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project dispatches Astra only when a codex seat escalates past `gpt-6.2-sol` at `xhigh`, and gpt-6.2-sol is the default deep cell. A pinned model runs at the effort its role's
+  registry allowlist resolves for it — gpt-6.2-sol, gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`
   and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the
   role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
@@ -720,8 +719,11 @@ action that owns it, leaving the rest of the calibration untouched:
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
   strong-seat independence break) **stays loud** — the shipped seat-map machinery
   emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
-  review receipt and the seat falls back to rotation. A saved pin under a seat key the panel does
-  not have reads as a pin for an unknown seat and is reported, so remove it. The loader does structural validation only; a
+  review receipt and the seat falls back to rotation. A saved pin under a seat key no roster
+  has (such as `grounding-seat`) is named in `configure view` under
+  *Seat pins for seats no roster has*, in the review-crew doctor's note, and as a `pin for unknown
+  seat` degradation on the seat map; the panel never seats it, and nothing removes it for you, so
+  remove it. The loader does structural validation only; a
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.
