@@ -4,6 +4,7 @@
 - §2 — Adopt a legacy / pre-registry project (FR-15), safely (UFR-9)
 - §3 — First-push rebind (FR-9) and its recovery (UFR-10)
 - §4 — Confirm provisional calibration (FR-18)
+- §5 — Retire leftover settings copies
 - Fix posture (FR-17)
 
 # configure — fix path
@@ -61,7 +62,7 @@ The remedy is **re-calibration through this skill**, and it has two shapes:
 **Superheroes never deletes the legacy file** — the owner does. An unreadable or malformed legacy
 profile is reported, left untouched, and asked about rather than guessed at (UFR-9). The refusal
 reports *presence*, not content: it never reads the file, so a malformed one refuses identically
-to a well-formed one. `configure` does not archive, move, or delete anything on the owner's behalf.
+to a well-formed one. `configure` does not archive, move, or delete anything on the owner's behalf. The one exception is section 5, which moves leftover settings copies into a dated backup folder on the owner's yes and still deletes nothing.
 
 ## 3 — First-push rebind (FR-9) and its recovery (UFR-10)
 
@@ -104,6 +105,49 @@ store/lock busy, retry; `deferred` with `reason: core-md-unreadable` = not retry
 untouched (no split state), so the whole calibration stays provisional until it genuinely confirms.
 
 Only this explicit owner-confirm confirms the profile; merely viewing it never does (FR-18).
+
+## 5 — Retire leftover settings copies
+
+A leftover is an old copy of a settings file that sits where the storage setting does not read first, beside the copy it does read.
+
+List the leftovers. The command writes nothing:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/leftover_settings.py" list --cwd .
+```
+
+The result carries `files` (each with `path`, `family`, and `reads`), `digest`, and `notice`. An empty `files` list means nothing is left over, and this step is done. Otherwise show the owner the `notice` text and, for each file, the copy the setting reads instead (`reads`).
+
+<!-- decision-point: id=configure-fix-retire-leftovers mode=gate kind=owner-gate default="list only — no retire without current-turn owner authorization" carrier=run-output -->
+
+Retiring moves files, so it needs the owner's yes. GATE: write the list down in the run output, with the `notice` text, each file's `reads`, and the `digest`, and hand back. Do **not** run `retire` on the default path.
+
+**Only when the owner says yes in this turn.** Invoking `/superheroes:configure` is not the yes. Pass the digest the list printed, so the move covers exactly the files the owner saw:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/leftover_settings.py" retire --cwd . --owner-authorized true --list-digest <the digest the list printed>
+```
+
+`retire` moves each listed file into a dated backup folder and deletes nothing. To undo it, run:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/leftover_settings.py" restore --cwd . --backup <the backup folder>
+```
+
+Follow-up: `/superheroes:configure`.
+
+<!-- /decision-point: id=configure-fix-retire-leftovers -->
+
+**Read the result, don't assume success.** The command exits 0 either way, so check `status`:
+
+- `retired`: tell the owner the backup folder (`backup`), every move (each `from` and `to` in `moved`), and the `undo` sentence word for word.
+- `blocked` with the reason `list-changed`: the list moved since the owner saw it, and nothing moved. Show the new `files` and `digest`, and ask the owner again.
+- `blocked` with the reason `calibration-write-in-cloud-session`: a cloud session refuses this step. It runs on the owner's machine, so tell the owner that.
+- `busy`: another configure change holds the lock. Retry.
+- Any other result: report it to the owner with its fields. A `partial` result names the `backup` folder, and `restore` puts back the files it moved.
 
 ## Fix posture (FR-17)
 

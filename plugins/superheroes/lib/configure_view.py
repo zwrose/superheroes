@@ -577,8 +577,13 @@ def collect(cwd, root=None):
         risk_areas = core_md.read_risk_areas(cwd, root)
     except Exception:
         risk_areas = {"reason": "risk-areas-unreadable", "declared": False, "areas": None}
+    try:
+        import leftover_settings
+        leftovers = leftover_settings.find(cwd, root)  # read-only
+    except Exception:
+        leftovers = None
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
-            "drift": drift, "storeHealth": health,
+            "drift": drift, "storeHealth": health, "leftovers": leftovers,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
@@ -650,6 +655,12 @@ def render(cwd, *, root=None):
     out.append(f"storage mode: {data['mode'] or 'not set'}")
     if data["storeHealth"]:
         out.append(_health_line(data["storeHealth"]))
+    leftovers = data.get("leftovers")
+    if leftovers and leftovers.get("files"):
+        import leftover_settings
+        out.append("")
+        out.append("## Leftover settings copies")
+        out.extend(leftover_settings.notice(leftovers).split("\n"))
     core = data["core"]
     tiers = data.get("modelTiers") or {}
     out.append("")
