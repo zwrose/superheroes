@@ -26,6 +26,7 @@ Check these in a consuming project when it adopts the next release. Each step na
 
 - **After switching.** **Nothing is owed by a caller: a seat map with a seat in a maker's family other than the author's (one the map's `makerFamilies` or the session's makers name) now carries a `maker-family` violation for that seat, so its certificate reads `-constraint-violated` where it read the plain shape or `-degraded` before. A map whose `makerFamilies` is malformed never has its `critical-diversity` excused by liveness, so some such maps that read clean now read `-constraint-violated` too.** No key, token or result shape changes. See [Seat map: a seat in any maker's family is a maker seat](#seat-map-a-seat-in-any-makers-family-is-a-maker-seat).
 - **After switching.** **Nothing is owed: `review_record.py` gains the verb `read-all --pr <n>`, and `read` answers as before.** The advisor's gardening pass now gathers every review record of a PR with it. See [Review record: read-all returns every review record of a PR](#review-record-read-all-returns-every-review-record-of-a-pr).
+- **After switching.** **Nothing is owed: a storage-mode flip also moves the review decisions file and sets superseded legacy profiles aside, and `mode_migrate.py preview` gains `setAside`, `leftInPlace` and `overwrites`.** A caller that reads only the existing keys reads them as before. See [Storage move: the decisions file and legacy profiles](#storage-move-the-decisions-file-and-legacy-profiles).
 
 ### Seat map: a seat in any maker's family is a maker seat
 
@@ -41,6 +42,14 @@ Check these in a consuming project when it adopts the next release. Each step na
 - **The reading.** A record comment that does not parse, or raises while parsing, is named in `unreadable` and never costs another record. A record changed in transit that still parses is in `records` with its `transitDamage`.
 - **The gardening pass.** Duty 3 feeds `records` plus every `unreadable` entry to the tally and to the measures row, so a PR with an unreadable record reads as incomplete evidence, never as a short list.
 - Replacement. None: no existing key, token or shape changes; `read` is unchanged.
+
+### Storage move: the decisions file and legacy profiles
+
+- **The change.** A flip carries the review decisions file to the target side's slot: `<repo>/.claude/review-decisions.json` in the repo, `<project store>/config/review-decisions.json` out of it. It sets aside a second decisions copy, and each legacy review or test-pilot profile whose hero's layer moves in the same flip, into one dated folder, `leftover-backups/<UTC stamp>-storage-move/` under the out-of-repo project store, with a `retired.json` manifest written before any copy.
+- **What the preview reports.** `mode_migrate.py preview` gains `setAside` (`[{"from", "to"}]`), `leftInPlace` (`[{"path", "why"}]`, `why` one of `only-copy`, `not-a-regular-file`, `shared-path`) and `overwrites` (each target path of a moved file that already exists and that the flip replaces).
+- **Undo.** `python3 -B <plugin root>/lib/leftover_settings.py restore --cwd . --backup <folder>` puts a set-aside folder back; it never overwrites a present path and is refused in a cloud session. It returns set-aside files only: a carried decisions file stays where the flip put it.
+- **What did not change.** The calibration files, definition documents and work-item records move exactly as before, and `calibration`, `definitionDocs`, `workItemRecords` and `disclosure` keep their meaning (a carried decisions file is listed under `calibration`).
+- Replacement. None: no key or argument is removed.
 
 ## 0.51.1
 
