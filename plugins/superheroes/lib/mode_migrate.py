@@ -308,7 +308,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     if to_global and present(dec_legacy):
         if not _is_regular(dec_legacy):
             leave(dec_legacy, WHY_NOT_REGULAR)
-        elif carried and not dec_stays:
+        elif carried:
             # axis: the global store reads a legacy decisions copy first, so it is set aside only when this flip carries the read copy over it
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
     # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
