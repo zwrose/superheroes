@@ -2598,14 +2598,20 @@ def write_guardian_cadence(cwd, cadence, *, root=None):
         return {"action": "written"}
 
 
+# The heroes whose layer, when both an in-repo and a global copy exist, is the copy the storage mode
+# picks. Every other hero's layer stays beside core.md, where that hero's own readers look for it.
+MODE_PICKED_LAYERS = frozenset(("review-crew",))
+
+
 def layer_path(cwd, hero, root=None, *, persist_backfill=True):
-    """Mode-aware path to a hero layer file, co-located with core.md."""
+    """Mode-aware path to a hero layer file, co-located with core.md. For a hero in MODE_PICKED_LAYERS
+    with both an in-repo and a global copy present, the copy the storage mode picks."""
     keyword = {} if persist_backfill else {"persist_backfill": False}
     in_repo_layer = os.path.join(_repo_root(cwd), calibration_paths.IN_REPO_DIR, hero + ".md")
     global_layer = os.path.join(mode_registry.project_store_dir(cwd, root),
                                 mode_registry.CONFIG_DIRNAME, hero + ".md")
-    if os.path.isfile(in_repo_layer) and os.path.isfile(global_layer):
-        # axis: with both copies of a hero layer present, the layer is the one the storage mode picks, never the one beside a sole core.md
+    if hero in MODE_PICKED_LAYERS and os.path.isfile(in_repo_layer) and os.path.isfile(global_layer):
+        # axis: with both copies of the review-crew layer present, the layer is the one the storage mode picks, never the one beside a sole core.md
         picked = mode_registry.resolve(cwd, root, **keyword)["mode"]
         return in_repo_layer if picked == mode_registry.IN_REPO else global_layer
     return os.path.join(os.path.dirname(core_path(cwd, root, **keyword)), hero + ".md")

@@ -107,19 +107,23 @@ def _legacy_global_profile_path(cwd, legacy_root=None):
 def regular_core(cwd, root=None):
     """The regular-file core.md the dispatch reads, or None. Writes nothing; never raises.
 
-    When both candidates are regular files, the one the storage mode picks; when exactly one is, that one."""
-    # axis: dispatch_core is a regular core.md whenever one exists, the mode-selected one when both do
+    When both candidates are present, the one the storage mode picks; when exactly one is, that one. The
+    pick is returned only when it is a regular file: a picked core.md that is a directory or a dangling
+    link gives None, never its peer, so a broken active core is not replaced by a stale copy."""
+    # axis: dispatch_core is the present core.md the storage mode picks, and only when it is a regular file
     try:
         in_repo, global_path = core_md._core_candidates(cwd, root)
-        in_ok, global_ok = os.path.isfile(in_repo), os.path.isfile(global_path)
-        if in_ok and global_ok:
+        in_present, global_present = os.path.lexists(in_repo), os.path.lexists(global_path)
+        if in_present and global_present:
             picked = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
-            return in_repo if picked == mode_registry.IN_REPO else global_path
-        if in_ok:
-            return in_repo
-        if global_ok:
-            return global_path
-        return None
+            chosen = in_repo if picked == mode_registry.IN_REPO else global_path
+        elif in_present:
+            chosen = in_repo
+        elif global_present:
+            chosen = global_path
+        else:
+            return None
+        return chosen if os.path.isfile(chosen) else None
     except Exception:
         return None
 
@@ -136,7 +140,9 @@ def _mode_layer(cwd, hero, root):
 def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
     """The ordered profile-source candidates resolve() considers, EXISTING OR NOT.
 
-    The layer the storage mode picks (when it is a file) comes first."""
+    The layer the storage mode picks (when it is a file) comes first, except that a present candidate
+    that is not a regular file and that today's order ranks ahead of it stays ahead of it, so the tier
+    gate meets and refuses that unreadable candidate."""
     legacy_root = review_store.store_root()
     candidates = [
         _unified_in_repo_layer_path(cwd, hero),
@@ -145,13 +151,13 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
         _legacy_global_profile_path(cwd, legacy_root),
     ]
     candidates = [c for c in candidates if c is not None]
-    # axis: a present candidate that is not a regular file keeps today's order, so the tier gate still refuses it as unreadable
-    if any(os.path.lexists(c) and not os.path.isfile(c) for c in candidates):
-        return candidates
     mode_layer = _mode_layer(cwd, hero, root)
-    if mode_layer is not None:
-        candidates = [mode_layer] + [c for c in candidates if c != mode_layer]
-    return candidates
+    if mode_layer is None:
+        return candidates
+    ahead = candidates[:candidates.index(mode_layer)] if mode_layer in candidates else []
+    # axis: an unreadable candidate today's order ranks ahead of the mode layer is listed first, so the tier gate refuses it
+    blockers = [c for c in ahead if os.path.lexists(c) and not os.path.isfile(c)]
+    return blockers + [mode_layer] + [c for c in candidates if c != mode_layer and c not in blockers]
 
 
 def _core_beside_layer(layer_p, cwd, root):

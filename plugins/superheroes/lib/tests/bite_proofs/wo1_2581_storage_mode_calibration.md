@@ -433,3 +433,54 @@ FAILED plugins/superheroes/lib/tests/test_model_tier_overrides.py::test_effectiv
 .                                                                        [100%]
 1 passed in 3.67s
 ```
+
+
+## Review round 1 fixes (orchestrator-typed at the review's apply-fixes step)
+
+Declared guarded elements: FX1 `calibration_resolve.regular_core` keeps a present, non-regular mode-selected core.md (axis: never replaced by its peer); FX2 `calibration_pin.capture` reads `_mode_core` only (axis: a broken selected core pins unreadable); FX3 `candidate_profile_paths` lists an unreadable candidate ranked ahead of the mode layer first (axis: the tier gate refuses it); FX4 `core_md.MODE_PICKED_LAYERS` limits the both-copies pick to review-crew (axis: another hero's layer stays beside core.md); FX5 `configure_view.collect` shows the picked review-crew layer (axis: the view matches the write); FX6 `_compose` records the mode before reading the files (axis: the composed script places the registry).
+
+**Neutralization (FX1-FX5):** the whole fix, as one class: the new tests run against the pre-fix source at `d7f67679` in a detached worktree (the test file copied in). Each fix is the only code its test exercises that differs, so each red names its own element.
+
+**Raw red (FX1-FX5), the new test file under pytest `-q -p no:randomly` at d7f67679:**
+```
+E       AssertionError: assert '/tmp/pytest-...eroes/core.md' == '/tmp/pytest-...onfig/core.md'
+E         
+E         Skipping 45 identical leading characters in diff, use -v to show
+E         - ile_peer0/_store_isolation/projects/238a7b644f5fb344/config/core.md
+E         + ile_peer0/repo/.claude/superheroes/core.md
+E       AssertionError: assert None == 'unreadable'
+E        +  where 'unreadable' = calibration_pin.REASON_UNREADABLE
+E       AssertionError: assert ['/tmp/pytest...w-profile.md'] == ['/tmp/pytest...view-crew.md']
+E         
+E         At index 0 diff: '/tmp/pytest-of-root/pytest-25/test_r_gate_unreadable_candida0/repo/.claude/superheroes/review-crew.md' != '/tmp/pytest-of-root/pytest-25/test_r_gate_unreadable_candida0/repo/.claude/review-profile.md'
+E         Use -v to get more diff
+E       AssertionError: assert '/tmp/pytest-...test-pilot.md' == '/tmp/pytest-...test-pilot.md'
+E         
+E         Skipping 52 identical leading characters in diff, use -v to show
+E         - r_stays_0/repo/.claude/superheroes/test-pilot.md
+E         + r_stays_0/_store_isolation/projects/238a7b644f5fb344/config/test-pilot.md
+E       AssertionError: assert '## Focus hin...not be read\n' == '## Focus hin...lobal store\n'
+E         
+E           ## Focus hints
+E         - - global: the layer text of the global store
+E         + - stale: the old in-repo layer text that must not be read
+FAILED plugins/superheroes/lib/tests/test_storage_mode_calibration_2581.py::test_r_pin_nonfile_peer
+FAILED plugins/superheroes/lib/tests/test_storage_mode_calibration_2581.py::test_r_pin_dangling_selected_core
+FAILED plugins/superheroes/lib/tests/test_storage_mode_calibration_2581.py::test_r_gate_unreadable_candidate_ahead
+FAILED plugins/superheroes/lib/tests/test_storage_mode_calibration_2581.py::test_r_other_hero_layer_stays_beside_core
+FAILED plugins/superheroes/lib/tests/test_storage_mode_calibration_2581.py::test_r_configure_view_shows_the_picked_layer
+5 failed, 17 passed in 7.80s
+```
+
+**FX6 neutralization:** in that worktree, the `_compose` line `_record_mode(cwd, root)` moved below `placed, files = _calibration(cwd, root)`. **Raw red:**
+```
+E       AssertionError: assert 'registry.json' in ['config/core.md', 'config/review-crew.md']
+E        +  where 'registry.json' = mr.REGISTRY_FILENAME
+1 failed in 5.33s
+```
+
+**Restore:** the FX6 line move was undone by the inverse edit, and the test file was put back from its d7f67679 blob. The worktree's porcelain status was empty. The worktree was then removed.
+
+**Raw green:** the fixed head runs the same file and the scoped suites: `667 passed, 14 skipped in 29.76s` (the new file and 9 neighbouring suites).
+
+**Disclosure:** FX2 reverses the brief check's R4 disposition (a regular core beat a non-file peer in the pin). The review's premortem finding showed that a stale peer's settings then drive the security-seat plan, so the pin now fails closed. `test_r_pin_nonfile_peer` asserts the fail-closed result.

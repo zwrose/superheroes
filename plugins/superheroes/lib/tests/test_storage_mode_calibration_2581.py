@@ -193,13 +193,64 @@ def test_r_unchanged(cwd, root, layout):
 
 
 def test_r_pin_nonfile_peer(tmp_path, cwd, root):
-    # axis: a regular core.md beats a non-file peer in the session pin
+    # axis: a mode-selected core.md that is not a regular file is pinned unreadable, never replaced by its stale peer
     _register(cwd, root, mr.GLOBAL)
-    core = _put(_in_repo(cwd, "core.md"), _CORE_TEXT)
-    os.makedirs(_global(cwd, root, "core.md"))
+    _put(_in_repo(cwd, "core.md"), _CORE_TEXT)
+    selected = _global(cwd, root, "core.md")
+    os.makedirs(selected)
     pin = calibration_pin.capture(cwd, str(tmp_path / "session-pin"))
-    assert pin["files"]["core"]["source"] == core
-    assert pin["files"]["core"]["reason"] is None
+    assert pin["files"]["core"]["source"] == selected
+    assert pin["files"]["core"]["reason"] == calibration_pin.REASON_UNREADABLE
+    assert pin["riskAreas"]["reason"] == cm.RISK_AREAS_REASON_UNREADABLE
+    assert cr.regular_core(cwd, root) is None
+
+
+def test_r_pin_dangling_selected_core(tmp_path, cwd, root):
+    # axis: a dangling mode-selected core.md keeps the pin's policy unreadable instead of reading the stale in-repo copy
+    _register(cwd, root, mr.GLOBAL)
+    _put(_in_repo(cwd, "core.md"), _CORE_TEXT)
+    selected = _global(cwd, root, "core.md")
+    os.makedirs(os.path.dirname(selected), exist_ok=True)
+    os.symlink(str(tmp_path / "no-such-core.md"), selected)
+    pin = calibration_pin.capture(cwd, str(tmp_path / "session-pin"))
+    assert pin["files"]["core"]["reason"] == calibration_pin.REASON_UNREADABLE
+    assert pin["riskAreas"]["reason"] == cm.RISK_AREAS_REASON_UNREADABLE
+    assert cr.regular_core(cwd, root) is None
+
+
+def test_r_gate_unreadable_candidate_ahead(cwd, root):
+    # axis: an unreadable candidate ranked ahead of the mode layer is listed first, so the tier gate refuses it
+    _register(cwd, root, mr.GLOBAL)
+    _put(_global(cwd, root, "core.md"), _CORE_TEXT)
+    glayer = _put(_global(cwd, root, "review-crew.md"), _GLOBAL_LAYER)
+    _put(_in_repo(cwd, "review-crew.md"), _STALE_LAYER)
+    legacy = os.path.join(cwd, ".claude", "review-profile.md")
+    os.makedirs(legacy)
+    candidates = cr.candidate_profile_paths(cwd, root=root)
+    assert candidates[:2] == [legacy, glayer]
+    path, status, _detail = model_tier_overrides.resolve_profile_path_for_gate(cwd, root=root)
+    assert (path, status) == (legacy, model_tier_overrides.TIERS_UNREADABLE)
+
+
+def test_r_other_hero_layer_stays_beside_core(cwd, root):
+    # axis: only the review-crew layer is picked by mode; another hero's layer stays beside core.md, where its readers look
+    _register(cwd, root, mr.GLOBAL)
+    _put(_in_repo(cwd, "core.md"), _CORE_TEXT)
+    in_repo_pilot = _put(_in_repo(cwd, "test-pilot.md"), "## Config\nin-repo\n")
+    _put(_global(cwd, root, "test-pilot.md"), "## Config\nglobal\n")
+    assert cm.layer_path(cwd, "test-pilot", root) == in_repo_pilot
+
+
+def test_r_configure_view_shows_the_picked_layer(cwd, root, monkeypatch):
+    # axis: the configure view shows the review-crew layer configure writes, not the stale copy beside a sole core.md
+    import configure_view
+    _register(cwd, root, mr.GLOBAL)
+    _put(_in_repo(cwd, "core.md"), _CORE_TEXT)
+    _put(_in_repo(cwd, "review-crew.md"), _STALE_LAYER)
+    _put(_global(cwd, root, "review-crew.md"), _GLOBAL_LAYER)
+    monkeypatch.chdir(cwd)
+    layers = dict(configure_view.collect(cwd, root)["layers"])
+    assert layers["review-crew"] == _GLOBAL_LAYER
 
 
 def test_r_gate(cwd, root):
@@ -281,9 +332,14 @@ def _registryless_world(tmp_path):
 def test_r_cloud_backfill(tmp_path):
     # axis: agreeing evidence is recorded before the calibration is placed
     w = _registryless_world(tmp_path)
-    assert _compose(w)["action"] == "written"
+    result = _compose(w)
+    assert result["action"] == "written"
     assert mr.read_registry(w.cwd, w.root)["storageMode"] == mr.GLOBAL
-    assert "registry.json" in CS.calibration_files(w.cwd, w.root)
+    placed = CS.calibration_files(w.cwd, w.root)
+    assert mr.REGISTRY_FILENAME in placed
+    # axis: the registry is recorded before the files are read, so the composed script itself places it
+    assert mr.REGISTRY_FILENAME in result["calibration"]["files"]
+    assert placed[mr.REGISTRY_FILENAME].decode("utf-8") in result["text"]
 
 
 def _write_returns_none(*args, **kwargs):

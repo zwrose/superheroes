@@ -484,7 +484,15 @@ def collect(cwd, root=None):
         for name in sorted(os.listdir(cal_dir)):
             if name.endswith(".md") and name not in _NON_LAYER:
                 layers.append((name[:-3], _read(os.path.join(cal_dir, name)) or ""))
-    patterns = _read(os.path.join(cal_dir, "patterns.md")) if cal_dir else None
+    for hero in sorted(core_md.MODE_PICKED_LAYERS):
+        # axis: the view shows the layer copy configure writes, not a stale copy beside a sole core.md
+        try:
+            picked = core_md.layer_path(cwd, hero, root, persist_backfill=False)
+        except Exception:
+            picked = None
+        if picked and os.path.isfile(picked) and os.path.dirname(picked) != cal_dir:
+            layers = sorted([(n, t) for n, t in layers if n != hero] + [(hero, _read(picked) or "")])
+    patterns =_read(os.path.join(cal_dir, "patterns.md")) if cal_dir else None
     if patterns is None and core is not None:
         patterns = core.get("patterns")
     try:
