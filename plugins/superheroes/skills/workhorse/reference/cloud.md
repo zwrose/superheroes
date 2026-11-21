@@ -89,7 +89,9 @@ directory: no host worktree-entering tool, and no `cd` into the worktree. Addres
 absolute path in every command, the review included: `git -C <worktree>`, `--repo-root <worktree>`,
 `--cwd <worktree>`, and the worktree's path for every file you read or edit. Where a skill's block
 runs a bare `git` or `gh` command against the current directory, run it with `git -C <worktree>`
-or the helper's path flag instead.
+or the helper's path flag instead. Pass `round_driver.py` `--repo-root <worktree>` on every call:
+without it the driver checks the session's own directory against the review's recorded root and
+refuses `base-repo-root-mismatch`.
 
 Why: the host asks for approval before a worktree-entering tool moves the session into a worktree
 outside its working directory, in auto mode too, and a headless session cannot answer, so the lane
