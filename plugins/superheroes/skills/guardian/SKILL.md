@@ -79,9 +79,9 @@ Produce a **dispositions JSON** — exactly one entry per surfaced `id`:
 
 Verdicts: `validated` | `rejected` | `degraded`. A `validated` entry requires non-empty `consequence`, `receipt`, `effort`, and `ledgerJoin`.
 
-An entry may also carry an optional **`ledger`** object recording the triage decision, e.g. `{"id": "<surfaced-id>", "verdict": "rejected", "reason": "…", "ledger": {"disposition": "declined", "reason": "…", "reraiseWhen": "…"}}`. `disposition` is `filed` (requires `issue`) | `accepted` | `declined` (both require `reason`) | `triaged-out`; optional keys are `issue`, `reason`, `reraiseWhen`, and `deferredByPolicy` (bool; only with `accepted`, `declined` or `triaged-out`; leaves the finding out of the lens's usefulness ratio — see [calibration](reference/calibration.md)); anything else is refused, and a `degraded` entry cannot carry one. A `rejected` entry with no `ledger` means `{"disposition": "triaged-out", "reason": <the entry's reason>}`; a `validated` entry with no `ledger` writes nothing (the decision is still pending). The ledger record's id is the surfaced `id` (not `ledgerJoin`).
+An entry may also carry an optional **`ledger`** object recording the triage decision, e.g. `{"id": "<surfaced-id>", "verdict": "rejected", "reason": "…", "ledger": {"disposition": "declined", "reason": "…", "reraiseWhen": "…"}}`. `disposition` is `filed` (requires `issue`) | `accepted` | `declined` (both require `reason`) | `triaged-out`; optional keys are `issue`, `reason`, `reraiseWhen`, and `deferredByPolicy` (bool; only with `accepted`, `declined` or `triaged-out`; leaves the finding out of the lens's usefulness ratio — see [calibration](reference/calibration.md)); anything else is refused, and a `degraded` entry cannot carry one. A `rejected` entry with no `ledger` means `{"disposition": "triaged-out", "reason": <the entry's reason>}`; a `validated` entry with no `ledger` writes nothing (the decision is still pending). The ledger record's id is the surfaced `id` (not `ledgerJoin`). A decision `filed` (with `issue`) on a surfaced finding whose record is `declined` or `triaged-out` advances that record to `filed`; any other change to a settled record is refused and the record is left untouched.
 
-**Ledger-first rule.** The collect step already moved filed/tracked items into `ledgerStatus` and suppressed settled trades. The model never re-opens those — only the `surfaced` list gets validated.
+**Ledger-first rule.** The collect step already moved filed/tracked items into `ledgerStatus` and suppressed settled trades. The model never re-opens those, with one exception: a `declined` or `triaged-out` finding moves to `filed` when an issue is filed for it. Only the `surfaced` list gets validated.
 
 Write dispositions to a temp file:
 
@@ -118,9 +118,11 @@ python3 -B "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
 
+A `declined` or `triaged-out` record that no longer surfaces is recovered with `--recoveries <file>`, a JSON list of `{"id": "<ledger id>", "issue": "<issue ref>"}`. Each advances to `filed` and is scored for its lens; the result's `recoveries` / `recoveriesSkipped` say what happened. An id that also surfaced is refused `invalid-recoveries`.
+
 This is the **only** place `ledger.md` is written — filed-item closures, the triage
 decisions from step 2's `ledger` objects (written as records at the decided state, which is
-how a settled decision stays settled next sweep), **and** the per-lens report card share
+how a settled decision stays settled next sweep, save that a `declined` or `triaged-out` finding moves to `filed` when an issue is filed for it), **and** the per-lens report card share
 this one write path. It is **safe to re-run** (idempotent). It
 **fails closed** on an opaque/unreadable ledger and on a stale bundle (`stale-bundle` — a
 newer sweep advanced the baseline since this bundle) and on a roster-read failure
