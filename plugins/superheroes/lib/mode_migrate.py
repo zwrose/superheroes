@@ -283,18 +283,23 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         read_now = review_store.resolve(cwd, "decisions", legacy_root=review_root, registry_root=root)["path"]
     except Exception:
         cal_file = read_now = None
-    read_now = real(read_now) if read_now and os.path.isfile(read_now) else None
-    # axis: decisions are carried only when the calibration file read now leaves its place in this flip
-    dec_stays = read_now is not None and (read_now not in {real(p) for p in m_side if present(p)} or not (
-        cal_file and real(cal_file) in {real(f["src"]) for f in files}))
+    read_now = real(read_now) if read_now else None
+    read_src = next((p for p in m_side if present(p) and real(p) == read_now), None)
+    # axis: with a review calibration read, decisions are carried only when its file leaves its place in this flip
+    # and the copy read now is a regular file on the moving side; any other state (missing, linked) carries nothing
+    dec_stays = cal_file is not None and not (
+        real(cal_file) in {real(f["src"]) for f in files} and read_src is not None and os.path.isfile(read_src))
     m_side.sort(key=lambda p: bool(p) and real(p) != read_now)
     for path in m_side:
         if not present(path):
             continue
-        if dec_stays:
-            leave(path, WHY_RETAINED)
+        if path == read_src and not dec_stays and not carried:
+            # axis: the copy read now is carried by its bytes even through a live link; only the link is removed
+            carried = take(path, t_first, ROLE_CARRY, "decisions")
         elif not _is_regular(path):
             leave(path, WHY_NOT_REGULAR)
+        elif dec_stays:
+            leave(path, WHY_RETAINED)
         elif not carried:
             carried = take(path, t_first, ROLE_CARRY, "decisions")
         else:
