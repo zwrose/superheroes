@@ -536,9 +536,12 @@ def _backout_flip(files):
                 # axis: the link is staged in a fresh private folder, so no existing file is ever touched
                 stage_dir = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(f["dst"])),
                                              prefix=".link-restore.")
-                os.symlink(f["link"], os.path.join(stage_dir, "link"))
-                os.replace(os.path.join(stage_dir, "link"), f["dst"])
-                os.rmdir(stage_dir)
+                try:
+                    os.symlink(f["link"], os.path.join(stage_dir, "link"))
+                    os.replace(os.path.join(stage_dir, "link"), f["dst"])
+                finally:
+                    # axis: the private staging folder never outlives the restore, even one that fails
+                    shutil.rmtree(stage_dir, ignore_errors=True)
                 continue
             snap = f.get("snapshot")
             if snap and os.path.isfile(snap):
