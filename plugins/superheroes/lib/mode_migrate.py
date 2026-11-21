@@ -282,13 +282,15 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         cal_file = cal.get("dispatch_layer") or cal.get("legacy_path") if cal.get("exists") else None
         read_now = review_store.resolve(cwd, "decisions", legacy_root=review_root, registry_root=root)["path"]
     except Exception:
-        cal_file = read_now = None
+        # axis: a calibration that cannot be resolved (UnresolvableRootError included) is never read as "none": every decisions copy stays
+        cal_file, read_now = "", None
     read_now = real(read_now) if read_now else None
     read_src = next((p for p in m_side if present(p) and real(p) == read_now), None)
     # axis: with a review calibration read, decisions are carried only when its file leaves its place in this flip
     # and the copy read now is a regular file on the moving side; any other state (missing, linked) carries nothing
     dec_stays = cal_file is not None and not (
-        real(cal_file) in {real(f["src"]) for f in files} and read_src is not None and os.path.isfile(read_src))
+        cal_file and real(cal_file) in {real(f["src"]) for f in files} and read_src is not None
+        and os.path.isfile(read_src))
     m_side.sort(key=lambda p: bool(p) and real(p) != read_now)
     for path in m_side:
         if not present(path):
