@@ -42,15 +42,25 @@ _WORK_ITEM_RECORDS = ("findings.md",)
 # set; keep it the union, so a new work-item file is moved by being added to one of the two
 # sets above rather than to a third place.
 _WORK_ITEM_DOCS = _DEFINITION_DOCS + _WORK_ITEM_RECORDS
+# The two roles a settings entry (#2587) can carry, and the reasons a settings copy stays put.
+ROLE_CARRY = "carry"
+ROLE_SET_ASIDE = "set-aside"
+WHY_ONLY_COPY = "only-copy"
+WHY_NOT_REGULAR = "not-a-regular-file"
+WHY_SHARED_PATH = "shared-path"
+_BACKUP_SUFFIX = "-storage-move"
 
 
 class Migration:
     """An enumerated, not-yet-applied storage-mode move. `files` is a list of
     {"src","dst","done"} dicts; machine-local bookkeeping (registry.json/config.lock/run
-    state) is deliberately NOT in `files` for a flip (FR-10)."""
+    state) is deliberately NOT in `files` for a flip (FR-10). A settings entry (#2587) also
+    carries "role": "carry" (moved to the target's slot) or "set-aside" (moved into the flip's
+    dated backup folder); `left_in_place` names the settings copies the flip does not move."""
 
     def __init__(self, *, kind="flip", target=None, files=None, cwd=None, root=None,
-                 remote_key=None, blocked=False, reason="", owner_authorized=False):
+                 remote_key=None, blocked=False, reason="", owner_authorized=False,
+                 left_in_place=None, source_mode=None):
         self.kind = kind
         self.target = target
         self.files = files or []
@@ -60,6 +70,8 @@ class Migration:
         self.blocked = blocked
         self.reason = reason
         self.owner_authorized = owner_authorized
+        self.left_in_place = left_in_place or []
+        self.source_mode = source_mode
 
 
 # --------------------------------------------------------------------------- paths
@@ -178,9 +190,121 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
     return files
 
 
-def enumerate_flip(cwd, target_mode, *, root=None):
+def _is_regular(path):
+    return os.path.isfile(path) and not os.path.islink(path)
+
+
+def _backup_folder(cwd, root, backups_dirname):
+    """The not-yet-created dated folder this flip's set-asides share (computed, never made)."""
+    import leftover_settings
+    parent = os.path.join(mode_registry.project_store_dir(cwd, root), backups_dirname)
+    stamp = leftover_settings._stamp(None) + _BACKUP_SUFFIX
+    candidate, n = os.path.join(parent, stamp), 1
+    while os.path.lexists(candidate):
+        n += 1
+        candidate = os.path.join(parent, "%s-%d" % (stamp, n))
+    return candidate
+
+
+def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root):
+    """The settings entries (#2587) a flip out of `current` adds after today's `files`, and the
+    copies it leaves in place: ([entry], [{"path", "why"}]). Nothing is created or written.
+
+    Decisions: the first present regular M-side copy is carried to the target's first slot; every
+    other present regular M-side copy, and the target-side legacy review-entry copy when the target
+    is global, is set aside. Legacy profiles: set aside when the same hero's unified layer moves in
+    today's entries, else left in place as the only copy. A present path that is not a regular file
+    is never moved."""
+    import calibration_paths
+    import leftover_settings as ls
+    import review_store
+    import store
+    repo = _repo_root(cwd)
+    to_global = current == mode_registry.IN_REPO
+    m_cal = _in_repo_cal_dir(cwd) if to_global else _global_cal_dir(cwd, root)
+    review_entry = ls._legacy_entry_dir(
+        cwd, review_root if review_root is not None else review_store.store_root())
+    tp_entry = ls._legacy_entry_dir(
+        cwd, test_pilot_root if test_pilot_root is not None else store.store_root())
+    entries, left = [], []
+    used = {p for f in files for p in (f["src"], f["dst"])}
+
+    def present(path):
+        return bool(path) and os.path.lexists(path)
+
+    def leave(path, why):
+        left.append({"path": path, "why": why})
+
+    def take(src, dst, role, family):
+        if src in used or (dst is not None and dst in used):
+            leave(src, WHY_SHARED_PATH)  # never share a path with another entry
+            return False
+        used.update(p for p in (src, dst) if p is not None)
+        entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family})
+        return True
+
+    # decisions
+    dec_in = os.path.join(repo, ls._DEC_IN_REL)
+    dec_gl = os.path.join(_global_cal_dir(cwd, root), ls._DECISIONS)
+    dec_legacy = os.path.join(review_entry, ls._DECISIONS) if review_entry else None
+    m_side = [dec_in] if to_global else [dec_gl, dec_legacy]
+    t_first = dec_gl if to_global else dec_in
+    carried = False
+    for path in m_side:
+        if not present(path):
+            continue
+        if not _is_regular(path):
+            leave(path, WHY_NOT_REGULAR)
+        elif not carried:
+            carried = take(path, t_first, ROLE_CARRY, "decisions")
+        else:
+            take(path, None, ROLE_SET_ASIDE, "decisions")
+    if to_global and present(dec_legacy):
+        if not _is_regular(dec_legacy):
+            leave(dec_legacy, WHY_NOT_REGULAR)
+        elif carried or present(t_first):
+            # set aside only while the target's first slot holds a copy; the only copy stays read
+            take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
+
+    # legacy profiles
+    moved_srcs = {f["src"] for f in files}
+    heroes = (
+        ("review-crew", "review-crew.md",
+         (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE),
+          os.path.join(review_entry, review_store.FILENAMES["profile"]) if review_entry else None)),
+        ("test-pilot", "test-pilot.md",
+         (os.path.join(repo, ls._LEGACY_TP_IN_REL),
+          os.path.join(tp_entry, ls._LEGACY_TP_STORE_FILENAME) if tp_entry else None)),
+    )
+    for family, layer, legacy in heroes:
+        layer_moves = os.path.join(m_cal, layer) in moved_srcs
+        for path in legacy:
+            if not present(path):
+                continue
+            if not _is_regular(path):
+                leave(path, WHY_NOT_REGULAR)
+            elif layer_moves:
+                take(path, None, ROLE_SET_ASIDE, family)
+            else:
+                leave(path, WHY_ONLY_COPY)
+
+    # one shared dated folder for every set-aside, numbered in entry order
+    if any(e["role"] == ROLE_SET_ASIDE for e in entries):
+        folder = _backup_folder(cwd, root, ls.BACKUPS_DIRNAME)
+        n = 0
+        for e in entries:
+            if e["role"] == ROLE_SET_ASIDE:
+                n += 1
+                e["dst"] = os.path.join(folder, "%02d-%s" % (n, os.path.basename(e["src"])))
+    return entries, left
+
+
+def enumerate_flip(cwd, target_mode, *, root=None, review_root=None, test_pilot_root=None):
     """Enumerate a flip to target_mode. Read-only — no owner authorization required (FR-10 preview).
-    Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
+    Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params.
+    After the calibration and work-item files come the settings entries (#2587): the review
+    decisions file and the legacy review / test-pilot profiles, found under `review_root` and
+    `test_pilot_root` (default: each legacy store's own root)."""
     current = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
     in_cal, gl_cal = _in_repo_cal_dir(cwd), _global_cal_dir(cwd, root)
     in_docs, gl_docs = _in_repo_docs_base(cwd), _global_docs_base(cwd, root)
@@ -188,13 +312,16 @@ def enumerate_flip(cwd, target_mode, *, root=None):
         files = _enumerate(in_cal, gl_cal, in_docs, gl_docs)
     else:
         files = _enumerate(gl_cal, in_cal, gl_docs, in_docs)
+    extra, left = _settings_entries(cwd, current, files, root=root, review_root=review_root,
+                                    test_pilot_root=test_pilot_root)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
-    return Migration(kind="flip", target=target_mode, files=files,
+    return Migration(kind="flip", target=target_mode, files=files + extra,
                      cwd=cwd, root=root, remote_key=remote_key,
-                     owner_authorized=False)
+                     owner_authorized=False, left_in_place=left, source_mode=current)
 
 
-def plan(cwd, target_mode, *, root=None, owner_authorized):
+def plan(cwd, target_mode, *, root=None, owner_authorized, review_root=None,
+         test_pilot_root=None):
     """Enumerate a flip to target_mode. Refuses without owner authorization (FR-14). Records
     cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
     if not owner_authorized:
@@ -202,7 +329,8 @@ def plan(cwd, target_mode, *, root=None, owner_authorized):
                          reason="storage migration requires owner authorization (FR-14)",
                          cwd=cwd, root=root, target=target_mode,
                          owner_authorized=False)
-    m = enumerate_flip(cwd, target_mode, root=root)
+    m = enumerate_flip(cwd, target_mode, root=root, review_root=review_root,
+                       test_pilot_root=test_pilot_root)
     m.owner_authorized = True
     return m
 
@@ -219,11 +347,17 @@ def _is_definition_doc(path):
 def preview(migration):
     """The plain-language 'exactly what will move' summary FR-10 requires before any confirm.
     Enumerates calibration, definition-docs, and non-definition-doc work-item records, with a
-    one-line collaborator-visibility disclosure."""
-    calibration, def_docs, work_item_records = [], [], []
+    one-line collaborator-visibility disclosure. A settings entry (#2587) is reported apart:
+    a carried one counts as calibration, a set-aside one is listed under `setAside` (where it
+    goes), `leftInPlace` names the copies the flip does not move, and `overwrites` names every
+    destination of a non-set-aside entry that already exists (the flip replaces it)."""
+    calibration, def_docs, work_item_records, set_aside = [], [], [], []
     for f in migration.files:
         src = f["src"]
-        if _is_calibration(src):
+        role = f.get("role")
+        if role == ROLE_SET_ASIDE:
+            set_aside.append({"from": src, "to": f["dst"]})
+        elif role == ROLE_CARRY or _is_calibration(src):
             calibration.append(src)
         elif _is_definition_doc(src):
             def_docs.append(src)
@@ -237,9 +371,12 @@ def preview(migration):
     else:
         disclosure = ("Switching to out-of-repo moves the calibration, the definition documents "
                       "and the work-item records out of the repo — the repo stays pristine.")
+    overwrites = [f["dst"] for f in migration.files
+                  if f.get("role") != ROLE_SET_ASIDE and os.path.lexists(f["dst"])]
     return {"target": migration.target, "calibration": calibration,
             "definitionDocs": def_docs, "workItemRecords": work_item_records,
-            "disclosure": disclosure}
+            "setAside": set_aside, "leftInPlace": list(migration.left_in_place),
+            "overwrites": overwrites, "disclosure": disclosure}
 
 
 # --------------------------------------------------------------------------- execute
@@ -267,6 +404,17 @@ def execute(migration, *, root=None):
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False}
                              for f in migration.files]}
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
+        aside = [f for f in migration.files if f.get("role") == ROLE_SET_ASIDE]
+        if aside:
+            # the manifest `leftover_settings.restore` reads, written before any copy so a flip
+            # that dies half way is still undoable
+            import leftover_settings
+            manifest = os.path.join(os.path.dirname(aside[0]["dst"]),
+                                    leftover_settings.MANIFEST_FILENAME)
+            store_core.atomic_write(manifest, json.dumps(
+                {"schema": leftover_settings.MANIFEST_SCHEMA, "mode": migration.source_mode,
+                 "entries": [{"from": f["src"], "to": f["dst"], "family": f.get("family")}
+                             for f in aside]}, indent=2))
         for f in journal["files"]:
             with open(f["src"], encoding="utf-8") as fh:
                 store_core.atomic_write(f["dst"], fh.read())

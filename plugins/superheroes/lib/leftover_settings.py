@@ -64,6 +64,7 @@ _TEST_PILOT = "test-pilot.md"
 _DECISIONS = review_store.FILENAMES["decisions"]
 _DEC_IN_REL = os.path.join(".claude", _DECISIONS)
 _LEGACY_TP_IN_REL = mode_registry._HERO_LEGACY_INREPO["test-pilot"]
+_LEGACY_TP_STORE_FILENAME = "profile.md"
 
 
 def _present(path):
@@ -146,7 +147,8 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
         }
         legacy_tp = {
             mode_registry.IN_REPO: os.path.join(repo, _LEGACY_TP_IN_REL),
-            mode_registry.GLOBAL: os.path.join(tp_entry, "profile.md") if tp_entry else None,
+            mode_registry.GLOBAL: (os.path.join(tp_entry, _LEGACY_TP_STORE_FILENAME)
+                                   if tp_entry else None),
         }
         other = (mode_registry.GLOBAL if mode == mode_registry.IN_REPO else mode_registry.IN_REPO)
 
