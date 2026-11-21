@@ -79,6 +79,7 @@ def test_container_section_names_the_sandbox_facts():
         "keeps `-B -X pycache_prefix=",
         "drop it and keep `-B`",
         "size_count.py count --base",
+        "--repo-root <the build worktree> --worktree",
     ):
         assert needle in body, needle
 
