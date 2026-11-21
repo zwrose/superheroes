@@ -275,9 +275,13 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     carried = False
     m_review = (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE) if to_global else
                 os.path.join(review_entry, review_store.FILENAMES["profile"]) if review_entry else None)
-    # axis: decisions follow the review calibration, so they stay while the moving side's legacy review profile stays (no review layer moves)
-    dec_stays = present(m_review) and real(os.path.join(m_cal, "review-crew.md")) not in {
-        real(f["src"]) for f in files}
+    t_cal = _global_cal_dir(cwd, root) if to_global else _in_repo_cal_dir(cwd)
+    # axis: decisions follow the review calibration selected after the flip (calibration_resolve): they stay while the
+    # moving side's legacy review profile stays selected, i.e. no review layer moves and the target side has none to read
+    target_reads = (real(os.path.join(m_cal, "review-crew.md")) in {real(f["src"]) for f in files}
+                    or present(os.path.join(t_cal, "review-crew.md"))
+                    or (not to_global and present(os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE))))
+    dec_stays = present(m_review) and not target_reads
     for path in m_side:
         if not present(path):
             continue
@@ -292,8 +296,8 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     if to_global and present(dec_legacy):
         if not _is_regular(dec_legacy):
             leave(dec_legacy, WHY_NOT_REGULAR)
-        elif carried or os.path.isfile(t_first):
-            # axis: set aside only while the target's first slot holds a regular-file copy; the only copy stays read
+        elif carried:
+            # axis: the global store reads a legacy decisions copy first, so it is set aside only when this flip carries the read copy over it
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
     # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
     # aside or replaces and no other row already names stays where it is, and the preview says so
@@ -529,11 +533,12 @@ def _backout_flip(files):
         # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
         if f.get("preexisting"):
             if f.get("link") is not None:
-                stage = f["dst"] + ".link-restore.tmp"
-                if os.path.lexists(stage):
-                    os.unlink(stage)
-                os.symlink(f["link"], stage)
-                os.replace(stage, f["dst"])
+                # axis: the link is staged in a fresh private folder, so no existing file is ever touched
+                stage_dir = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(f["dst"])),
+                                             prefix=".link-restore.")
+                os.symlink(f["link"], os.path.join(stage_dir, "link"))
+                os.replace(os.path.join(stage_dir, "link"), f["dst"])
+                os.rmdir(stage_dir)
                 continue
             snap = f.get("snapshot")
             if snap and os.path.isfile(snap):

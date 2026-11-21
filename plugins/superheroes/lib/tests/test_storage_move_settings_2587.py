@@ -280,13 +280,14 @@ def test_preview_names_each_retained_decisions_copy(w, case):
     # axis: every decisions copy that remains after the move is in leftInPlace with why retained, once, and one a carry replaces is not
     entry_dec = None
     if case == "target-copy-stays":
-        # in-repo -> global, no in-repo copy to carry: the global copy stays, the legacy copy is set aside over it
+        # in-repo -> global, no in-repo copy to carry: both stay, since the global store reads the legacy copy first
+        # and setting it aside would switch reviews to the unread global copy
         w.register(mr.IN_REPO)
         _put(w.d_in("core.md"), _CORE)
         entry_dec = os.path.join(w.entry(w.rr), _DEC)
         _put(entry_dec, '{"stale": "entry"}\n')
         _put(w.d_gl(_DEC), '{"global": true}\n')
-        target, expected = mr.GLOBAL, [(w.d_gl(_DEC), "retained")]
+        target, expected = mr.GLOBAL, [(w.d_gl(_DEC), "retained"), (entry_dec, "retained")]
     elif case == "only-legacy-copy":
         # in-repo -> global with the legacy copy alone: nothing takes its slot, so it stays
         w.register(mr.IN_REPO)
@@ -319,7 +320,7 @@ def test_preview_names_each_retained_decisions_copy(w, case):
     moved = {p for f in m.files for p in (f["src"], f["dst"]) if f.get("family") == "decisions"}
     assert not ({e["path"] for e in pv["leftInPlace"]} & moved)
     if case == "target-copy-stays":
-        assert [a["from"] for a in pv["setAside"]] == [entry_dec]
+        assert pv["setAside"] == []
 
 
 # --- edge 1: no shared path ----------------------------------------------------------------------
@@ -618,3 +619,33 @@ def test_backout_restores_an_overwritten_destination_byte_for_byte(w, monkeypatc
     with open(dst, "rb") as fh:
         assert fh.read() == original
     assert not os.listdir(os.path.join(w.store_dir(), mm._SNAPSHOT_DIRNAME))
+
+
+def test_a_destination_link_does_not_reserve_the_file_it_points_to(w):
+    # axis: the carry replaces a link at its destination, so the legacy decisions it pointed to are still set aside and no longer shadow the carried copy
+    review_entry, _ = _seed_in_repo(w)
+    legacy = os.path.join(review_entry, _DEC)
+    dst = w.d_gl(_DEC)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    os.symlink(legacy, dst)
+    m = w.plan(mr.GLOBAL)
+    assert any(f["src"] == legacy and f["role"] == mm.ROLE_SET_ASIDE for f in m.files)
+    assert mm.execute(m, root=w.root) == {"status": "done"}
+    assert not os.path.islink(dst) and _text(dst) == '{"in": true}\n'
+    assert not os.path.lexists(legacy)
+
+
+@pytest.mark.parametrize("global_layer", [False, True])
+def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_layer):
+    # axis: decisions stay beside a legacy review profile that is still read after the flip, and move when a target-side layer is read instead
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.inrepo("review-profile.md"), "## Threat model\nlegacy\n")
+    _put(w.inrepo(_DEC), '{"in": true}\n')
+    if global_layer:
+        _put(w.d_gl("review-crew.md"), "## Focus hints\n- global\n")
+    assert mm.execute(w.plan(mr.GLOBAL), root=w.root) == {"status": "done"}
+    if global_layer:
+        assert _text(w.d_gl(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.inrepo(_DEC))
+    else:
+        assert _text(w.inrepo(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.d_gl(_DEC))

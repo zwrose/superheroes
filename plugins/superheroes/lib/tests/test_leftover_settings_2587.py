@@ -1015,3 +1015,14 @@ def test_placeholder_test_pilot_layer_never_retires_its_legacy_profile(w):
     listed = [f["path"] for f in w.find()["files"]]
     assert profile not in listed
     assert sorted(listed) == sorted(p for p in left if p != profile)
+
+
+def test_in_repo_test_pilot_layer_holding_in_repo_artifacts_is_not_listed(w):
+    # axis: with no legacy profile store.resolve reads the in-repo layer first, with the in-repo blocks and manifests, so that layer is not listed while they hold entries
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(w.d_gl("test-pilot.md"), _PILOT)
+    in_repo_layer = _put(w.d_in("test-pilot.md"), _PILOT + "in-repo layer\n")
+    assert w.paths() == [in_repo_layer]
+    _put(os.path.join(os.path.dirname(_tp_profile(w, "in-repo")), "blocks", "b1.md"), "x\n")
+    assert w.paths() == []
