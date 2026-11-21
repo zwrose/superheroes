@@ -515,3 +515,42 @@ E         + _picked_1/repo/.claude/superheroes/review-crew.md
 ```
 2 passed in 0.53s
 ```
+
+
+## BP9 — the in-repo resolve reads no global store (WO-4)
+
+**Guarded element:** the `os.path.isfile(global_layer)` condition in `calibration_resolve.resolve` (`plugins/superheroes/lib/calibration_resolve.py`, the `mode_layer = ... if os.path.isfile(global_layer) else None` line). Axis: the mode layer is read only when the global layer is a file, so an in-repo-only resolve never touches the global store.
+
+**Neutralization:** `if os.path.isfile(global_layer) else None` became `if True else None`.
+
+**Node:** `plugins/superheroes/lib/tests/test_review_store.py::test_resolve_in_repo_skips_global_store_io` (run with `-q -p no:randomly`).
+
+**Raw red** (traceback excerpt; the `UV_NATIVE_TLS` warning line and the setup lines of the test body are elided; nothing redacted):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_resolve_in_repo_skips_global_store_io __________________
+    monkeypatch.setattr(sc, "resolve_global", track)
+    out = rs.resolve(repo, "profile")
+    assert out["location"] == "in-repo"
+>       assert called == []
+E       assert [False] == []
+E         
+E         Left contains one more item: False
+E         Use -v to get more diff
+
+/home/user/wt-2581/plugins/superheroes/lib/tests/test_review_store.py:481: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_store.py::test_resolve_in_repo_skips_global_store_io
+1 failed in 0.35s
+```
+
+**Restore:** the inverse edit changed `if True else None` back to `if os.path.isfile(global_layer) else None`, with no git restore, checkout or stash.
+
+**Restore receipt:** the restored line, read back from the file, is `    mode_layer = _mode_layer(cwd, hero, root) if os.path.isfile(global_layer) else None`.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.65s
+```

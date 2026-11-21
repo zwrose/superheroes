@@ -207,8 +207,10 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
     legacy_root = legacy_root or review_store.store_root()
     legacy_in = _legacy_in_repo(cwd, hero)
 
-    mode_layer = _mode_layer(cwd, hero, root)
-    if mode_layer is not None and mode_layer == _unified_global_layer_path(cwd, hero, root):
+    global_layer = _unified_global_layer_path(cwd, hero, root)
+    # axis: the mode layer is read only when the global layer is a file, so an in-repo-only resolve never touches the global store
+    mode_layer = _mode_layer(cwd, hero, root) if os.path.isfile(global_layer) else None
+    if mode_layer is not None and mode_layer == global_layer:
         # axis: the review reads the layer configure writes (core_md.layer_path), so a stale in-repo copy never beats the mode's layer
         return _with_dispatch_fields({
             "location": mode_registry.GLOBAL, "exists": True, "layout": "unified",
