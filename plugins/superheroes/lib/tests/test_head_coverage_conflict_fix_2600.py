@@ -404,6 +404,27 @@ def test_e_cf_unreadable_a_failed_git_read_keeps_needs_review(tmp_path, monkeypa
     assert failed, "the check never made the read that was made to fail"
 
 
+def test_e_cf_attr_unreadable_one_of_two_conflicted_files_keeps_needs_review(tmp_path, monkeypatch):
+    # axis: a failed attribute read of one conflicted file refuses the whole merge; the other file's hunks never stand alone — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-attr-one-file)
+    s = Scene(tmp_path, {SHARED: BASE_FUNC, OTHER_PY: BASE_FUNC}, {SHARED: PR_FUNC, OTHER_PY: PR_FUNC},
+              {SHARED: MAIN_FUNC, OTHER_PY: MAIN_FUNC})
+    head = s.merge({SHARED: RESOLVED, OTHER_PY: RESOLVED})
+    got = s.check(head)
+    assert got["answer"] == "judgement" and tokens(got) == [HC.WHY_CONFLICT_FIX], got
+    assert {h["file"] for h in got["hunks"]} == {SHARED, OTHER_PY}, got["hunks"]
+    real = R.production_git(s.repo.root)
+    asked = []
+
+    def seam(argv):
+        if argv[0] == "check-attr" and argv[-1] == OTHER_PY:
+            asked.append(argv)
+            return 1, ""
+        return real(argv)
+
+    fails_closed(monkeypatch, s.repo, s.base, s.record, head, git=seam)
+    assert asked, "the check never read the attributes of the second file"
+
+
 # --- E-cf-span --------------------------------------------------------------------------------------------------------------------------------
 
 

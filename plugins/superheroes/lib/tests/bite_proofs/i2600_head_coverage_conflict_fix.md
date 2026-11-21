@@ -378,6 +378,35 @@ FAILED plugins/superheroes/lib/tests/test_head_coverage_conflict_fix_2600.py::te
 **restore:** the inverse edit. **restore receipt**, quoted back: `        return [] if code == 0 else None`. **raw green:**
 `1 passed, 34 deselected in 0.84s`.
 
+## E-cf-attr-one-file: a failed attribute read of one file never lets the other file's hunk stand alone
+
+Added by work order i2600-wo-e, typed and run by the implementer in the build worktree.
+
+**guarded element:** `_conflict_fix_file`, the `return None` after the E-cf-attr axis comment (`if not (len(rows) == 2 and ...): return None`).
+**Axis:** when the attribute read of one of two conflicted files fails, the merge is refused as a whole (`needs-review`); the other
+file's hunks are never listed alone as a `judgement`.
+
+**neutralization:** the one `return None` after the E-cf-attr axis comment became `return []`.
+
+**raw red** (`-k attr_unreadable_one`, `--tb=line`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: {'answer': 'judgement', 'why': ['conflict-fix: every new commit is a merge by the builder that brings the base in; the...es'], 'certified': 'cd55495508a2e9cc799c1be8d5c27147cf1740c8', 'head': 'a6c4603270d63a945e3c385d17ba87b583257cfa', ...}
+    assert ('judgement' == 'needs-review'
+      
+      - needs-review
+      + judgement)
+/home/user/wt-2600-e/plugins/superheroes/lib/tests/test_head_coverage_conflict_fix_2600.py:94: AssertionError: {'answer': 'judgement', 'why': ['conflict-fix: every new commit is a merge by the builder that brings the base in; the...es'], 'certified': 'cd55495508a2e9cc799c1be8d5c27147cf1740c8', 'head': 'a6c4603270d63a945e3c385d17ba87b583257cfa', ...}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_head_coverage_conflict_fix_2600.py::test_e_cf_attr_unreadable_one_of_two_conflicted_files_keeps_needs_review
+1 failed, 35 deselected in 4.92s
+```
+
+**restore:** the inverse edit. **restore receipt**, quoted back: `        return None` (the line after
+`all(row[2] == "unspecified" for row in rows)):`); `git diff -- plugins/superheroes/lib/head_coverage.py` empty.
+**raw green:** `1 passed, 35 deselected in 5.42s`.
+
 ## After the last restore
 
 `Grep` of `head_coverage.py` for `False and|True or|NEUTRALIZED`: `No matches found`. `git diff -- plugins/superheroes/lib/head_coverage.py`:
