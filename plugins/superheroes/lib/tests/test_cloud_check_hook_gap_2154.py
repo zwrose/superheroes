@@ -101,6 +101,7 @@ GAPS = ("script-missing", "script-differs", "settings-not-registered", "commit-u
 
 @pytest.mark.parametrize("gap", GAPS)
 def test_judge_fails_on_the_hook_part_with_the_gap_and_its_fix(tmp_path, monkeypatch, gap):
+    # axis: cloud_check.judge fails the hook part on every stale-hook gap token, and its message carries that gap's sentence and fix (hook.GAP_TEXT)
     w, bare, with_hook = T._hooked(tmp_path)
     line = _report_line(w)
     _stale(w, monkeypatch, gap)
@@ -118,6 +119,7 @@ def test_judge_fails_on_the_hook_part_with_the_gap_and_its_fix(tmp_path, monkeyp
 
 def test_judge_failing_on_the_hook_part_pauses_the_account_and_never_writes_the_setting(
         tmp_path, monkeypatch):
+    # axis: a hook-part failure in cloud_check.judge pauses the account through the failed-check marker and never switches the cloud-builds setting off
     import core_md
     import project_config
     w, bare, with_hook = T._hooked(tmp_path)
@@ -140,6 +142,7 @@ def test_judge_failing_on_the_hook_part_pauses_the_account_and_never_writes_the_
 
 
 def test_judge_failure_leaves_a_marker_carrying_the_hook_part(tmp_path, monkeypatch):
+    # axis: cloud_check.judge writes the failed-check marker with `hook` among its failed parts
     w, bare, with_hook = T._hooked(tmp_path)
     line = _report_line(w)
     T._drop_hook_files(w)
@@ -150,6 +153,7 @@ def test_judge_failure_leaves_a_marker_carrying_the_hook_part(tmp_path, monkeypa
 
 def test_judge_gives_an_unexpected_failure_in_the_hook_test_as_commit_unreadable(
         tmp_path, monkeypatch):
+    # axis: an exception inside the hook test fails closed in cloud_check._hook_gap as `commit-unreadable`, never a pass
     w, bare, with_hook = T._hooked(tmp_path)
     line = _report_line(w)
     monkeypatch.setattr(cloud_setup_text, "branch_hook_gap", _boom)
@@ -160,6 +164,7 @@ def test_judge_gives_an_unexpected_failure_in_the_hook_test_as_commit_unreadable
 
 
 def test_judge_with_the_hook_off_passes_and_reads_no_gap(tmp_path):
+    # axis: cloud_check.judge raises no hook gap when the project has the dependency hook switched off
     w = T._world(tmp_path)
     T._lock(w)
     T._set_ok(w, T.COMMANDS_SLUG, list(T.COMMANDS))
@@ -171,6 +176,7 @@ def test_judge_with_the_hook_off_passes_and_reads_no_gap(tmp_path):
 
 
 def test_judge_with_a_matching_committed_hook_passes(tmp_path):
+    # axis: cloud_check.judge passes the hook part when the committed hook matches, so the guard does not fire on a good head
     w, bare, with_hook = T._hooked(tmp_path)
     result = _judge(w)
     assert result["action"] == "passed", result
@@ -180,6 +186,7 @@ def test_judge_with_a_matching_committed_hook_passes(tmp_path):
 
 
 def test_judge_unread_report_carries_the_hook_keys_as_none(tmp_path):
+    # axis: an unread report leaves dependencyHookMatches and dependencyHookGap unset (None) in cloud_check.judge, never a pass
     w, bare, with_hook = T._hooked(tmp_path)
     result = _judge(w, "not a report")
     assert result["action"] == "unread"
@@ -191,6 +198,7 @@ def test_judge_unread_report_carries_the_hook_keys_as_none(tmp_path):
 
 
 def test_a_failed_check_marker_with_the_hook_part_forces_only_the_hook_condition(tmp_path):
+    # axis: cloud_ready.readiness turns a failed-check marker naming `hook` into the dependencyHook condition alone, leaving every other condition true
     w, bare, with_hook = T._hooked(tmp_path)
     assert T._ready(w)["ready"] is True
     assert CC._write_failed_check(w.cwd, T.ACCOUNT, w.root, ENV_ID, ["hook"], NOW)
@@ -203,6 +211,7 @@ def test_a_failed_check_marker_with_the_hook_part_forces_only_the_hook_condition
 
 
 def test_readiness_reports_the_gap_token_on_a_hookless_head(tmp_path):
+    # axis: cloud_ready.readiness reports the dependency-hook gap token for a head that lacks the hook
     w, bare, with_hook = T._hooked(tmp_path)
     assert T._ready(w)["dependencyHookGap"] is None
     T._drop_hook_files(w)
@@ -223,6 +232,7 @@ def _hook_call(**over):
 
 
 def test_route_on_a_base_commit_lacking_the_hook_carries_the_gap_into_the_words(tmp_path):
+    # axis: launch_place.route carries the base commit's hook gap into the place call, and the reason, wasnt and launch-report words name it
     w, bare, with_hook = T._hooked(tmp_path)
     T._record_for_routing(w)
     call = T._account_route(w, {"baseCommit": bare})
@@ -236,6 +246,7 @@ def test_route_on_a_base_commit_lacking_the_hook_carries_the_gap_into_the_words(
 
 
 def test_a_cloud_placement_carries_no_gap(tmp_path):
+    # axis: launch_place.route records no hookGap on a cloud placement
     w, bare, with_hook = T._hooked(tmp_path)
     T._record_for_routing(w)
     call = T._account_route(w, {"baseCommit": with_hook})
@@ -243,6 +254,7 @@ def test_a_cloud_placement_carries_no_gap(tmp_path):
 
 
 def test_a_reason_other_than_the_dependency_hook_never_carries_a_gap(tmp_path):
+    # axis: launch_place.route keeps hookGap only on the dependency-hook reason, whatever readiness reports
     w, bare, with_hook = T._hooked(tmp_path)
 
     def fake(cwd, reported=None, root=None, env=None):
@@ -254,6 +266,7 @@ def test_a_reason_other_than_the_dependency_hook_never_carries_a_gap(tmp_path):
 
 
 def test_a_dependency_hook_call_with_no_gap_keeps_the_generic_words():
+    # axis: launch_place reason, fix and wasnt text fall back to the generic dependency-hook words when the call has no gap
     call = _hook_call()
     reasons = launch_place.REASONS["dependency-hook"]
     assert launch_place.reason_text(call) == reasons["words"]
@@ -263,6 +276,7 @@ def test_a_dependency_hook_call_with_no_gap_keeps_the_generic_words():
 
 @pytest.mark.parametrize("gap", ["not-a-known-token", None, 7])
 def test_an_unknown_gap_token_keeps_the_generic_words(gap):
+    # axis: launch_place reason, fix and wasnt text fall back to the generic words on an unknown or non-string gap token
     call = _hook_call(hookGap=gap)
     reasons = launch_place.REASONS["dependency-hook"]
     assert launch_place.reason_text(call) == reasons["words"]
@@ -271,6 +285,7 @@ def test_an_unknown_gap_token_keeps_the_generic_words(gap):
 
 
 def test_a_gap_on_another_reason_is_ignored_by_the_words():
+    # axis: launch_place words read hookGap only on the dependency-hook reason
     call = _hook_call(reason="version", hookGap="script-missing", cloudVersion="1.0.0",
                       advisorVersion="2.0.0")
     assert launch_place.reason_text(call) == "The cloud's plugin is 1.0.0 and mine is 2.0.0."
@@ -278,12 +293,14 @@ def test_a_gap_on_another_reason_is_ignored_by_the_words():
 
 
 def test_wasnt_text_gives_none_for_an_unknown_reason():
+    # axis: launch_place.wasnt_text answers None for an unknown reason or no call, never raises
     assert launch_place.wasnt_text(_hook_call(reason="nonsense")) is None
     assert launch_place.wasnt_text(None) is None
 
 
 @pytest.mark.parametrize("gap", [None, "script-missing"])
 def test_a_failed_hook_part_adds_check_again_to_the_fix(gap):
+    # axis: launch_place.fix_text appends the check-again suffix when the failed check names the hook part
     base = launch_place.fix_text(_hook_call(hookGap=gap))
     got = launch_place.fix_text(_hook_call(hookGap=gap, failedCheck=["hook"]))
     assert got == base + launch_place._CHECK_AGAIN_SUFFIX
@@ -292,18 +309,21 @@ def test_a_failed_hook_part_adds_check_again_to_the_fix(gap):
 
 @pytest.mark.parametrize("gap", [None, "script-missing"])
 def test_another_failed_part_adds_no_check_again_to_the_dependency_hook_fix(gap):
+    # axis: launch_place.fix_text adds no check-again suffix to the dependency-hook fix when another part failed
     base = launch_place.fix_text(_hook_call(hookGap=gap))
     assert launch_place.fix_text(_hook_call(hookGap=gap, failedCheck=["calibration"])) == base
     assert not base.endswith(CHECK_AGAIN)
 
 
 def test_the_gap_fix_names_the_gap_step():
+    # axis: launch_place.fix_text uses the gap's own fix step from hook.GAP_TEXT
     sentence, fix = hook.GAP_TEXT["adopted-inputs-differ"]
     got = launch_place.fix_text(_hook_call(hookGap="adopted-inputs-differ"))
     assert got == "To fix it, %s. Then launch again." % fix
 
 
 def test_two_lanes_with_different_gaps_print_both_fixes():
+    # axis: launch_report.render_report prints one fix per distinct gap, so two gaps print both fixes
     lanes = [
         {"issue": 1, "title": "a", "placeCall": _hook_call(hookGap="script-missing")},
         {"issue": 2, "title": "b", "placeCall": _hook_call(hookGap="adopted-inputs-differ")},
@@ -315,6 +335,7 @@ def test_two_lanes_with_different_gaps_print_both_fixes():
 
 
 def test_two_lanes_with_one_gap_print_the_fix_once():
+    # axis: launch_report.render_report prints a shared gap's fix once
     lanes = [
         {"issue": 1, "title": "a", "placeCall": _hook_call(hookGap="script-missing")},
         {"issue": 2, "title": "b", "placeCall": _hook_call(hookGap="script-missing")},
@@ -326,6 +347,7 @@ def test_two_lanes_with_one_gap_print_the_fix_once():
 
 
 def test_a_plain_and_a_failed_lane_with_one_reason_print_only_the_recheck_fix():
+    # axis: launch_report.render_report prints only the check-again fix when a failed lane and a plain lane share a reason
     plain = TLR._call(reason="calibration")
     failed = dict(TLR._call(reason="calibration", by="word"), failedCheck=["calibration"])
     third = TLR._call(reason="no-setup", pointed=True)
@@ -338,6 +360,7 @@ def test_a_plain_and_a_failed_lane_with_one_reason_print_only_the_recheck_fix():
 
 
 def test_one_gap_with_a_failed_hook_part_prints_only_the_recheck_fix():
+    # axis: launch_report.render_report prints only the check-again fix for a gap one failed-hook lane shares
     lanes = [
         {"issue": 1, "title": "a",
          "placeCall": _hook_call(hookGap="script-differs", failedCheck=["hook"])},
@@ -353,6 +376,7 @@ def test_one_gap_with_a_failed_hook_part_prints_only_the_recheck_fix():
 
 
 def test_a_later_failed_hook_lane_still_carries_the_recheck_fix():
+    # axis: launch_report.render_report picks the failed-hook lane's check-again fix even when it is not the first lane
     first = _hook_call(hookGap="script-differs", failedCheck=["calibration"])
     second = _hook_call(hookGap="script-differs", failedCheck=["hook"])
     lanes = [
@@ -367,6 +391,7 @@ def test_a_later_failed_hook_lane_still_carries_the_recheck_fix():
 
 
 def test_a_ledger_gap_that_is_not_a_string_still_renders_the_report():
+    # axis: launch_report.render_report renders the generic dependency-hook fix for a non-string gap, never raises
     lanes = [
         {"issue": 1, "title": "a", "placeCall": _hook_call(hookGap=["script-missing"])},
         TLR._lane(2, TLR._call("cloud")),
