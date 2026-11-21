@@ -227,7 +227,9 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     tp_entry = ls._legacy_entry_dir(
         cwd, test_pilot_root if test_pilot_root is not None else store.store_root())
     entries, left = [], []
-    used = {p for f in files for p in (f["src"], f["dst"])}
+    # paths are compared resolved, so two spellings of one file through a linked directory meet
+    real = os.path.realpath
+    used = {real(p) for f in files for p in (f["src"], f["dst"])}
 
     def present(path):
         return bool(path) and os.path.lexists(path)
@@ -236,10 +238,12 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         left.append({"path": path, "why": why})
 
     def take(src, dst, role, family):
-        if src in used or (dst is not None and dst in used):
-            leave(src, WHY_SHARED_PATH)  # never share a path with another entry
+        # axis: a settings entry never shares a resolved file with another entry, nor its dst with its own src
+        targets = [real(src)] + ([real(dst)] if dst is not None else [])
+        if any(t in used for t in targets) or len(set(targets)) < len(targets):
+            leave(src, WHY_SHARED_PATH)
             return False
-        used.update(p for p in (src, dst) if p is not None)
+        used.update(targets)
         entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family})
         return True
 
@@ -267,7 +271,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
 
     # legacy profiles
-    moved_srcs = {f["src"] for f in files}
+    moved_srcs = {real(f["src"]) for f in files}
     heroes = (
         ("review-crew", "review-crew.md",
          (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE),
@@ -277,7 +281,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
           os.path.join(tp_entry, ls._LEGACY_TP_STORE_FILENAME) if tp_entry else None)),
     )
     for family, layer, legacy in heroes:
-        layer_moves = os.path.join(m_cal, layer) in moved_srcs
+        layer_moves = real(os.path.join(m_cal, layer)) in moved_srcs
         for path in legacy:
             if not present(path):
                 continue
