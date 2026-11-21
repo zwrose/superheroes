@@ -42,6 +42,10 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **What an advisor does differently.** A layer whose layer below was straightened, rebased or rebuilt read `needs-review` for every file both layers edit. The advisor now passes `--base-at-review` for each earlier head of the layer below, so a rewrite that kept the tree reads `proven` and the sheet is republished carried. A head that no longer fits is ignored, so passing the layer below's earlier heads never costs anything.
 - Replacement. None: the flag is additive.
 
+### Review loop: a transit-redacted break-it test is never restored
+
+- **The change.** The audit fold, the correction fold, intake and the final kept check read a transit redaction placeholder in a break-it test's text, as well as the stamp, and record the test not run, `transit-redacted`. A mismatched target whose test is damaged takes no restore-only step: the round records `breakItTransitRedacted` and the driver decides `break-it-restore-transit-redacted`, and the kept check answers `unresolved` with reason `transit-redacted` without running it. Replacement. None: no argument or result key a caller passes changes.
+
 ## 0.51.0
 
 ### Before you upgrade
