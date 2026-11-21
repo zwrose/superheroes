@@ -108,19 +108,26 @@ SWEEP_FIELDS = ("sweepId", "sweptSha", "date")
 OUTCOMES_FOR = ("filed", "verified-fixed", "accepted", "reopened")
 OUTCOMES_AGAINST = ("triaged-out", "declined")
 WONT_FIX_STATES = ("accepted", "declined")
+# The one recovery edge: a finding that died in triage or was declined may still be filed later
+# (an issue is opened for it after all). Only these states take that edge, and only to `filed`.
+RECOVERABLE_STATES = ("declined", "triaged-out")
 
 REPORT_CARD_DEFAULTS = {"actionabilityBar": 0.90, "minAdjudicated": 10, "minSweeps": 3}
 
 # Advance-only state machine (§5): candidate → surfaced → triaged-out|filed|accepted|declined;
 # filed → verified-fixed|reopened; reopened → filed|verified-fixed|accepted|declined.
+# The one recovery edge: triaged-out|declined → filed (RECOVERABLE_STATES; `advance` requires an
+# issue for it). Every other move off triaged-out, declined, accepted or verified-fixed is refused.
 # Every state in guardian_lens.FINDING_STATES has an entry; an empty tuple is terminal.
+# Axis: a recoverable state may advance to `filed` and to nothing else — widening this tuple
+# lets a settled finding change its disposition.
 ALLOWED_TRANSITIONS = {
     "candidate": ("surfaced",),
     "surfaced": ("triaged-out", "filed", "accepted", "declined"),
-    "triaged-out": (),
+    "triaged-out": ("filed",),
     "filed": ("verified-fixed", "reopened"),
     "accepted": (),
-    "declined": (),
+    "declined": ("filed",),
     "verified-fixed": (),
     "reopened": ("filed", "verified-fixed", "accepted", "declined"),
 }
@@ -716,6 +723,11 @@ def advance(records, finding_id, to_state, **fields):
     an adjudicated outcome, and only if the record does not already carry one: it records the
     sweep a finding was FIRST adjudicated in, so it is write-once.
 
+    The one recovery edge: a `declined` or `triaged-out` record (RECOVERABLE_STATES) may advance
+    to `filed`, and only with a non-blank `issue` (the proposed record's, after stamping). A
+    record that carried `deferredByPolicy` is written with it `False` — set, never removed, since
+    the writer's merge would bring a removed key back from the old record.
+
     An id with no record is CREATED at the target state when that state is legal from
     `candidate` — creation is a record's birth, not an advance, so `candidate` itself is also
     a legal creation target. Any more advanced target is refused with a reason.
@@ -770,6 +782,21 @@ def advance(records, finding_id, to_state, **fields):
     proposed["disposition"] = to_state
     proposed["date"] = date
     _stamp(proposed, to_state, fields)
+    if from_state in RECOVERABLE_STATES and to_state == "filed":
+        # Axis: a recovery to filed must carry the issue it was filed under — a whitespace-only
+        # or missing issue is refused and the record stays as it was.
+        issue = proposed.get("issue")
+        if not isinstance(issue, str) or not issue.strip():
+            return (new_records, {
+                "ok": False, "id": finding_id, "from": from_state, "to": to_state,
+                "created": False,
+                "reason": "a recovery of a %s record to filed needs the issue it was filed "
+                          "under (a non-blank issue)" % from_state,
+            })
+        # Axis: the deferred flag cannot survive the writer's merge (`merged = dict(old);
+        # merged.update(new)`) — it is set False, never deleted, or `true` would come back.
+        if DEFERRED_BY_POLICY in rec:
+            proposed[DEFERRED_BY_POLICY] = False
     ok_v, reasons = validate_record(proposed)
     if not ok_v:
         return (new_records, {
@@ -838,7 +865,8 @@ here, re-raising only when a finding has materially worsened past the metric rec
 - **Hand-editable.** Plain markdown with one fenced JSON block. Edit it by hand, keep it in
   code review, and it still reads if the plugin ever goes away.
 - **States only advance, and nothing is ever deleted.** `candidate` → `surfaced` →
-  `triaged-out` / `filed` / `accepted` / `declined`; `filed` → `verified-fixed` / `reopened`.
+  `triaged-out` / `filed` / `accepted` / `declined`; `filed` → `verified-fixed` / `reopened`;
+  a `declined` or `triaged-out` finding advances to `filed` when an issue is filed for it.
 - **Won't-fixes carry their why.** An `accepted` or `declined` record states its reason, and
   `reraiseWhen` names the metric whose growth should bring it back.
 """

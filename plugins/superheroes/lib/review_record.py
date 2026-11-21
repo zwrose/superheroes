@@ -3882,6 +3882,40 @@ def read(pr, repo=None, readers=None):
     return _guarded(go)
 
 
+def read_all(pr, repo=None, readers=None):
+    """Every record comment of a PR, oldest first: the ones that parse as `records` (each with its `url`), the ones that
+    do not (for any reason) named in `unreadable` (`id`, `url`, `detail`). None is dropped and one bad comment never
+    costs the others."""
+    def go():
+        rd = _readers(readers)
+        comments = _comments(rd, pr, repo)
+        found = _marker_comments(comments)
+        if not found:
+            raise Refusal("review-record-missing", f"no review record on PR {pr}")
+        by_id = {c["id"]: c for c in comments}
+        records, unreadable = [], []
+        for c in found:
+            failure = None
+            # axis: a record comment that does not parse, or raises while parsing, is named in unreadable, never dropped, and never costs the other records — see bite-proof record i2528_read_all
+            try:
+                rec = _parse_body(c["body"], by_id)
+                if isinstance(rec, dict):
+                    records.append({"url": c.get("url"), **rec})
+                    continue
+            except Exception as e:  # noqa: BLE001 — a body that raises while parsing is unreadable, not fatal
+                failure = e
+            try:
+                if failure is not None:
+                    raise failure
+                detail = _unreadable_detail(c, by_id)
+            except Exception as e:  # noqa: BLE001 — a detail that cannot be built still names the comment
+                detail = f"{c.get('url') or 'the existing record'}: the record could not be read ({type(e).__name__})"
+            # axis: every record comment that is not in records is named in unreadable with its id, url and a detail — see bite-proof record i2528_read_all
+            unreadable.append({"id": c.get("id"), "url": c.get("url"), "detail": detail})
+        return {"ok": True, "pr": pr, "records": records, "unreadable": unreadable}
+    return _guarded(go)
+
+
 def _shows_reading(run):
     obs = run.get("observation") if isinstance(run, dict) else None
     # the record writer credits a run only when it is a graded review: hold the reading to the same rule
@@ -3954,6 +3988,9 @@ def main(argv=None):
     r = sub.add_parser("read")
     r.add_argument("--pr", type=int, required=True)
     r.add_argument("--repo", default=None)
+    a = sub.add_parser("read-all")
+    a.add_argument("--pr", type=int, required=True)
+    a.add_argument("--repo", default=None)
     n = sub.add_parser("reading-next")
     n.add_argument("--run-dir", action="append", default=[], dest="run_dirs")
     n.add_argument("--seat-map", default=None, dest="seat_map")
@@ -3963,7 +4000,12 @@ def main(argv=None):
         runs = [_engine_run(d)[0] for d in dict.fromkeys(os.path.realpath(d) for d in args.run_dirs)]
         print(json.dumps(reading_next(runs, _read_seat_map(args.seat_map), args.maker_families)))
         return 0
-    result = write(args.account, args.repo_root) if args.command == "write" else read(args.pr, args.repo)
+    if args.command == "write":
+        result = write(args.account, args.repo_root)
+    elif args.command == "read-all":
+        result = read_all(args.pr, args.repo)
+    else:
+        result = read(args.pr, args.repo)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1
 

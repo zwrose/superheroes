@@ -139,10 +139,13 @@ At the compact levels the findings block is the one line `Findings: <n> (listed 
 ```bash
 python3 -B "$ROOT_DIR/lib/review_record.py" write --account <account.json> --repo-root <repo root>
 python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>
+python3 -B "$ROOT_DIR/lib/review_record.py" read-all --pr <n>
 ```
 
 Each prints one JSON object (exit 0 ok, 1 refusal); `read` returns the latest record and `earlierRecords`
-(the older URLs). `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the record's URL in the PR body's build record.
+(the older URLs). `read-all` returns every record of the PR oldest first as `records` (each with its `url`) and
+names each record comment it could not read in `unreadable` (`id`, `url`, `detail`); it refuses as `read` does
+when the PR has no record or its comments cannot be listed. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Put the record's URL in the PR body's build record.
 
 ## The full lane writes it from the session
 

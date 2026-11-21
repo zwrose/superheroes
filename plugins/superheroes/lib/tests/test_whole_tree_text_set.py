@@ -48,6 +48,9 @@ EXEMPT = {
     _P + "test_adopt_version_cloud_start.py": (
         _NO_MARKDOWN_DIR + "snapshots a temp project directory under tmp_path",
         ('for dp, _, fns in os.walk(directory):',)),
+    _P + "test_adopt_version_retired_seats_2529.py": (
+        _NO_MARKDOWN_DIR + "snapshots temp version trees and a temp project under tmp_path",
+        ('for dp, dns, fns in os.walk(str(root)):',)),
     _P + "test_break_it_transit_redacted_2284.py": (
         _NO_MARKDOWN_DIR + "globs the plugin lib/*.py sources, no Markdown",
         ('sources = {os.path.basename(p): open(p, encoding="utf-8").read() for p in '

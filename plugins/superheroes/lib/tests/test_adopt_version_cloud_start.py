@@ -8,6 +8,7 @@ environment.
 import json
 import os
 import re
+import subprocess
 import sys
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,8 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import adopt_version as av  # noqa: E402
+import cloud_plugin_pin  # noqa: E402
+import cloud_setup_text  # noqa: E402
 
 # A stand-in for a release's own setup-text code: `stamped_files` reads the project's calibration,
 # builds the setup steps and reaches a store root through an import made inside a function.
@@ -29,7 +32,7 @@ import helper
 
 PKG = "{pkg}"
 OTHER = "{other}"
-
+{definition}
 
 def _store_files(cwd):
     with open(os.path.join(cwd, "calibration.md"), encoding="utf-8") as fh:
@@ -42,8 +45,8 @@ def _steps():
 
 
 def _root():
-    import store
-    return store.store_root()
+    import vault
+    return vault.store_root()
 
 
 def stamped_files(cwd, root):
@@ -60,27 +63,61 @@ import json
 
 
 def calibration_stamp(files):
-    return "sha256:" + hashlib.{algo}(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    return "sha256:" + hashlib.{algo}(json.dumps(
+        files, sort_keys=True, default=lambda v: v.hex() if isinstance(v, bytes) else str(v)
+    ).encode()).hexdigest()
+'''
+
+# A stand-in whose `stamped_files` answers a view of bytes, holding the inventory entry as given.
+_BYTES_SETUP_TEXT = '''\
+INVENTORY = {inventory!r}
+STEPS = {steps!r}
+
+
+def stamped_files(cwd, root):
+    return {{"setup-steps": STEPS, "setup-plugin-inventory": INVENTORY}}
+'''
+
+# A stand-in that, like a release's own code, reads the pin hook with its own reader (here one that
+# finds it broken), and builds its view only when that reader says valid.
+_PIN_SETUP_TEXT = '''\
+def _pin_state(cwd):
+    return {"state": "broken", "reason": "script-differs", "pin": None}
+
+
+def stamped_files(cwd, root):
+    if _pin_state(cwd)["state"] != "valid":
+        raise RuntimeError("the pin hook is not valid")
+    return {"steps": "pinned"}
 '''
 
 
 def _tree(cache, ver, *, front="description: a", body="body", agent="agent",
-          hooks='{"hooks": {}}', pkg="tool", other="x", doc="Steps.", source="git",
-          store="", algo="sha256", store_root="/store", setup=True):
+          other_hook="guard one", session_hook="start one", start="start hook",
+          covenant="covenant", pkg="tool", other="x", doc="Steps.", source="git",
+          store="", algo="sha256", store_root="/store", setup=True, definition=None,
+          setup_text=None):
     root = cache / ver
     (root / "skills" / "a").mkdir(parents=True)
     (root / "skills" / "a" / "SKILL.md").write_text("---\nname: a\n%s\n---\n\n%s\n" % (front, body))
     (root / "agents").mkdir()
     (root / "agents" / "x.md").write_text(agent)
     (root / "hooks").mkdir()
-    (root / "hooks" / "hooks.json").write_text(hooks)
+    (root / "hooks" / "hooks.json").write_text(json.dumps(
+        {"modules": [], "hooks": {"PreToolUse": [other_hook], "SessionStart": [session_hook]}}))
+    (root / "hooks" / "session_start.py").write_text(start)
+    (root / "rubric").mkdir()
+    (root / "rubric" / "covenant.md").write_text(covenant)
     (root / "lib").mkdir()
     (root / "lib" / "helper.py").write_text('SOURCE = "%s"\n' % source)
-    (root / "lib" / "store.py").write_text('def store_root():\n    return "%s"\n' % store_root)
+    # not `store.py`: that name is in the start hook's read set, which the plan counts as a start part
+    (root / "lib" / "vault.py").write_text('def store_root():\n    return "%s"\n' % store_root)
     (root / "lib" / "cloud_setup.py").write_text(_CLOUD_SETUP.format(algo=algo))
     if setup:
         (root / "lib" / "cloud_setup_text.py").write_text(
-            _SETUP_TEXT.format(pkg=pkg, other=other, doc=doc, store=store))
+            setup_text if setup_text is not None else _SETUP_TEXT.format(
+                pkg=pkg, other=other, doc=doc, store=store,
+                definition="" if definition is None else "STAMP_DEFINITION = %d\n" % definition))
     (root / "TRANSITION.md").write_text("## %s\n" % ver)
     (root / "CHANGELOG.md").write_text("## %s\n" % ver)
     return root
@@ -127,7 +164,10 @@ def test_an_unchanged_stamp_reads_false(capsys, tmp_path):
     data = _steps_changed(capsys, tmp_path, body="a changed skill body", other="y",
                           doc="Other words.")
     assert data["cloudStart"] == [
-        {"version": "0.2.0", "since": "0.1.0", "startLoaded": [], "setupSteps": False}]
+        {"version": "0.2.0", "since": "0.1.0", "startLoaded": [], "setupSteps": False,
+         "stampDefinitionChanged": False}]
+    assert list(data["cloudStart"][0]) == [
+        "version", "since", "startLoaded", "setupSteps", "stampDefinitionChanged"]
     assert data["cloudStartChanged"] is False
 
 
@@ -173,6 +213,7 @@ def test_an_uncomputable_stamp_reads_as_changed(capsys, tmp_path):
     _tree(cache, "0.2.0")
     data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
     assert data["cloudStart"][0]["setupSteps"] is None
+    assert data["cloudStart"][0]["stampDefinitionChanged"] is None
     assert data["cloudStartChanged"] is True
 
 
@@ -182,39 +223,153 @@ def test_no_project_reads_as_changed(capsys, tmp_path):
     _tree(cache, "0.2.0")
     data = _plan(capsys, cache, "0.1.0", "0.2.0")
     assert data["cloudStart"][0]["setupSteps"] is None
+    assert data["cloudStart"][0]["stampDefinitionChanged"] is None
     assert data["cloudStartChanged"] is True
 
 
 def test_start_loaded_parts_name_each_change(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", front="description: b", agent="agent two", hooks='{"hooks": {"a": 1}}')
+    _tree(cache, "0.2.0", start="start hook two", covenant="covenant two",
+          session_hook="start two")
     data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
     entry = data["cloudStart"][0]
-    assert entry["startLoaded"] == ["agents/x.md", "hooks/hooks.json", "skills/a/SKILL.md"]
+    assert entry["startLoaded"] == [
+        "hooks/hooks.json#SessionStart", "hooks/session_start.py", "rubric/covenant.md"]
     assert entry["setupSteps"] is False
     assert data["cloudStartChanged"] is True
 
 
-def test_added_agent_counts(capsys, tmp_path):
+def test_start_loaded_parts_name_each_part_alone(capsys, tmp_path):
+    for index, (change, part) in enumerate((
+            ({"start": "start hook two"}, "hooks/session_start.py"),
+            ({"covenant": "covenant two"}, "rubric/covenant.md"),
+            ({"session_hook": "start two"}, "hooks/hooks.json#SessionStart"))):
+        cache = tmp_path / ("cache%d" % index)
+        _tree(cache, "0.1.0")
+        _tree(cache, "0.2.0", **change)
+        data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+        assert data["cloudStart"][0]["startLoaded"] == [part]
+        assert data["cloudStartChanged"] is True
+
+
+def test_parts_read_after_the_pin_swap_do_not_count(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0", front="description: b", body="other body", agent="agent two",
+          other_hook="guard two")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    assert data["cloudStart"][0]["startLoaded"] == []
+    assert data["cloudStart"][0]["setupSteps"] is False
+    assert data["cloudStartChanged"] is False
+
+
+def test_an_added_agent_does_not_count(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
     _tree(cache, "0.2.0")
     (cache / "0.2.0" / "agents" / "y.md").write_text("new")
     data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
-    assert data["cloudStart"][0]["startLoaded"] == ["agents/y.md"]
-    assert data["cloudStartChanged"] is True
+    assert data["cloudStart"][0]["startLoaded"] == []
+    assert data["cloudStartChanged"] is False
 
 
 def test_one_entry_per_installed_release(capsys, tmp_path):
     cache = tmp_path / "cache"
     _tree(cache, "0.1.0")
-    _tree(cache, "0.2.0", agent="agent two")
-    _tree(cache, "0.3.0", agent="agent two", pkg="tool@3")
+    _tree(cache, "0.2.0", start="start hook two")
+    _tree(cache, "0.3.0", start="start hook two", pkg="tool@3")
     data = _plan(capsys, cache, "0.1.0", "0.3.0", _project(tmp_path))
-    assert [(e["since"], e["version"], e["startLoaded"], e["setupSteps"])
-            for e in data["cloudStart"]] == [
-        ("0.1.0", "0.2.0", ["agents/x.md"], False), ("0.2.0", "0.3.0", [], True)]
+    assert [(e["since"], e["version"], e["startLoaded"], e["setupSteps"],
+             e["stampDefinitionChanged"]) for e in data["cloudStart"]] == [
+        ("0.1.0", "0.2.0", ["hooks/session_start.py"], False, False),
+        ("0.2.0", "0.3.0", [], True, False)]
+    assert data["cloudStartChanged"] is True
+
+
+def test_a_new_stamp_definition_counts_even_with_identical_steps_and_parts(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0")
+    _tree(cache, "0.2.0", definition=2)
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    entry = data["cloudStart"][0]
+    assert entry["startLoaded"] == []
+    assert entry["stampDefinitionChanged"] is True
+    assert entry["setupSteps"] is True
+    assert data["cloudStartChanged"] is True
+
+
+def _git_project_with_pin(tmp_path):
+    project = _project(tmp_path)
+    subprocess.run(["git", "-C", str(project), "init", "-q"], check=True, capture_output=True)
+    pin = {"source": "https://github.com/acme/superheroes.git", "commit": "0123456789abcdef" * 2 + "01234567",
+           "subdir": "plugins/superheroes", "version": "0.1.0"}
+    result = cloud_plugin_pin.sync(str(project), pin)
+    assert result["action"] == "written", result
+    assert cloud_setup_text._pin_state(str(project))["state"] == "valid"
+    return project
+
+
+def test_a_release_reads_the_pin_hook_the_current_reader_finds_valid(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0", setup_text=_PIN_SETUP_TEXT)
+    _tree(cache, "0.2.0", setup_text=_PIN_SETUP_TEXT)
+    # each release's own reader finds the hook broken; the planner stands in the current reader's answer
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _git_project_with_pin(tmp_path))
+    assert data["cloudStart"][0]["setupSteps"] is False
+    assert data["cloudStart"][0]["stampDefinitionChanged"] is False
+    assert data["cloudStartChanged"] is False
+
+
+def test_a_project_with_no_pin_hook_gets_no_override(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _tree(cache, "0.1.0", setup_text=_PIN_SETUP_TEXT)
+    _tree(cache, "0.2.0", setup_text=_PIN_SETUP_TEXT)
+    project = _project(tmp_path)
+    subprocess.run(["git", "-C", str(project), "init", "-q"], check=True, capture_output=True)
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", project)
+    assert data["cloudStart"][0]["setupSteps"] is None
+    assert data["cloudStartChanged"] is True
+
+
+def _old_inventory_trees(cache, first, second, steps=(b"steps\n", b"steps\n"), **second_change):
+    _tree(cache, "0.1.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=first, steps=steps[0]))
+    _tree(cache, "0.2.0", setup_text=_BYTES_SETUP_TEXT.format(inventory=second, steps=steps[1]),
+          **second_change)
+
+
+def test_an_older_definitions_inventory_is_re_read_under_the_current_one(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    # the two inventories differ as an old agent change would make them; the start-read parts do not
+    _old_inventory_trees(cache, b"agent one\n", b"agent two\n")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    entry = data["cloudStart"][0]
+    assert entry["startLoaded"] == []
+    assert entry["stampDefinitionChanged"] is False
+    assert entry["setupSteps"] is False
+    assert data["cloudStartChanged"] is False
+
+
+def test_an_older_definitions_re_read_keeps_a_setup_step_change(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    # axis: re-reading an older inventory replaces only that entry; a setup-step change still counts
+    _old_inventory_trees(cache, b"agent one\n", b"agent one\n",
+                         steps=(b"install tool@1\n", b"install tool@2\n"))
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    entry = data["cloudStart"][0]
+    assert entry["startLoaded"] == []
+    assert entry["stampDefinitionChanged"] is False
+    assert entry["setupSteps"] is True
+    assert data["cloudStartChanged"] is True
+
+
+def test_an_older_definitions_inventory_moves_with_the_start_hook(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _old_inventory_trees(cache, b"agent one\n", b"agent one\n", start="start hook two")
+    data = _plan(capsys, cache, "0.1.0", "0.2.0", _project(tmp_path))
+    entry = data["cloudStart"][0]
+    assert entry["startLoaded"] == ["hooks/session_start.py"]
+    assert entry["setupSteps"] is True
     assert data["cloudStartChanged"] is True
 
 
