@@ -58,6 +58,19 @@ def test_a_move_never_loses_the_decisions_read_now(w, case):
     assert after == before
 
 
+def test_a_failed_delete_is_named_and_not_a_plain_done(w, monkeypatch):
+    # axis: a source the flip could not delete is named in the result, and the status is not a plain done
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    stuck = _put(w.inrepo("review-profile.md"), "## Threat model\nlegacy\n")
+    real_remove = mm._remove
+    monkeypatch.setattr(mm, "_remove", lambda p: None if p == stuck else real_remove(p))
+    res = mm.execute(w.plan(mr.GLOBAL), root=w.root)
+    assert res["status"] == "done-with-leftovers"
+    assert res["undeleted"] == [stuck]
+
+
 @pytest.mark.parametrize("core", ["absent", "empty"])
 def test_a_legacy_profile_without_a_populated_core_stays(w, core):
     # axis: a legacy review profile whose core.md is missing or has empty facts stays in place in a flip, as find's gate

@@ -393,9 +393,17 @@ def enumerate_flip(cwd, target_mode, *, root=None, review_root=None, test_pilot_
     extra, left = _settings_entries(cwd, current, files, root=root, review_root=review_root,
                                     test_pilot_root=test_pilot_root)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
-    return Migration(kind="flip", target=target_mode, files=files + extra,
-                     cwd=cwd, root=root, remote_key=remote_key,
-                     owner_authorized=False, left_in_place=left, source_mode=current)
+    m = Migration(kind="flip", target=target_mode, files=files + extra,
+                  cwd=cwd, root=root, remote_key=remote_key,
+                  owner_authorized=False, left_in_place=left, source_mode=current)
+    m.plan_roots = (review_root, test_pilot_root)
+    return m
+
+
+def _plan_key(m):
+    """What a plan decides, without the set-aside folder's per-run stamp."""
+    return ([(f["src"], f.get("role"), bool(f.get("keep")), None if f.get("role") == ROLE_SET_ASIDE else f["dst"])
+             for f in m.files], sorted((e["path"], e["why"]) for e in m.left_in_place))
 
 
 def plan(cwd, target_mode, *, root=None, owner_authorized, review_root=None,
@@ -478,6 +486,11 @@ def execute(migration, *, root=None):
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             return {"status": "busy"}
+        roots = getattr(migration, "plan_roots", (None, None))
+        # axis: the flip acts only on the plan the owner saw: re-planned under the lock, any difference refuses and changes nothing
+        if _plan_key(enumerate_flip(cwd, migration.target, root=root, review_root=roots[0],
+                                    test_pilot_root=roots[1])) != _plan_key(migration):
+            return {"status": "blocked", "reason": "plan-changed: the preview is out of date; run the move again"}
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
@@ -517,12 +530,16 @@ def execute(migration, *, root=None):
             return {"status": "blocked"}
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
+        undeleted = []
         for f in journal["files"]:
             if not f.get("keep"):
                 _remove(f["src"])
+                if os.path.lexists(f["src"]):
+                    undeleted.append(f["src"])
         _drop_snapshots(journal["files"])
         _remove(jpath)
-        return {"status": "done"}
+        # axis: a source the flip could not delete is named, and the move is not reported as a plain done
+        return {"status": "done-with-leftovers", "undeleted": undeleted} if undeleted else {"status": "done"}
 
 
 # --------------------------------------------------------------------------- recover
