@@ -339,9 +339,12 @@ def compare_pr(base_transition, head_transition, base_notes, head_notes):
     added = collections.Counter(head["headings"]) - collections.Counter(base["headings"])
     for heading in sorted((added - removed_headings).elements()):
         problems.append(_p(_TRANSITION, "transition-heading-added", "The heading ### " + heading + " was added to TRANSITION.md; write the note as a file in the notes folder instead."))
+    uncovered = collections.Counter(added)
     for p in removed:
         for sec in p["sections"]:
-            if sec["heading"] not in head["headings"]:
+            if uncovered[sec["heading"]] > 0:
+                uncovered[sec["heading"]] -= 1
+            else:
                 problems.append(_p(p["name"], "note-removed-unassembled", "The note was removed but its section ### " + sec["heading"] + " did not reach TRANSITION.md."))
     delta = head["bullets"] - base["bullets"]
     if delta > removed_bullets:

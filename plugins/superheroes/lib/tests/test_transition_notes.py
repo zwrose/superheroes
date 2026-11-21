@@ -608,6 +608,32 @@ def test_compare_assembly_dropping_a_bullet_is_refused():
     assert "shortfall" in problems[0]["detail"]
 
 
+def test_compare_removed_heading_already_at_base_must_be_added_again():
+    # Axis: the removed note's heading count, not heading membership; the bullet delta equals the
+    # removed bullets in both heads, so only the heading check can speak.
+    base = (
+        "# Transition notes\n\nHeader prose.\n\n"
+        "## 1.0.0\n\n### Before you upgrade\n\n"
+        "- **After switching.** Old step.\n\n"
+        "### Shared heading\n\nOld shared body.\n"
+    )
+    note = (
+        "### Before you upgrade\n\n"
+        "- **Before switching.** Five step.\n\n"
+        "### Shared heading\n\nNote shared body.\n"
+    )
+    bullet = "- **After switching.** Old step.\n"
+    red = base.replace(bullet, bullet + "- **Before switching.** Five step.\n")
+    assert red != base
+    problems = tn.compare_pr(base, red, [("5.md", note)], [])
+    assert tokens(problems) == ["note-removed-unassembled"]
+    assert problems[0]["file"] == "5.md"
+    assert "### Shared heading" in problems[0]["detail"]
+    assert "did not reach TRANSITION.md" in problems[0]["detail"]
+    fixed = red + "\n### Shared heading\n\nNote shared body.\n"
+    assert tn.compare_pr(base, fixed, [("5.md", note)], []) == []
+
+
 def test_compare_note_file_only_pr_is_clean():
     assert tn.compare_pr(TRANSITION, TRANSITION, [], [("101.md", good(101))]) == []
     assert tn.compare_pr(TRANSITION, TRANSITION, [("101.md", good(101))], [("101.md", good(101))]) == []

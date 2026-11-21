@@ -143,6 +143,62 @@ def test_release_bump_gate_step_gated_on_release_branch():
     assert "git fetch --tags" in run
 
 
+_NOTE_STEPS = (
+    "Upgrade-note files (shape)",
+    "Upgrade-note files (no note straight into TRANSITION.md)",
+    "Upgrade-note files (none left unassembled on the release PR)",
+)
+
+
+def _note_step(name):
+    steps = _ci_data()["jobs"]["validate"]["steps"]
+    return next(s for s in steps if (s.get("name") or "") == name)
+
+
+def test_note_shape_step_runs_off_pull_requests():
+    # Axis: the shape-only check runs where no base exists (push to main), never on a PR.
+    step = _note_step(_NOTE_STEPS[0])
+    assert step.get("if") == "github.event_name != 'pull_request'"
+    run = _run_without_comments(step.get("run", ""))
+    assert "check_transition_notes.py" in run
+    assert "--base" not in run
+    assert "--release" not in run
+
+
+def test_note_direct_step_runs_on_pull_requests_with_base():
+    # Axis: the no-note-straight-into-TRANSITION.md check runs on every PR against the PR base SHA.
+    step = _note_step(_NOTE_STEPS[1])
+    assert step.get("if") == "github.event_name == 'pull_request'"
+    assert step.get("env", {}).get("BASE_SHA") == "${{ github.event.pull_request.base.sha }}"
+    run = _run_without_comments(step.get("run", ""))
+    assert "check_transition_notes.py" in run
+    assert '--base "$BASE_SHA"' in run
+    assert "--release" not in run
+
+
+def test_note_release_step_runs_on_release_branch_with_release_flag():
+    # Axis: the none-left-unassembled check runs only on the release-please PR, with --release.
+    step = _note_step(_NOTE_STEPS[2])
+    assert step.get("if") == (
+        "github.event_name == 'pull_request' && github.head_ref == '" + _release_branch_name() + "'"
+    )
+    assert step.get("env", {}).get("BASE_SHA") == "${{ github.event.pull_request.base.sha }}"
+    run = _run_without_comments(step.get("run", ""))
+    assert "check_transition_notes.py" in run
+    assert '--base "$BASE_SHA"' in run
+    assert "--release" in run
+
+
+def test_note_steps_come_before_the_pytest_step():
+    # Axis: ordering — the note checks run before the long suite, so a note failure shows early.
+    steps = _ci_data()["jobs"]["validate"]["steps"]
+    names = [s.get("name") or "" for s in steps]
+    pytest_at = next(i for i, s in enumerate(steps) if "pytest" in s.get("run", ""))
+    for name in _NOTE_STEPS:
+        assert names.count(name) == 1
+        assert names.index(name) < pytest_at
+
+
 def test_release_pr_install_smoke_gated_on_release_branch():
     # Axis: smoke test must track the same release-please branch name as the gate.
     data = _ci_data()
