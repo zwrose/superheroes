@@ -10,7 +10,8 @@ CLI (`python3 -B lib/review_measures.py <verb>`; one JSON object on stdout; exit
 
 The input file is one JSON object the advisor assembles at the pass; a key it leaves out makes the measures that
 read it unmeasured, with that reason, never zero:
-  records       every review record written for the window's PRs, all sessions (`review_record.py read`); a record's
+  records       every review record written for the window's PRs, all sessions (`review_record.py read-all`: its
+                `records`, plus each `unreadable` entry as it is); a record's
                 `sessionCost` is the field the review record writer sets (#2307)
   ciRuns        one item per CI run on a window PR: {"pr", "minutes", "suiteMinutes" (the suite job, or null)}
   escapes       the misses log as `review_learning.py tally` reads it; an item may also name its "pr" and "key". A

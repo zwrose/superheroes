@@ -48,7 +48,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern
 ```
 
-**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated. When both an in-repo and a global core.md exist, `$CORE` is the one the storage mode selects, the same file the verify read below takes; a review-crew layer or legacy profile that stands in `$CORE` when no core.md is found is shown to seats and read for no setting.
 
 Write each call as one line with the real paths — `SKILL.md` § Auto-Fix Loop. Run each `python3 -B <plugin root>/lib/…` line as its own command, then put the value it printed in the single-quoted literal on the line after its comment.
 
@@ -165,7 +165,7 @@ NOTIFY: take the returned `.mode` from `decide-location`, encode `storageMode`/`
 
 When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. **Skip review-init's interview** — take the provisional profile from detected defaults instead. When the created layer lands **in-repo**, **do not ask whether to commit** the new files: write the core + layer, leave them **uncommitted and untracked**, say so in the **dispatch summary**, and continue. Committing them unasked would be a review writing to the user's index — the honest answer is to leave the files for a human to stage.
 
-**Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate:
+**Read the verify story from core calibration** via `review_code_config.py` — the `verifyCommand` of the core.md the storage mode selects (`$CORE` when a core.md exists), else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

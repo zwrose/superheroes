@@ -44,7 +44,8 @@ def _load():
 
 CS = _load()
 
-VERSION = open(os.path.join(CS._plugin_root(), "version.txt")).read().strip()
+REAL_PLUGIN_ROOT = CS._plugin_root()
+VERSION = open(os.path.join(REAL_PLUGIN_ROOT, "version.txt")).read().strip()
 SOURCE = "https://github.com/acme/superheroes.git"
 COMMIT = "0123456789abcdef" * 2 + "01234567"
 SUBDIR = "plugins/superheroes"
@@ -1504,16 +1505,40 @@ def _break_pin(w):
     assert cloud_plugin_pin.in_tree(w.cwd)["state"] == "broken"
 
 
+HOOKS_JSON = {
+    "modules": ["./mod/register.ts"],
+    "hooks": {
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard one"}]}],
+        "SessionStart": [{"hooks": [{"type": "command", "command": "start one"}]}],
+    },
+}
+
+
+def _write_hooks(root, **changes):
+    data = json.loads(json.dumps(HOOKS_JSON))
+    for key, value in changes.items():
+        if key == "modules":
+            data["modules"] = value
+        else:
+            data["hooks"][key] = value
+    (root / "hooks" / "hooks.json").write_text(json.dumps(data) + "\n")
+
+
 def _plugin_copy(tmp_path, monkeypatch):
-    """A plugin directory of the parts a cloud session loads at its start, standing in for the real one."""
+    """A plugin directory with the parts a cloud session reads before the pin hook swaps the plugin
+    (the SessionStart registrations and the start hook's read set), and some it reads after
+    (a skill, an agent, a hook module), standing in for the real one."""
     root = tmp_path / "plugin-copy"
-    for sub in ("skills/alpha", "agents", "hooks"):
+    for sub in ("skills/alpha", "agents", "hooks/mod", "lib", "rubric"):
         (root / sub).mkdir(parents=True)
     (root / "version.txt").write_text(VERSION + "\n")
     (root / "skills" / "alpha" / "SKILL.md").write_text(
         "---\nname: alpha\ndescription: first\n---\nbody one\n")
-    (root / "agents" / "helper.md").write_text("agent one\n")
-    (root / "hooks" / "hooks.json").write_text('{"hooks": {}}\n')
+    (root / "agents" / "helper.md").write_text("---\nname: helper\n---\nagent body one\n")
+    _write_hooks(root)
+    (root / "hooks" / "mod" / "register.ts").write_text("export const A = 1\n")
+    for index, rel in enumerate(CS.START_HOOK_READS):
+        (root / rel).write_text("read-set file %d: %s\n" % (index, rel))
     monkeypatch.setattr(CS, "_plugin_root", lambda: str(root))
     return root
 
@@ -1637,62 +1662,182 @@ def test_the_stamp_changes_when_a_tool_step_of_the_setup_text_changes(tmp_path, 
     assert _compose(w, stamp_fn=None)["calibration"]["stamp"] == _real_stamp(w)
 
 
-def test_the_stamp_changes_when_a_skill_frontmatter_changes_but_not_its_body(tmp_path, monkeypatch):
+def _stamp_after(tmp_path, monkeypatch, edit):
+    """(stamp before, stamp after) for a pin-hook project over a plugin copy that `edit(root)` changes."""
     root = _plugin_copy(tmp_path, monkeypatch)
     w = _outside(tmp_path)
     _with_pin(w)
     before = _real_stamp(w)
-    skill = root / "skills" / "alpha" / "SKILL.md"
-    skill.write_text("---\nname: alpha\ndescription: first\n---\nbody two, quite different\n")
-    assert _real_stamp(w) == before
-    skill.write_text("---\nname: alpha\ndescription: second\n---\nbody one\n")
-    assert _real_stamp(w) != before
+    edit(root)
+    return before, _real_stamp(w)
 
 
-def test_the_stamp_changes_when_an_agent_file_changes(tmp_path, monkeypatch):
+# Parts a cloud session reads after the pin hook has swapped the plugin link: the stamp ignores them.
+def _agent_body(root):
+    (root / "agents" / "helper.md").write_text("---\nname: helper\n---\nagent body two\n")
+
+
+def _agent_frontmatter(root):
+    (root / "agents" / "helper.md").write_text("---\nname: renamed\n---\nagent body one\n")
+
+
+def _skill_frontmatter(root):
+    (root / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: second\n---\nbody one\n")
+
+
+def _skill_body(root):
+    (root / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: first\n---\nbody two, quite different\n")
+
+
+def _pre_tool_use_entry(root):
+    _write_hooks(root, PreToolUse=[{"matcher": "Edit", "hooks": [{"type": "command", "command": "guard two"}]}])
+
+
+def _modules_list(root):
+    _write_hooks(root, modules=["./mod/register.ts", "./mod/other.ts"])
+
+
+def _hook_module(root):
+    (root / "hooks" / "mod" / "register.ts").write_text("export const A = 2\n")
+
+
+def _lib_module_not_read(root):
+    (root / "lib" / "not_read.py").write_text("VALUE = 1\n")
+    (root / "lib" / "not_read.py").write_text("VALUE = 2\n")
+
+
+@pytest.mark.parametrize("edit", [
+    _agent_body, _agent_frontmatter, _skill_frontmatter, _skill_body, _pre_tool_use_entry,
+    _modules_list, _hook_module, _lib_module_not_read,
+], ids=lambda f: f.__name__.lstrip("_"))
+def test_the_stamp_does_not_move_for_a_part_read_after_the_pin_swap(tmp_path, monkeypatch, edit):
+    before, after = _stamp_after(tmp_path, monkeypatch, edit)
+    # axis: only the SessionStart registrations and the start hook's read set count
+    assert after == before
+
+
+def test_the_stamp_moves_when_the_start_hook_changes(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: (
+        root / "hooks" / "session_start.py").write_text("changed hook\n"))
+    # axis: the start hook is read from the setup-text copy before the pin swap
+    assert after != before
+
+
+LIB_READS = [rel for rel in CS.START_HOOK_READS if rel.startswith("lib/")]
+
+
+@pytest.mark.parametrize("rel", LIB_READS)
+def test_the_stamp_moves_when_a_lib_module_the_start_hook_reads_changes(tmp_path, monkeypatch, rel):
+    before, after = _stamp_after(
+        tmp_path, monkeypatch, lambda root: (root / rel).write_text("changed module\n"))
+    assert after != before
+
+
+def test_the_stamp_moves_when_the_session_context_module_changes(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: (
+        root / "lib" / "session_context.py").write_text("changed context\n"))
+    assert after != before
+
+
+def test_the_stamp_moves_when_the_covenant_changes(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: (
+        root / "rubric" / "covenant.md").write_text("a changed covenant\n"))
+    assert after != before
+
+
+def test_the_stamp_moves_when_the_session_start_registration_changes(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: _write_hooks(
+        root, SessionStart=[{"hooks": [{"type": "command", "command": "start two"}]}]))
+    assert after != before
+
+
+def test_the_stamp_moves_when_the_session_start_registration_is_removed(tmp_path, monkeypatch):
+    def edit(root):
+        data = json.loads((root / "hooks" / "hooks.json").read_text())
+        del data["hooks"]["SessionStart"]
+        (root / "hooks" / "hooks.json").write_text(json.dumps(data) + "\n")
+    before, after = _stamp_after(tmp_path, monkeypatch, edit)
+    assert after != before
+
+
+def test_the_stamp_moves_when_a_read_set_file_is_deleted(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: (
+        root / "lib" / "git_origin.py").unlink())
+    # axis: an absent read-set file counts as `missing`, so deleting one moves the stamp. The marker
+    # itself is asserted too: leaving the key out would move the stamp as well, so the stamp alone
+    # cannot tell the marker from an omission
+    assert after != before and after is not None
+    assert CS.start_read_parts()["lib/git_origin.py"] == b"missing\n"
+
+
+def test_the_stamp_moves_when_the_hooks_file_is_deleted(tmp_path, monkeypatch):
+    before, after = _stamp_after(tmp_path, monkeypatch, lambda root: (
+        root / "hooks" / "hooks.json").unlink())
+    assert after != before and after is not None
+
+
+def test_the_stamp_moves_when_the_hooks_file_cannot_be_parsed(tmp_path, monkeypatch):
     root = _plugin_copy(tmp_path, monkeypatch)
     w = _outside(tmp_path)
     _with_pin(w)
     before = _real_stamp(w)
-    (root / "agents" / "helper.md").write_text("agent two\n")
-    # axis: the inventory entry covers each agent file, loaded at a session's start
-    assert _real_stamp(w) != before
+    (root / "hooks" / "hooks.json").write_text("{not json\n")
+    after = _real_stamp(w)
+    assert after != before
+    # axis: an unparseable hooks file counts whole, so any further change to it moves the stamp
+    (root / "hooks" / "hooks.json").write_text("{not json, differently\n")
+    assert _real_stamp(w) != after
 
 
-def test_the_stamp_changes_when_the_plugin_hooks_file_changes(tmp_path, monkeypatch):
+def test_start_read_parts_names_the_registrations_and_each_read_set_file(tmp_path, monkeypatch):
     root = _plugin_copy(tmp_path, monkeypatch)
-    w = _outside(tmp_path)
-    _with_pin(w)
-    before = _real_stamp(w)
-    (root / "hooks" / "hooks.json").write_text('{"hooks": {"SessionStart": []}}\n')
-    assert _real_stamp(w) != before
+    parts = CS.start_read_parts()
+    assert set(parts) == {"hooks/hooks.json#SessionStart", *CS.START_HOOK_READS}
+    assert parts == CS.start_read_parts(str(root))
+    assert json.loads(parts["hooks/hooks.json#SessionStart"]) == HOOKS_JSON["hooks"]["SessionStart"]
+    assert parts["lib/store.py"] == (root / "lib" / "store.py").read_bytes()
+    (root / "lib" / "store.py").unlink()
+    (root / "hooks" / "hooks.json").write_text('{"hooks": {}}\n')
+    again = CS.start_read_parts(str(root))
+    assert again["lib/store.py"] == b"missing\n"
+    assert again["hooks/hooks.json#SessionStart"] == b"null\n"
     (root / "hooks" / "hooks.json").unlink()
-    assert _real_stamp(w) not in (before, None)
+    assert CS.start_read_parts(str(root))["hooks/hooks.json#SessionStart"] == b"missing\n"
+    (root / "hooks" / "hooks.json").write_bytes(b"{broken")
+    assert CS.start_read_parts(str(root))["hooks/hooks.json#SessionStart"] == b"{broken"
 
 
-def test_the_stamp_changes_when_a_registered_hook_module_or_its_import_changes(tmp_path, monkeypatch):
-    root = _plugin_copy(tmp_path, monkeypatch)
-    w = _outside(tmp_path)
-    _with_pin(w)
-    (root / "hooks" / "mod").mkdir()
-    (root / "hooks" / "hooks.json").write_text('{"modules": ["./mod/register.ts"], "hooks": {}}\n')
-    (root / "hooks" / "mod" / "register.ts").write_text("import { A } from './resume'\n")
-    (root / "hooks" / "mod" / "resume.ts").write_text("export const A = 1\n")
-    before = _real_stamp(w)
-    (root / "hooks" / "mod" / "resume.ts").write_text("export const A = 2\n")
-    # axis: a loaded module is not reloaded by the pin swap, so its change must move the stamp
-    after_import = _real_stamp(w)
-    assert after_import != before
-    (root / "hooks" / "mod" / "register.ts").write_text("import { A } from './resume'\n// edit\n")
-    assert _real_stamp(w) != after_import
+def test_the_inventory_entry_is_the_parts_in_path_order(tmp_path, monkeypatch):
+    _plugin_copy(tmp_path, monkeypatch)
+    parts = CS.start_read_parts()
+    assert CS._plugin_inventory() == b"".join(
+        path.encode("utf-8") + b"\n" + data for path, data in sorted(parts.items()))
+    assert CS.STAMP_DEFINITION == 2
 
 
+def test_the_start_hook_read_set_is_sorted_unique_and_names_real_files():
+    reads = CS.START_HOOK_READS
+    assert list(reads) == sorted(reads) and len(set(reads)) == len(reads)
+    for rel in reads:
+        assert os.path.isfile(os.path.join(REAL_PLUGIN_ROOT, *rel.split("/"))), rel
+
+
+def test_the_real_plugin_counts_its_own_session_start_registration():
+    # the real hooks file registers the start hook under hooks.SessionStart, so the stamp counts it
+    value = json.loads(CS.start_read_parts(REAL_PLUGIN_ROOT)["hooks/hooks.json#SessionStart"])
+    assert value and "session_start.py" in json.dumps(value)
+
+
+@pytest.mark.parametrize("path", ["lib/host_model.py", "hooks/hooks.json"])
 def test_an_unreadable_inventory_file_is_refused_by_the_text_and_the_stamp_readers(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, path):
     root = _plugin_copy(tmp_path, monkeypatch)
     w = _outside(tmp_path)
     _with_pin(w)
-    (root / "agents" / "unreadable.md").mkdir()
+    (root / path).unlink()
+    (root / path).mkdir()
     _refusal(_compose(w), "plugin-inventory-unreadable")
     with pytest.raises(CS._Refused) as raised:
         CS.stamped_files(w.cwd, w.root)
