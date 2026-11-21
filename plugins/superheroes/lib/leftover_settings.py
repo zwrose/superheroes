@@ -121,6 +121,12 @@ def _tp_artifacts_beside(slot):
     return _holds_entries(os.path.dirname(slot))
 
 
+def tp_layer_usable(layer):
+    """True when a test-pilot layer carries the config block store.resolve needs to read it."""
+    # axis: a legacy test-pilot profile is replaced only by a layer store.resolve would accept
+    return store.classify_layer_config_block(layer).has_block
+
+
 def _gather(picked, unpicked, family, *, aligned=True, admitted=True, layer_only=False, layer=None,
             legacy=(), populated=None, legacy_veto=None):
     """The leftovers of one family: [(path, family, reads)]."""
@@ -223,7 +229,8 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
             _slots(os.path.join(d_o, _TEST_PILOT), legacy_tp[other]),
             "test-pilot", aligned=aligned, layer_only=True, layer=layer,
             legacy=_slots(legacy_tp[mode], legacy_tp[other]), populated=populated,
-            legacy_veto=_tp_artifacts_beside)
+            legacy_veto=lambda slot, layer=layer: (
+                _tp_artifacts_beside(slot) or not tp_layer_usable(layer)))
 
         dec_in = os.path.join(repo, _DEC_IN_REL)
         dec_gl = os.path.join(d_gl, _DECISIONS)

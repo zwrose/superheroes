@@ -506,3 +506,25 @@ def test_every_decisions_slot_aliased_keeps_the_file(w):
     assert mm.execute(m, root=w.root)["status"] == "done"
     with open(decisions, encoding="utf-8") as fh:
         assert fh.read() == '{"only": true}\n'
+
+
+def test_placeholder_test_pilot_layer_keeps_the_legacy_profile_on_a_flip(w):
+    # axis: a flip sets a legacy test-pilot profile aside only when the moving layer carries the config block
+    _seed_in_repo(w)
+    _put(w.d_in("test-pilot.md"), "## Config\nno block yet\n")
+    pv = mm.preview(w.enumerate(mr.GLOBAL))
+    profile = w.inrepo("test-pilot", "profile.md")
+    assert profile not in [s["from"] for s in pv["setAside"]]
+    assert {"path": profile, "why": "only-copy"} in pv["leftInPlace"]
+
+
+def test_a_broken_target_never_sets_aside_the_only_regular_decisions_copy(w):
+    # axis: on a flip to global with nothing carried, a directory at the target slot does not count as the copy that replaces the legacy one
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    os.makedirs(w.d_gl(_DEC))
+    legacy = _put(os.path.join(w.entry(w.rr), _DEC), '{"only": true}\n')
+    m = w.enumerate(mr.GLOBAL)
+    assert legacy not in [f["src"] for f in m.files]
+    assert {"path": legacy, "why": "retained"} in mm.preview(m)["leftInPlace"]

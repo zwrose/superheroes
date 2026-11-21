@@ -50,6 +50,8 @@ WHY_NOT_REGULAR = "not-a-regular-file"
 WHY_SHARED_PATH = "shared-path"
 WHY_RETAINED = "retained"
 _BACKUP_SUFFIX = "-storage-move"
+# Where a flip keeps the bytes of each destination it overwrites until it finishes or backs out.
+_SNAPSHOT_DIRNAME = "flip-snapshots"
 
 
 class Migration:
@@ -275,8 +277,8 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     if to_global and present(dec_legacy):
         if not _is_regular(dec_legacy):
             leave(dec_legacy, WHY_NOT_REGULAR)
-        elif carried or present(t_first):
-            # set aside only while the target's first slot holds a copy; the only copy stays read
+        elif carried or os.path.isfile(t_first):
+            # axis: set aside only while the target's first slot holds a regular-file copy; the only copy stays read
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
     # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
     # aside or replaces and no other row already names stays where it is, and the preview says so
@@ -295,7 +297,8 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
           os.path.join(tp_entry, ls._LEGACY_TP_STORE_FILENAME) if tp_entry else None)),
     )
     for family, layer, legacy in heroes:
-        layer_moves = real(os.path.join(m_cal, layer)) in moved_srcs
+        layer_moves = real(os.path.join(m_cal, layer)) in moved_srcs and (
+            family != "test-pilot" or ls.tp_layer_usable(os.path.join(m_cal, layer)))
         for path in legacy:
             if not present(path):
                 continue
@@ -423,6 +426,12 @@ def execute(migration, *, root=None):
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False,
                               "preexisting": os.path.lexists(f["dst"])}
                              for f in migration.files]}
+        # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
+        for n, f in enumerate(journal["files"]):
+            if f["preexisting"] and os.path.isfile(f["dst"]):
+                f["snapshot"] = os.path.join(store_dir, _SNAPSHOT_DIRNAME, "%03d" % n)
+                with open(f["dst"], encoding="utf-8") as fh:
+                    store_core.atomic_write(f["snapshot"], fh.read())
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         aside = [f for f in migration.files if f.get("role") == ROLE_SET_ASIDE]
         if aside:
@@ -443,15 +452,15 @@ def execute(migration, *, root=None):
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
             # abort before any delete (UFR-6): remove copied dsts, leave sources, clear journal
-            for f in journal["files"]:
-                if f["done"] and not f.get("preexisting"):
-                    _remove(f["dst"])
+            _backout_flip([f for f in journal["files"] if f["done"]])
+            _drop_snapshots(journal["files"])
             _remove(jpath)
             return {"status": "blocked"}
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         for f in journal["files"]:
             _remove(f["src"])
+        _drop_snapshots(journal["files"])
         _remove(jpath)
         return {"status": "done"}
 
@@ -459,20 +468,32 @@ def execute(migration, *, root=None):
 # --------------------------------------------------------------------------- recover
 
 
+def _drop_snapshots(files):
+    for f in files:
+        if f.get("snapshot"):
+            _remove(f["snapshot"])
+
+
 def _finish_flip(files):
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
-        if os.path.exists(f["dst"]):
+        if os.path.isfile(f["dst"]):
             os.remove(f["src"])           # dst already present — just drop the source
-        else:
+        elif not os.path.lexists(f["dst"]):
             core_md.relocate_file(f["src"], f["dst"])  # the one relocate primitive (copy + unlink)
+        # axis: a destination that is present but not a regular file is no copy, so the source stays
+    _drop_snapshots(files)
 
 
 def _backout_flip(files):
     for f in files:
-        # axis: a back-out removes only a destination this flip created; one already there stays
+        # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
         if f.get("preexisting"):
+            snap = f.get("snapshot")
+            if snap and os.path.isfile(snap):
+                with open(snap, encoding="utf-8") as fh:
+                    store_core.atomic_write(f["dst"], fh.read())
             continue
         _remove(f["dst"])  # sources untouched
 
@@ -531,6 +552,7 @@ def recover(cwd, *, root=None):
                 _finish_flip(files)        # commit landed → finish the move
             else:
                 _backout_flip(files)       # pre-commit → back out
+                _drop_snapshots(files)
             _remove(jpath)
             return {"status": "recovered"}
     return {"status": "noop"}

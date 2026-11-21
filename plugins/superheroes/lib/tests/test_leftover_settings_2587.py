@@ -650,16 +650,18 @@ def test_legacy_profiles_need_a_regular_read_slot(w, shape, listed):
     # axis: a legacy profile is listed only when the slot read is a regular file (a link to one passes); the stale in-repo unified layer is listed either way
     w.register(mr.GLOBAL)
     _put(w.d_gl("core.md"), _CORE)
-    real_layer = _put(str(w.tmp / "real-layer.md"), "## Focus hints\n- real\n")
+    # each link points at a layer its reader accepts (the test-pilot one carries its config block)
+    real_layers = {"review": _put(str(w.tmp / "real-layer.md"), "## Focus hints\n- real\n"),
+                   "pilot": _put(str(w.tmp / "real-pilot-layer.md"), _PILOT)}
     picked = {"review": w.d_gl("review-crew.md"), "pilot": w.d_gl("test-pilot.md")}
-    for path in picked.values():
+    for hero, path in picked.items():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if shape == "directory":
             os.makedirs(path)
         elif shape == "dangling-link":
             os.symlink(str(w.tmp / "no-such-layer.md"), path)
         else:
-            os.symlink(real_layer, path)
+            os.symlink(real_layers[hero], path)
     stale = [_put(w.d_in("review-crew.md"), "## Focus hints\n- stale\n"),
              _put(w.d_in("test-pilot.md"), _PILOT + "stale\n")]
     legacy = [_put(w.inrepo("review-profile.md"), "## Threat model\nold\n"),
@@ -975,3 +977,14 @@ def test_cli_list_retire_restore_and_usage(w, monkeypatch, capsys):
     assert ls.main(["retire", *base, "--owner-authorized", "maybe", "--list-digest", "x"]) == 2
     assert ls.main(["list"]) == 2
     capsys.readouterr()
+
+
+def test_placeholder_test_pilot_layer_never_retires_its_legacy_profile(w):
+    # axis: a legacy test-pilot profile is listed only while the layer that replaces it carries the config block store.resolve reads
+    left = _everything_left_behind(w)
+    profile = w.inrepo("test-pilot", "profile.md")
+    assert profile in [f["path"] for f in w.find()["files"]]
+    _put(w.d_gl("test-pilot.md"), "## Config\nno block yet\n")
+    listed = [f["path"] for f in w.find()["files"]]
+    assert profile not in listed
+    assert sorted(listed) == sorted(p for p in left if p != profile)
