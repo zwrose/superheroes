@@ -359,6 +359,20 @@ def test_render_into_before_you_upgrade_with_intro_only():
     )
 
 
+def test_render_appends_after_a_bullets_fenced_continuation():
+    # An existing bullet whose command sits in an indented fence keeps that fence: the new bullet
+    # goes after the fence's closing line, never between the instruction and its command.
+    intro = tn.INTRO.format(target="1.1.0")
+    existing_bullet = "- **Before switching.** Run:\n\n  ```bash\n  do-the-thing --now\n  ```"
+    text = "# T\n\n## 1.1.0\n\n### Before you upgrade\n\n%s\n\n%s\n\n### Existing\n\nExisting body.\n" % (
+        intro, existing_bullet)
+    out = tn.render(text, [("1.md", good(1))], "1.1.0")
+    assert out == (
+        "# T\n\n## 1.1.0\n\n### Before you upgrade\n\n%s\n\n%s\n- **After switching.** Step 1.\n\n"
+        "### Existing\n\nExisting body.\n\n### Heading 1\n\nBody 1.\n" % (intro, existing_bullet)
+    )
+
+
 def test_render_no_notes_and_no_target_is_unchanged():
     assert tn.render(TRANSITION, [], "1.1.0") == TRANSITION
     assert tn.render(TRANSITION, [], tn.UNRELEASED) == TRANSITION
