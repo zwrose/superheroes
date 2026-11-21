@@ -720,8 +720,11 @@ action that owns it, leaving the rest of the calibration untouched:
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
   strong-seat independence break) **stays loud** — the shipped seat-map machinery
   emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
-  review receipt and the seat falls back to rotation. A saved pin under a seat key the panel does
-  not have reads as a pin for an unknown seat and is reported, so remove it. The loader does structural validation only; a
+  review receipt and the seat falls back to rotation. A saved pin under a seat key no roster
+  has (such as `grounding-seat`) is named in `configure view` under
+  *Seat pins for seats no roster has*, in the review-crew doctor's note, and as a `pin for unknown
+  seat` degradation on the seat map; the panel never seats it, and nothing removes it for you, so
+  remove it. The loader does structural validation only; a
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.

@@ -52,6 +52,7 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **After switching.** **Nothing is owed by a caller that does not pass the new flag: `head_coverage.py check` takes a repeatable `--base-at-review SHA`, and the check's `why` gains the tokens `base-at-review` and `base-at-review-ignored`.** An advisor that straightens a stack now passes the flag once for each head the layer below had before a rewrite, on the coverage check and the carry check of every layer above the bottom (merge-train.md item 4(g) and item 6). See [Head coverage: a stack layer whose layer below was rewritten](#head-coverage-a-stack-layer-whose-layer-below-was-rewritten).
 - **After switching.** **Nothing is owed: five field gotchas are now doctrine lines, and no command, argument or result changes.** Builders, review orchestrators, the pilot and the advisor follow them from their next read. See [Field gotchas: five doctrine lines move into the plugin](#field-gotchas-five-doctrine-lines-move-into-the-plugin).
 - **After switching.** **A project with the plugin pin hook pastes new setup text once: the setup stamp now counts only what a cloud session reads before the pin hook switches the plugin, so the stored stamp, computed the old way, reads out of date.** No recompute is possible: the stored stamp is an opaque digest, and the setup record's `pluginVersion` names the last checked (pinned) release, not the release the setup text installed, so nothing stored names the installed release well enough to compute the stamp for it. The cloud check reports the setup text out of date once, and `adopt_version.py plan --project` says so through `stampDefinitionChanged`. After that paste, later releases ask for a paste far less often. A project without the hook is unaffected. See § Cloud setup stamp: only what a session reads before the pin swap.
+- **After switching.** **Nothing is owed: configure's view, the review-crew doctor and adopt-version's plan now name a core.md seat pin for a seat no roster has; remove such a pin with /superheroes:configure.** See [Stale seat pins are named](#stale-seat-pins-are-named).
 
 ### Field gotchas: five doctrine lines move into the plugin
 
@@ -86,6 +87,13 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **What changed for a project with the pin hook.** It pastes new setup text once when it adopts 0.51.1. The stored stamp is computed the old way and the setup record names the last checked release, not the installed one, so the stamp cannot be recomputed. Its cloud check reports the setup text out of date once, and `adopt_version.py plan --project` says so through `stampDefinitionChanged`. After that paste, a release asks for a paste only when the setup text's own steps, the plugin's SessionStart registrations, the start hook's read set, an out-of-repo calibration or the setup commands change.
 - **What did not change.** A project without the hook is unaffected: it pastes new setup text for every release, as before.
 - Replacement. None for callers that read only `cloudStartChanged`.
+
+### Stale seat pins are named
+
+- `configure view` gains a block, *Seat pins for seats no roster has*, after the rejected seat pins; pins for live seats read as before.
+- The review-crew doctor (`lib/repo_doctor.py`) result gains `staleSeatPins` (a list of seat keys) and a `review-crew calibration note:` part in `message`. A stale pin is never `drift`; it joins `signal_hash`, so dismissing the note works as before and a changed set of stale pins shows once more. With no stale pin, `signal_hash` is unchanged.
+- `adopt_version.py plan` gains `retiredSeats` (each `{seat, version, since}` an installed release in the span dropped, read by each release's own code; `null` when a release's seats cannot be read), `pinsProject` (the project whose pins were checked: `--project`, else the current directory) and `retiredSeatPins` (the pinned seats among them; `null` when unreadable). adopt-version's brief names each one.
+- The grounding seat's earlier note said a saved `grounding-seat` pin "is reported as a pin for an unknown seat": that report was only the seat map's `pin` degradation in a review receipt. These three surfaces now name it too.
 
 ## 0.51.0
 

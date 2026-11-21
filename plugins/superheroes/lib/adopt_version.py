@@ -12,6 +12,7 @@ import sys
 import charter_detect
 import cloud_setup
 import cloud_setup_text
+import core_md
 
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
@@ -277,6 +278,69 @@ def _cloud_start(cache, inst, from_v, to_v, project):
                   for e in entries)
     return entries, changed
 
+# Each tree's own seat_map says which review-panel seats it knows and which old keys it still reads.
+_SEATS_CODE = (
+    "import json, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import seat_map\n"
+    "print(json.dumps({\"known\": list(seat_map.KNOWN_SEATS),"
+    " \"aliases\": list(getattr(seat_map, \"LEGACY_SEAT_ALIASES\", {}))}))\n")
+
+def _tree_seats(root):
+    """(known, aliases), two sets, computed by one version tree's own seat_map in a separate process
+    with the tree's lib first on its path. None when it cannot be computed or reads wrong-typed."""
+    try:
+        done = subprocess.run([sys.executable, "-B", "-I", "-c", _SEATS_CODE, os.path.join(root, "lib")],
+                              capture_output=True, text=True, timeout=STAMP_TIMEOUT_SECONDS)
+        data = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    known, aliases = data.get("known"), data.get("aliases")
+    for seats in (known, aliases):
+        if not isinstance(seats, list) or not all(isinstance(s, str) for s in seats):
+            return None
+    return set(known), set(aliases)
+
+def _retired_seats(cache, inst, from_v, to_v):
+    """Every seat an installed release in the span dropped: one {"seat", "version", "since"} for each
+    seat the earlier installed release knew that the later one neither knows nor aliases, unless the
+    `to` release knows or aliases it again. [] when no release is crossed (nothing is read); None
+    when any tree in the span cannot be read."""
+    if from_v == to_v:
+        return []
+    span = [v for v in inst if _vt(from_v) <= _vt(v) <= _vt(to_v)]
+    seats = {v: _tree_seats(os.path.join(cache, v)) for v in span}
+    if any(s is None for s in seats.values()):
+        return None
+    to_known, to_aliases = seats[to_v]
+    out = []
+    for since, ver in zip(span, span[1:]):
+        known, (ver_known, ver_aliases) = seats[since][0], seats[ver]
+        for seat in sorted(known):
+            if seat not in ver_known and seat not in ver_aliases \
+                    and seat not in to_known and seat not in to_aliases:
+                out.append({"seat": seat, "version": ver, "since": since})
+    return out
+
+def _project_pin_seats(project):
+    """The sorted seat keys in `project`'s raw core.md enginePreferences.seatPins: [] when there is no
+    core.md or no seatPins; None when core.md is refused, seatPins is not an object, or the read fails."""
+    try:
+        cfg = core_md.engine_preferences_for_gate(cwd=project)
+        if core_md.gate_config_is_refusal(cfg):
+            return None
+        prefs = core_md.gate_config_usable_prefs(cfg)
+        if "seatPins" not in prefs:
+            return []
+        pins = prefs["seatPins"]
+        if not isinstance(pins, dict):
+            return None
+        return sorted(k for k in pins if isinstance(k, str))
+    except Exception:
+        return None
+
 def _plan(role, cache, from_v, to_v, project=None):
     if not os.path.isdir(cache):
         return _refuse("cache-dir-missing", "cache dir missing or not a directory")
@@ -317,12 +381,18 @@ def _plan(role, cache, from_v, to_v, project=None):
                     continue
                 kind = "changed"
             buckets[_bucket(k, role)][kind].append(k)
+    retired = _retired_seats(cache, inst, from_v, to_v)
+    pins_project = os.path.abspath(project) if project else os.getcwd()
+    pins = _project_pin_seats(pins_project)
+    retired_pins = None if retired is None or pins is None else sorted(
+        k for k in pins if k in {e["seat"] for e in retired})
     counts = {k: len(buckets[k]["added"]) + len(buckets[k]["removed"]) + len(buckets[k]["changed"]) for k in buckets}
     payload = {"ok": True, "role": role, "cacheDir": cache, "from": from_v, "to": to_v, "fromRoot": fr,
                "toRoot": tr, "installed": inst, "upToDate": up, "transitionSections": trans,
                "missingTransitionSections": miss, "unresolvedGaps": gaps, "changelogSections": changelog_secs,
                "buckets": buckets, "counts": counts,
-               "cloudStart": cloud_start, "cloudStartChanged": cloud_changed}
+               "cloudStart": cloud_start, "cloudStartChanged": cloud_changed,
+               "retiredSeats": retired, "pinsProject": pins_project, "retiredSeatPins": retired_pins}
     sys.stdout.write(json.dumps(payload) + "\n")
     return 0
 
@@ -335,7 +405,8 @@ def main(argv=None):
     g.add_argument("--from", dest="from_ver")
     p.add_argument("--to")
     p.add_argument("--cache-dir")
-    p.add_argument("--project", help="a project whose cloud setup stamp each release is computed for")
+    p.add_argument("--project", help="a project whose cloud setup stamp each release is computed for; "
+                   "also the project whose core.md seat pins are checked (default: the current directory)")
     args = ap.parse_args(argv)
     if args.from_root:
         fr = os.path.abspath(args.from_root)
