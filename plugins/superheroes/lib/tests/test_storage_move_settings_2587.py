@@ -668,8 +668,8 @@ def test_decisions_stay_when_the_target_side_is_already_read(w):
 
 @pytest.mark.parametrize("global_layer", [False, True])
 def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_layer):
-    # axis: decisions move only when the calibration file read now moves; a legacy review profile that stays
-    # keeps its decisions beside it, whether or not a target-side layer already exists (never lost, FU1)
+    # axis: while the calibration file read now stays, the decisions read now are copied to the target side and
+    # kept beside it too, so whichever side the reader picks after the flip holds them (never lost)
     w.register(mr.IN_REPO)
     _put(w.d_in("core.md"), _CORE)
     _put(w.inrepo("review-profile.md"), "## Threat model\nlegacy\n")
@@ -677,4 +677,7 @@ def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_l
     if global_layer:
         _put(w.d_gl("review-crew.md"), "## Focus hints\n- global\n")
     assert mm.execute(w.plan(mr.GLOBAL), root=w.root) == {"status": "done"}
-    assert _text(w.inrepo(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.d_gl(_DEC))
+    assert _text(w.inrepo(_DEC)) == '{"in": true}\n' and _text(w.d_gl(_DEC)) == '{"in": true}\n'
+    import review_store
+    read = review_store.resolve(w.cwd, "decisions", legacy_root=w.rr, registry_root=w.root)["path"]
+    assert _text(read) == '{"in": true}\n'

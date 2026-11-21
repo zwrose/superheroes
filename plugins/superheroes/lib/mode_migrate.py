@@ -253,7 +253,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         used.add(real(path))
         left.append({"path": path, "why": why})
 
-    def take(src, dst, role, family):
+    def take(src, dst, role, family, keep=False):
         # axis: a settings entry never shares a resolved file with another entry, nor its dst with its own src
         targets = [real(src)] + ([real_dst(dst)] if dst is not None else [])
         if any(t in used for t in targets):
@@ -264,7 +264,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
             leave(src, WHY_SHARED_PATH)
             return role == ROLE_CARRY
         used.update(targets)
-        entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family})
+        entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family, "keep": keep})
         return True
 
     # decisions
@@ -293,9 +293,10 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     for path in m_side:
         if not present(path):
             continue
-        if path == read_src and not dec_stays and not carried:
-            # axis: the copy read now is carried by its bytes even through a live link; only the link is removed
-            carried = take(path, t_first, ROLE_CARRY, "decisions")
+        if path == read_src and os.path.isfile(path) and not carried:
+            # axis: the copy read now is carried by its bytes even through a live link; while the calibration read
+            # now stays, the original is kept too, so the decisions are found whichever side is read after the flip
+            carried = take(path, t_first, ROLE_CARRY, "decisions", keep=dec_stays)
         elif not _is_regular(path):
             leave(path, WHY_NOT_REGULAR)
         elif dec_stays:
@@ -307,7 +308,7 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     if to_global and present(dec_legacy):
         if not _is_regular(dec_legacy):
             leave(dec_legacy, WHY_NOT_REGULAR)
-        elif carried:
+        elif carried and not dec_stays:
             # axis: the global store reads a legacy decisions copy first, so it is set aside only when this flip carries the read copy over it
             take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
     # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
@@ -479,7 +480,7 @@ def execute(migration, *, root=None):
             return {"status": "busy"}
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
-                   "files": [{"src": f["src"], "dst": f["dst"], "done": False,
+                   "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
                               "preexisting": os.path.lexists(f["dst"])}
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
@@ -517,7 +518,8 @@ def execute(migration, *, root=None):
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         for f in journal["files"]:
-            _remove(f["src"])
+            if not f.get("keep"):
+                _remove(f["src"])
         _drop_snapshots(journal["files"])
         _remove(jpath)
         return {"status": "done"}
@@ -536,6 +538,11 @@ def _finish_flip(files):
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
+        if f.get("keep"):
+            # axis: a kept source stays; recovery only makes sure its copy exists
+            if not os.path.lexists(f["dst"]):
+                _copy_bytes(f["src"], f["dst"])
+            continue
         if os.path.isfile(f["dst"]):
             os.remove(f["src"])           # dst already present — just drop the source
         elif not os.path.lexists(f["dst"]):
