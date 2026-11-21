@@ -68,9 +68,11 @@ The advisor's input is one JSON object; any key not listed is refused.
                  fewer) to that PR's new head commit; date is YYYY-MM-DD; moved and whyNotMaterial are non-empty strings. The
                  sheet then takes previousCommit and its commits from the earlier sheet and heads, and records the earlier
                  sheet's digest (and the digests it carried) in prSheet.carriedForward. previousCommit, when also given,
-                 must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned. The
-                 sheet shows no note of the carry: carriedForward's date, moved and whyNotMaterial are kept in the file and
-                 shown nowhere.
+                 must equal the earlier sheet's commit. A sheet republished with previousCommit alone starts unsigned.
+                 Optional conflictFix, a non-empty string, is the vet's one-line reason a code conflict fixed when the base was
+                 brought in is immaterial; it is kept in prSheet.carriedForward and, alone of the carry's fields, shown (one
+                 line on the page and one in the chat prose). Without it the sheet shows no note of the carry; the date, moved
+                 and whyNotMaterial are kept in the file and shown nowhere.
   headNow        Required on a pr or stack sheet built from records, and refused in the spec-PR mode (which keeps its own
                  spec.ci): an object mapping each covered PR number (a decimal string: number on a pr, every prs[].number on a
                  stack, no more and no fewer) to {commit, ci}, both required. commit is the PR's head as the vet read it when
@@ -880,9 +882,11 @@ def _check_walk(walk, allowed, problems):
 def _check_carry_input(carry, allowed, problems):
     """Collects the carriedForward input's problems; True when it is sound, so the earlier sheet can be checked against it."""
     found = len(problems)
-    if not _keys("carriedForward", carry, ("fromSheet", "heads", "date", "moved", "whyNotMaterial"), (), problems):
+    if not _keys("carriedForward", carry, ("fromSheet", "heads", "date", "moved", "whyNotMaterial"), ("conflictFix",), problems):
         return False
     problems.extend(f"carriedForward {k} must be a non-empty string" for k in ("fromSheet", "moved", "whyNotMaterial") if not _text(carry[k]))
+    if "conflictFix" in carry and not _text(carry["conflictFix"]):
+        problems.append("carriedForward conflictFix must be a non-empty string")
     if not (isinstance(carry["date"], str) and _DATE.match(carry["date"])):
         problems.append("carriedForward date must be a date written YYYY-MM-DD")
     heads = carry["heads"]
@@ -1602,7 +1606,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     if earlier is not None:
         # The carry: the heads the advisor names (each already equal to headNow's, which is checked above) are the sheet's commits, and the chain of
         # earlier digests grows by the sheet carried from. whatChanged.ci is headNow's, as on any records-built sheet, and the carry's date, moved
-        # and whyNotMaterial are recorded in the file but shown by no surface.
+        # and whyNotMaterial are recorded in the file but shown by no surface; the optional conflictFix, the vet's one-line reason a code conflict
+        # fix was judged immaterial, is recorded too and is the one field of the carry that the page and the prose show (one line each).
         carry = advisor["carriedForward"]
         heads = carry["heads"]
         sheet["previousCommit"] = earlier["prSheet"]["commit"]
@@ -1611,6 +1616,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             found["commit"] = heads[str(found["number"])]
         sheet["carriedForward"] = {"sheets": [hashlib.sha256(previous).hexdigest(), *earlier["prSheet"].get("carriedForward", {}).get("sheets", [])],
                                    "date": carry["date"], "moved": carry["moved"], "whyNotMaterial": carry["whyNotMaterial"]}
+        if "conflictFix" in carry:
+            sheet["carriedForward"]["conflictFix"] = carry["conflictFix"]
     return {"schema": "superheroes-sheet/1", "kind": kind, "title": advisor["title"], "prSheet": sheet, "cards": cards}
 
 

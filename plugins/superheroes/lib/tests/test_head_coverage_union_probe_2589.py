@@ -140,11 +140,12 @@ class Shape:
         return run_check(self.repo, self.base, self.record, head)
 
 
-def refused(shape, head, proof, reason, **kwargs):
-    """The check with ``proof`` is the check without it, plus one ignored line and an unused ``unionProbe``."""
+def refused(shape, head, proof, reason, answer="needs-review", **kwargs):
+    """The check with ``proof`` is the check without it, plus one ignored line and an unused ``unionProbe``. ``answer``
+    is the one the check gives for that head without a proof."""
     got = run_check(shape.repo, shape.base, shape.record, head, proof, **kwargs)
     without = run_check(shape.repo, shape.base, shape.record, head, **kwargs)
-    assert got["answer"] == without["answer"] == "needs-review", got
+    assert got["answer"] == without["answer"] == answer, got
     assert got["unionProbe"] == {"probe": proof.get("probe") if isinstance(proof, dict) and isinstance(proof.get("probe"), str)
                                  else None, "used": False, "reason": reason, "covers": []}, got
     assert got["why"][:-1] == without["why"] and tokens(got)[-1] == HC.WHY_UNION_IGNORED, got
@@ -160,7 +161,7 @@ def test_row_1_a_hand_resolved_conflict_is_proven_by_the_tested_probe(tmp_path):
     s = Shape(tmp_path)
     head = s.head()
     without = s.without_proof(head)
-    assert without["answer"] == "needs-review" and without["files"] == [SHARED]
+    assert without["answer"] == "judgement" and without["files"] == [SHARED]
     got = run_check(s.repo, s.base, s.record, head, s.proof())
     assert got["answer"] == "proven" and got["files"] == [] and got["hunks"] == [] and got["certified"] == s.reviewed
     assert tokens(got) == [HC.WHY_PROVEN_UNION] and len(got["why"]) == 1
@@ -177,7 +178,7 @@ def test_row_1_a_hand_resolved_conflict_is_proven_by_the_tested_probe(tmp_path):
 def test_row_2_one_byte_different_in_the_builders_resolution_reads_other_tree(tmp_path):
     s = Shape(tmp_path)
     head = s.head(RESOLVED.replace("item.tax", "item.tex"))
-    got = refused(s, head, s.proof(), "other-tree")
+    got = refused(s, head, s.proof(), "other-tree", "judgement")
     assert HC.outcome(got["answer"], "green")["outcome"] == "NOT-READY"
 
 
@@ -195,7 +196,7 @@ def test_row_3_a_mode_difference_only_reads_other_tree(tmp_path):
 def test_row_4a_a_probe_on_an_older_main_commit_reads_other_base(tmp_path):
     s = Shape(tmp_path)
     head = s.head()
-    refused(s, head, make_proof(s.repo, s.probe, s.old_base), "other-base")
+    refused(s, head, make_proof(s.repo, s.probe, s.old_base), "other-base", "judgement")
 
 
 def test_row_4b_two_distinct_bases_holding_one_tree_read_other_base(tmp_path):
@@ -208,7 +209,7 @@ def test_row_4b_two_distinct_bases_holding_one_tree_read_other_base(tmp_path):
     head = s.head()
     # the check's base is the newer commit; the probe merged the older one
     got = run_check(s.repo, newer, s.record, head, s.proof())
-    assert got["answer"] == "needs-review" and got["unionProbe"]["reason"] == "other-base" and got["unionProbe"]["used"] is False
+    assert got["answer"] == "judgement" and got["unionProbe"]["reason"] == "other-base" and got["unionProbe"]["used"] is False
     # and the older one is the check's base when the proof names the newer one
     again = run_check(s.repo, s.base, s.record, head, make_proof(s.repo, s.probe, newer))
     assert again["unionProbe"]["reason"] == "other-base" and again["answer"] == "needs-review"
@@ -258,7 +259,7 @@ RECEIPT_CASES = {
 def test_row_5_a_probe_without_a_good_test_receipt_reads_no_receipt(tmp_path, case):
     s = Shape(tmp_path)
     head = s.head()
-    refused(s, head, RECEIPT_CASES[case](s.proof()), "no-receipt")
+    refused(s, head, RECEIPT_CASES[case](s.proof()), "no-receipt", "judgement")
 
 
 # --- row 6: a tree claim git does not confirm, and a probe git cannot read ----------------------------------------------
@@ -268,7 +269,7 @@ def test_row_6_a_tree_claim_git_does_not_confirm_reads_tree_unconfirmed(tmp_path
     s = Shape(tmp_path)
     head = s.head()
     reviewed_tree = s.repo.git("rev-parse", s.reviewed + "^{tree}")
-    refused(s, head, s.proof(tree=reviewed_tree), "tree-unconfirmed")
+    refused(s, head, s.proof(tree=reviewed_tree), "tree-unconfirmed", "judgement")
 
 
 def test_row_6_a_probe_that_is_not_a_readable_commit_reads_probe_unreadable(tmp_path):
@@ -277,7 +278,7 @@ def test_row_6_a_probe_that_is_not_a_readable_commit_reads_probe_unreadable(tmp_
     real_tree = s.repo.git("rev-parse", s.probe + "^{tree}")
     blob = s.repo.git("rev-parse", "pr:" + SHARED)
     for probe, tree in ((MISSING, real_tree), (real_tree, real_tree), (blob, real_tree), (blob, blob)):
-        refused(s, head, make_proof(s.repo, probe, s.base, tree=tree), "probe-unreadable")
+        refused(s, head, make_proof(s.repo, probe, s.base, tree=tree), "probe-unreadable", "judgement")
 
 
 # --- row 7: a probe that does not merge the base and a covered commit --------------------------------------------------------
@@ -295,7 +296,7 @@ def test_row_7_a_one_parent_probe_reads_other_commit(tmp_path):
     s = Shape(tmp_path)
     single = s.single_parent_probe()
     head = s.head()
-    refused(s, head, make_proof(s.repo, single, s.base), "other-commit")
+    refused(s, head, make_proof(s.repo, single, s.base), "other-commit", "judgement")
 
 
 def test_a_probe_whose_parents_are_both_the_base_or_that_lacks_the_base_reads_other_commit(tmp_path):
@@ -306,7 +307,7 @@ def test_a_probe_whose_parents_are_both_the_base_or_that_lacks_the_base_reads_ot
     no_base = s.repo.git("commit-tree", tree, "-p", s.reviewed, "-p", s.old_base, "-m", "no parent is the base")
     three = s.repo.git("commit-tree", tree, "-p", s.reviewed, "-p", s.base, "-p", s.old_base, "-m", "three parents")
     for probe in (both_base, no_base, three):
-        refused(s, head, make_proof(s.repo, probe, s.base), "other-commit")
+        refused(s, head, make_proof(s.repo, probe, s.base), "other-commit", "judgement")
 
 
 # --- row 8: a head that does not contain the base --------------------------------------------------------------------------
@@ -360,7 +361,7 @@ def test_row_9_a_proof_that_is_not_exactly_the_object_reads_malformed(tmp_path, 
     proof = MALFORMED_CASES[case](s.proof())
     got = run_check(s.repo, s.base, s.record, head, proof)
     without = s.without_proof(head)
-    assert got["answer"] == without["answer"] == "needs-review"
+    assert got["answer"] == without["answer"] == "judgement"
     assert got["unionProbe"]["used"] is False and got["unionProbe"]["reason"] == "malformed" and got["unionProbe"]["covers"] == []
     assert got["why"][:-1] == without["why"] and tokens(got)[-1] == HC.WHY_UNION_IGNORED
     probe = proof.get("probe") if isinstance(proof, dict) else None
@@ -415,7 +416,7 @@ def test_row_12_without_a_proof_the_result_has_no_union_probe_key(tmp_path):
     s = Shape(tmp_path)
     head = s.head()
     needs = run_check(s.repo, s.base, s.record, head)
-    assert needs["answer"] == "needs-review" and "unionProbe" not in needs
+    assert needs["answer"] == "judgement" and "unionProbe" not in needs
     assert HC.WHY_UNION_IGNORED not in tokens(needs) and HC.WHY_PROVEN_UNION not in tokens(needs)
     same = run_check(s.repo, s.base, s.record, s.reviewed)
     assert same["answer"] == "proven" and "unionProbe" not in same
@@ -465,10 +466,10 @@ def test_row_13_the_coverage_and_the_carry_check_both_prove_through_the_covered_
     coverage = run_check(repo, base, record, head, proof)
     assert coverage["answer"] == "proven" and tokens(coverage) == [HC.WHY_PROVEN_UNION]
     assert coverage["unionProbe"]["used"] is True and coverage["unionProbe"]["parent"] == s
-    assert run_check(repo, base, record, head)["answer"] == "needs-review"
+    assert run_check(repo, base, record, head)["answer"] == "judgement"
     carry = run_check(repo, base, carry_record, head, proof)
     assert carry["answer"] == "proven" and carry["unionProbe"]["used"] is True and carry["certified"] == s
-    assert run_check(repo, base, carry_record, head)["answer"] == "needs-review"
+    assert run_check(repo, base, carry_record, head)["answer"] == "judgement"
     moved = HC.outcome(coverage["answer"], "green", sheet="live", sheet_commit=s, head=head, carry_answer=carry["answer"])
     assert moved == {"outcome": "READY", "why": "covered", "review": "none", "sheet": "republish-carried"}
 
@@ -479,7 +480,7 @@ def test_row_13_a_one_byte_different_resolution_takes_the_sheet_down(tmp_path):
     coverage = run_check(repo, base, record, head, proof)
     carry = run_check(repo, base, carry_record, head, proof)
     for got in (coverage, carry):
-        assert got["answer"] == "needs-review" and got["unionProbe"]["reason"] == "other-tree" and got["unionProbe"]["used"] is False
+        assert got["answer"] == "judgement" and got["unionProbe"]["reason"] == "other-tree" and got["unionProbe"]["used"] is False
     moved = HC.outcome(coverage["answer"], "green", sheet="live", sheet_commit=s, head=head, carry_answer=carry["answer"])
     assert moved["outcome"] == "NOT-READY" and moved["sheet"] == "take-down"
 
@@ -523,7 +524,7 @@ def test_row_15_the_cli_reads_a_union_proof_file(tmp_path):
     printed = json.loads(with_proof.stdout)
     assert printed["answer"] == "proven" and printed["unionProbe"]["used"] is True and printed["unionProbe"]["covers"] == [SHARED]
     without = _cli(*common)
-    assert without.returncode == 0 and json.loads(without.stdout)["answer"] == "needs-review"
+    assert without.returncode == 0 and json.loads(without.stdout)["answer"] == "judgement"
     assert "unionProbe" not in json.loads(without.stdout)
     wrong = tmp_path / "wrong.json"
     wrong.write_text(json.dumps({"schema": "union-probe/1"}), encoding="utf-8")

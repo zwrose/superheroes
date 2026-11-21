@@ -771,7 +771,9 @@ degradations, follow-ups, size tripwire, and DoD table sections are all present.
 
 After handback, address owner review comments and CI on the open PR. **Grade each change you make
 now by the delta.** This rule governs only changes made after the ready-PR handback, never the
-pre-handback review (§10, always the full loop):
+pre-handback review (§10, always the full loop). A bring-current that fixes a code conflict is graded
+by the vet's call first (**A bring-current that fixes a code conflict is judged by the vet first.**
+below), not by this table:
 
 | Delta since the last review | Re-review |
 |---|---|
@@ -793,6 +795,11 @@ after handback, bring the layer current by a local `--no-ff` merge, run the cali
 merged head, review the catch-up as a returning review, and re-run the handback check
 (`vet_slot.py handback --pr <n> --repo <owner/name>`, which refuses `stack-not-caught-up` until the
 pushed head holds the lower layer's current head; `rubric/native-stacks.md` § How a stack stays current).
+A catch-up that fixes a code conflict on a layer already handed back is judged by the vet first, as the next paragraph says.
+
+**A bring-current that fixes a code conflict is judged by the vet first.** Hand back the conflict-fix
+merge for the vet's judgement; run the scoped returning review only when the vet calls the fix
+material or the check answers `needs-review` for another reason (`skills/showrunner/reference/vet-receipt.md` § A builder's code-conflict fix).
 
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
@@ -803,8 +810,8 @@ blocked, and what you need. A truthful park beats a false ship.
 
 **Read `skills/workhorse/reference/cloud.md` § Asking the advisor: the builder note when the launch prompt says `Place: cloud session` and you need the advisor's answer or must park.**
 
-**Done when:** every post-handback change has the re-review its delta row names and the body reads
-correct top to bottom, or a park with receipts is posted on the PR.
+**Done when:** every post-handback change has the re-review its delta row names (a conflict-fix
+bring-current has the vet's call first) and the body reads correct top to bottom, or a park with receipts is posted on the PR.
 
 ## Memory
 
