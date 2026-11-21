@@ -262,7 +262,8 @@ declare nothing.
 
 **Read `skills/workhorse/reference/cloud.md` § Workspace when the launch prompt says `Place: cloud session`.**
 
-**Done when:** `git rev-parse --show-toplevel` names your own build worktree in the issue's repo,
+**Done when:** `git rev-parse --show-toplevel` (in a cloud session, `git -C <worktree> rev-parse
+--show-toplevel`) names your own build worktree in the issue's repo,
 any supplied slot and generation verified, the resolved git identity is present and correct, the
 app is up or recorded as none, and a full-lane build's declaration succeeded.
 

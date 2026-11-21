@@ -70,7 +70,7 @@ before any other.
    clone is on that branch at the adopted head `<sha>`, the branch's pushed head, which descends
    from the launch's base commit (for a stack layer the base is the layer below's head, so the two
    differ), with its upstream set. Continue that branch: do not create a build branch, push to it
-   with plain `git push`, and post the result's `comment` as the first comment, as above. Beyond
+   with plain `git -C <worktree> push`, and post the result's `comment` as the first comment, as above. Beyond
    the refusals every launch can get (step 3), the adopt steps add six, each naming what failed:
    `adopted-branch-moved` (the branch moved past the head the launch named, so another builder
    may be on it), `adopted-head-not-on-base` (the adopted head does not descend from the base
@@ -105,8 +105,8 @@ carry to the next call (the shell returns to the start folder), so it cannot ent
 Commands that name the worktree by absolute path, and writes to files in it, ran with no prompt in
 the same probe.
 
-**Push after every commit.** Use `git push -u origin <branch>` the first time and plain `git push`
-after. The pushed branch is the only work the advisor can recover if the session stops. Never
+**Push after every commit.** Use `git -C <worktree> push -u origin <branch>` the first time and
+plain `git -C <worktree> push` after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
 
 **At intake, at every wake, and before every push, check for a newer launch.** Run
@@ -114,7 +114,7 @@ force-push.
 On `superseded: true`, push nothing and post its `comment` (the stand-down) on the issue as it is.
 Then, when you have pushed work, post the `comment` from
 `python3 -B <plugin root>/lib/cloud_builder.py self-archive --launch-id <your launch id> --head <your pushed head sha>`,
-the head `git rev-parse` prints for your pushed branch. Then archive your own session with the
+the head `git -C <worktree> rev-parse HEAD` prints for your pushed branch. Then archive your own session with the
 session tool you have; the platform may show the owner one prompt, and you do not wait for it. With
 no such tool, post one line naming the session tools you have. Then end the turn; do not post a park
 or handback. On a refusal, push nothing and end the turn. A wake is any turn that
@@ -135,13 +135,15 @@ branch.
    commit: create the build branch at that commit as the build worktree is made (above). On an
    adoption, intake leaves the clone on the adopted branch: continue it in the build worktree and
    create no branch (§ Intake, step 5). Then run
-   `git fetch origin <lower branch>` and check that `git rev-parse FETCH_HEAD` equals the base
-   commit. This needs no pull request on the layer below. When the two differ, the layer below moved
-   after the launch: bring it forward as step 2 says.
-2. **Bring the layers below forward.** Run `git fetch origin <lower branch>`, merge with
-   `git merge --no-ff FETCH_HEAD`, and push plainly. Never rebase and never force-push. Before
-   handback, fetch again and run `git merge-base --is-ancestor FETCH_HEAD HEAD`, which confirms the
-   build holds the layer below's current head. The merge commits this leaves are removed by the
+   `git -C <worktree> fetch origin <lower branch>` and check that
+   `git -C <worktree> rev-parse FETCH_HEAD` equals the base commit (`FETCH_HEAD` is kept per
+   worktree, so every step names the worktree). This needs no pull request on the layer below. When
+   the two differ, the layer below moved after the launch: bring it forward as step 2 says.
+2. **Bring the layers below forward.** Run `git -C <worktree> fetch origin <lower branch>`, merge
+   with `git -C <worktree> merge --no-ff FETCH_HEAD`, and push plainly (`git -C <worktree> push`).
+   Never rebase and never force-push. Before handback, fetch again and run
+   `git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD`, which confirms the build holds the
+   layer below's current head. The merge commits this leaves are removed by the
    advisor at merge time when the base has a merge queue; the builder never rebases or force-pushes.
 3. **Open the pull request with the layer below's branch as its base**, through REST:
    `gh api -X POST repos/<o>/<r>/pulls -f head=<branch> -f base=<lower branch> -f title=<title> -F body=@<body.md>`,
@@ -283,8 +285,8 @@ exactly that, once: commit and push your in-progress work, including any untrack
 `python3 -B <plugin root>/lib/cloud_builder.py handover --head <your pushed head sha>`; post its
 `comment` on the issue as it is; then stop working on the issue and end your turn. Never post a
 handover for a head you did not push. If the verb answers `head-invalid`, the head you gave is not a
-full 40-character lowercase commit sha: give your pushed head's full sha, as `git rev-parse HEAD`
-prints it.
+full 40-character lowercase commit sha: give your pushed head's full sha, as
+`git -C <worktree> rev-parse HEAD` prints it.
 
 ## When the advisor asks you to archive your session
 
@@ -382,9 +384,12 @@ refuses.
 - A gate command keeps `-B -X pycache_prefix=…`: the write channel's allow rules cover
   `scripts/pinned-python` with any flags. If a sandbox refuses the flag, drop it and keep `-B`,
   because the flag guards a macOS bytecode cache, not this container.
-- The size count, run as `python3 -B <plugin root>/lib/size_count.py count --base <sha> --worktree`,
+- The size count, run as
+  `python3 -B <plugin root>/lib/size_count.py count --base <sha> --repo-root <the build worktree> --worktree`,
   can fail inside the sandbox on stray dotfiles in the home directory
-  (`git-failed: ./.bash_profile`). Run it from the builder's own shell.
+  (`git-failed: ./.bash_profile`). Run it from the builder's own shell. Without `--repo-root` it
+  counts the session's folder, which stays at the base commit, and reads `tripwireCount 0` with the
+  worktree under `untrackedRepos`: a silent zero, never a count.
 - **Credential-like text is redacted.** A cloud session replaces credential-like text (API keys,
   tokens, private keys), for example with a bare `[REDACTED]`, before a file is written or a comment
   posted; the redactor's exact patterns are not known, so this is best effort. Build a test value of
