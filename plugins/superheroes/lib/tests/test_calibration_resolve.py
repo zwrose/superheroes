@@ -300,7 +300,7 @@ def test_candidate_profile_paths_agrees_with_resolve_precedence_per_position(
     candidates = cr.candidate_profile_paths(str(unified_global), root=default_store)
     resolved = cr.resolve(str(unified_global), root=default_store)
     winner = resolved.get("dispatch_layer") or resolved.get("legacy_path")
-    assert winner == candidates[2]
+    assert winner == candidates[0]  # the layer the storage mode picks is listed first
 
     legacy_global = _repo("legacy-global")
     legacy_store = str(tmp_path / "legacy-only-store")
