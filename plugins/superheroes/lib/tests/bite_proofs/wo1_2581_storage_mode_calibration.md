@@ -388,3 +388,48 @@ No guarded element is in no class. `test_r_cloud_unrecorded[raises]` and `[provi
 `test_r_stamped_files_readonly`, `test_r_unchanged[*]`, `test_r_layer_legacy`, `test_r_layer_inrepo`, `test_r_core_p3`
 and `test_r_cloud_placed` were not neutralized separately: the order's declared set is BP1-BP7, and the first green
 run showed all 18 tests passing.
+
+## BP8 — candidate order keeps an unreadable candidate first (WO-3)
+
+**Guarded element:** the early return in `candidate_profile_paths`, `plugins/superheroes/lib/calibration_resolve.py:149-150`.
+**Axis:** a present candidate that is not a regular file keeps today's order, so the tier gate still refuses it as unreadable.
+**Detector:** `plugins/superheroes/lib/tests/test_model_tier_overrides.py::test_effective_tiers_for_gate_unreadable_in_repo_does_not_fall_through_to_global` (unedited).
+
+**Neutralization:** changed the condition
+`if any(os.path.lexists(c) and not os.path.isfile(c) for c in candidates):` to
+`if False and any(os.path.lexists(c) and not os.path.isfile(c) for c in candidates):`.
+
+**Raw red** (single node, `-q -p no:randomly`; the `UV_NATIVE_TLS` warning line omitted, tmp paths unredacted, no secrets present):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_effective_tiers_for_gate_unreadable_in_repo_does_not_fall_through_to_global _
+...
+        gate = MTO.effective_tiers_for_gate(cwd=str(repo), root=default_store)
+>       assert gate.status == MTO.TIERS_UNREADABLE
+E       AssertionError: assert 'ok' == 'unreadable'
+E         
+E         - unreadable
+E         + ok
+
+/home/user/wt-2581/plugins/superheroes/lib/tests/test_model_tier_overrides.py:868: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_model_tier_overrides.py::test_effective_tiers_for_gate_unreadable_in_repo_does_not_fall_through_to_global
+1 failed in 0.48s
+```
+(Elided: the test's fixture-setup source lines between the header and the `gate = ...` line, about 20 lines.)
+
+**Restore:** inverse edit, `if False and any(` back to `if any(`.
+
+**Restore receipt (quoted from `calibration_resolve.py:148-150`):**
+```
+    # axis: a present candidate that is not a regular file keeps today's order, so the tier gate still refuses it as unreadable
+    if any(os.path.lexists(c) and not os.path.isfile(c) for c in candidates):
+        return candidates
+```
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 3.67s
+```

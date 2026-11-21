@@ -145,6 +145,9 @@ def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
         _legacy_global_profile_path(cwd, legacy_root),
     ]
     candidates = [c for c in candidates if c is not None]
+    # axis: a present candidate that is not a regular file keeps today's order, so the tier gate still refuses it as unreadable
+    if any(os.path.lexists(c) and not os.path.isfile(c) for c in candidates):
+        return candidates
     mode_layer = _mode_layer(cwd, hero, root)
     if mode_layer is not None:
         candidates = [mode_layer] + [c for c in candidates if c != mode_layer]
