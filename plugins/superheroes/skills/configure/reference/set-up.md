@@ -621,15 +621,18 @@ python3 -B "$ROOT_DIR/lib/cloud_plugin_pin.py" write --cwd .
 
 Commit and push the files it names before pasting the setup text, because a cloud session starts
 from the pushed repository. The setup text then stamps its own install and fetch steps and the
-plugin parts a cloud session loads at its start, so write and paste it once after adding the hook.
+plugin parts a cloud session reads before the pin hook switches the plugin, so write and paste it
+once after adding the hook.
 
 *When a pin commit is enough, and when a paste is still needed.* After a release, run `write` again
 on the owner's machine and commit the new pin; the cloud picks the release up at its next session
 start. Paste new setup text only when the cloud check or readiness says the setup text is out of
-date. That happens when the release changed a tool or fetch step of the setup text, or the parts of
-the plugin a cloud session loads at its start (each skill's frontmatter, the agents, the plugin's
-hooks file), and when an out-of-repo calibration or the setup commands changed. A project without
-the hook pastes new setup text for every release.
+date. That happens when the release changed a tool or fetch step of the setup text, or the parts a
+cloud session reads from the setup-text copy before the pin hook switches the plugin (the plugin's
+SessionStart hook registration, and the start hook's own code and the files it reads: its lib
+modules and the covenant), and when an out-of-repo calibration or the setup commands changed.
+Agents, skills, hook modules and the other hooks come from the pinned release, so a change to them
+needs only the pin commit. A project without the hook pastes new setup text for every release.
 
 *Several repositories.* Hooks do not run in multi-repository cloud sessions or Projects threads, so
 there neither this hook nor the dependency hook runs. The session runs the plugin the setup text

@@ -1916,6 +1916,18 @@ def _apply_owner_rulings(findings, raw, entries):
     return out
 
 
+def _finding_sources(base, f):
+    """The decision sources for checking a citation on ``f``: ``base`` (never changed) plus ``f``'s own stored key and
+    severity, which a scope ruling's receipt line and the Critical refusal read. Every recipient of a citation, a repeat
+    or a merged member included, is checked with its own."""
+    return dict(base if isinstance(base, dict) else {}, findingKey=_key(f), findingSeverity=f.get("severity"))
+
+
+# How an unmet linked decision is named in the reason of the finding that cites it.
+_LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
+                 finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
+
+
 def _recheck_decisions(findings, sources):
     """Check every cited decision against what is on record now. A ruling whose cited decision is not on record
     goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
@@ -1929,16 +1941,18 @@ def _recheck_decisions(findings, sources):
         new, unmet, refreshed = None, None, None
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
-            ok, text = finding_outcomes.on_record(by, sources())
+            # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
+            ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
             if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
-            elif outcome == _RULING and ok and by.get("kind") == finding_outcomes.OWNER_RULING:
+            elif outcome == _RULING and ok and by.get("kind") in finding_outcomes.LINKED_KINDS:
                 refreshed = text
-            elif outcome == _LEFT_FOR_OWNER and by.get("kind") == finding_outcomes.OWNER_RULING and not ok:
+            elif outcome == _LEFT_FOR_OWNER and by.get("kind") in finding_outcomes.LINKED_KINDS and not ok:
                 # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
-                unmet = f"the owner ruling it cites is not on record ({text})"
+                # axis: the same for a scope ruling and an advisor's bound, each named by its own words — see bite-proof record i2532_scope_bound (E-recheck)
+                unmet = f"the {_LINKED_LABEL[by.get('kind')]} it cites is not on record ({text})"
         if new is None:
             if refreshed:
                 # axis: an already-ruling finding whose owner-ruling citation resolves shows the citation as its reason, once, and keeps its outcome — see bite-proof record wo_a_1958_owner_ruling
@@ -2113,7 +2127,8 @@ def _follow_repeats(findings, checks, sources=None):
             old = f.get("reason")
             if g.get("outcome") != _FIXED:
                 # axis: the citation must be on record now, else nothing moves and nothing is marked handled — see bite-proof record i2479_repeat_follows_ruling
-                ok, text = finding_outcomes.on_record(g["decidedBy"], sources())
+                # axis: the repeat is checked with its own key and severity, so a Critical repeat never inherits a scope ruling or the advisor's bound — see bite-proof record i2532_scope_bound (E-repeat)
+                ok, text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), f))
                 if not ok:
                     continue
                 handled.add(i)
@@ -2125,9 +2140,13 @@ def _follow_repeats(findings, checks, sources=None):
                     REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {old}" if isinstance(old, str) and old else reason)
                 moved = True
                 for j in members_to_follow(i, kept):
-                    handled.add(j)
                     h, was = out[j], out[j].get("reason")
-                    note = f"{text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
+                    # axis: each merged member is checked with its own key and severity, and one whose check fails keeps its outcome — see bite-proof record i2532_scope_bound (E-repeat-member)
+                    held, held_text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), h))
+                    if not held:
+                        continue
+                    handled.add(j)
+                    note = f"{held_text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
                     # axis: every member moved to ruling carries its own copy of the decidedBy, never an uncited ruling — see bite-proof record i2479_repeat_follows_ruling
                     out[j] = by_key[_key(h)] = dict(
                         h, outcome=_RULING, decidedBy=copy.deepcopy(g["decidedBy"]),
@@ -2257,7 +2276,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         docs = {}
         for f in findings:
             by, ref = f.get("decidedBy"), None
-            if isinstance(by, dict) and by.get("kind") == finding_outcomes.OWNER_RULING and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
+            # axis: the cited comment of a scope ruling and an advisor's bound is read like an owner ruling's, one read per distinct link — see bite-proof record i2532_scope_bound (E-fetch)
+            if isinstance(by, dict) and by.get("kind") in finding_outcomes.LINKED_KINDS and f.get("outcome") in (_RULING, _LEFT_FOR_OWNER):
                 ref = by.get("ref")
             url = ref.get("url") if isinstance(ref, dict) else None
             parts = finding_outcomes.comment_permalink(url, a["repo"])[0] if isinstance(url, str) else None
@@ -2279,7 +2299,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
             import calibration_pin
             # axis: a session's record settles cited residuals on the read the session pinned, never the live store
             base = calibration_pin.overlay_residuals(dict(base if isinstance(base, dict) else {}), a.get("pinnedResiduals"))
-            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments())
+            held["sources"] = dict(base, repo=a["repo"], ownerRulings=owner_ruling_comments(),
+                                   reviewPr=a["pr"], reviewRounds=a["rounds"]["count"])
         return held["sources"]
 
     def canon_on_record(g):
@@ -3861,6 +3882,40 @@ def read(pr, repo=None, readers=None):
     return _guarded(go)
 
 
+def read_all(pr, repo=None, readers=None):
+    """Every record comment of a PR, oldest first: the ones that parse as `records` (each with its `url`), the ones that
+    do not (for any reason) named in `unreadable` (`id`, `url`, `detail`). None is dropped and one bad comment never
+    costs the others."""
+    def go():
+        rd = _readers(readers)
+        comments = _comments(rd, pr, repo)
+        found = _marker_comments(comments)
+        if not found:
+            raise Refusal("review-record-missing", f"no review record on PR {pr}")
+        by_id = {c["id"]: c for c in comments}
+        records, unreadable = [], []
+        for c in found:
+            failure = None
+            # axis: a record comment that does not parse, or raises while parsing, is named in unreadable, never dropped, and never costs the other records — see bite-proof record i2528_read_all
+            try:
+                rec = _parse_body(c["body"], by_id)
+                if isinstance(rec, dict):
+                    records.append({"url": c.get("url"), **rec})
+                    continue
+            except Exception as e:  # noqa: BLE001 — a body that raises while parsing is unreadable, not fatal
+                failure = e
+            try:
+                if failure is not None:
+                    raise failure
+                detail = _unreadable_detail(c, by_id)
+            except Exception as e:  # noqa: BLE001 — a detail that cannot be built still names the comment
+                detail = f"{c.get('url') or 'the existing record'}: the record could not be read ({type(e).__name__})"
+            # axis: every record comment that is not in records is named in unreadable with its id, url and a detail — see bite-proof record i2528_read_all
+            unreadable.append({"id": c.get("id"), "url": c.get("url"), "detail": detail})
+        return {"ok": True, "pr": pr, "records": records, "unreadable": unreadable}
+    return _guarded(go)
+
+
 def _shows_reading(run):
     obs = run.get("observation") if isinstance(run, dict) else None
     # the record writer credits a run only when it is a graded review: hold the reading to the same rule
@@ -3933,6 +3988,9 @@ def main(argv=None):
     r = sub.add_parser("read")
     r.add_argument("--pr", type=int, required=True)
     r.add_argument("--repo", default=None)
+    a = sub.add_parser("read-all")
+    a.add_argument("--pr", type=int, required=True)
+    a.add_argument("--repo", default=None)
     n = sub.add_parser("reading-next")
     n.add_argument("--run-dir", action="append", default=[], dest="run_dirs")
     n.add_argument("--seat-map", default=None, dest="seat_map")
@@ -3942,7 +4000,12 @@ def main(argv=None):
         runs = [_engine_run(d)[0] for d in dict.fromkeys(os.path.realpath(d) for d in args.run_dirs)]
         print(json.dumps(reading_next(runs, _read_seat_map(args.seat_map), args.maker_families)))
         return 0
-    result = write(args.account, args.repo_root) if args.command == "write" else read(args.pr, args.repo)
+    if args.command == "write":
+        result = write(args.account, args.repo_root)
+    elif args.command == "read-all":
+        result = read_all(args.pr, args.repo)
+    else:
+        result = read(args.pr, args.repo)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1
 

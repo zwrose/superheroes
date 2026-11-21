@@ -13,6 +13,9 @@ hook object of ours, the script holds exactly `script_text()` and the pin file h
 
   cloud_plugin_pin.py {write,remove,status} [--cwd D] [--commit C]
 
+`--commit` is read by `status` only. `write` always pins the release installed on this machine and
+`remove` names no commit, so both refuse `--commit` (`commit-not-used`) rather than ignore it.
+
 The readers (`at_commit`, `in_tree`) answer a different question from `sync`: will a cloud session
 starting on this tree run the right hook? They accept a registration the hook still runs under
 (duplicates, another timeout), where `sync` rewrites it.
@@ -402,6 +405,12 @@ def installed_pin(cwd, env=None):
 
 def _run(verb, cwd, commit):
     import store_core
+    if commit is not None and verb != "status":
+        # axis: an option the verb does not read is refused, never silently ignored (a write would pin the
+        # installed release, not the commit asked for)
+        return {"action": "refused", "reason": "commit-not-used",
+                "detail": ("--commit is read by status only; %s always uses the plugin installed on this "
+                           "machine" % verb), "changed": []}
     try:
         root = store_core.repo_root(cwd)
     except store_core.RepoRootUnavailable as exc:

@@ -297,6 +297,14 @@ building, and it never deletes a sibling's branch or worktree. The unpushed-work
 only on adoption, so a relaunch onto a clean base cannot otherwise see an earlier build of the same
 issue, and two builds then diverge or one's work is lost.
 
+**A worktree's directory name is not evidence.** The harness can reuse a worktree directory across
+sessions, so its name can belong to an older, unrelated task, and a name that does not fit never by
+itself shows the session sits in the wrong repository. Verify in this order:
+`git rev-parse --git-common-dir` resolves to the target repository's `.git`; `git branch --show-current` names the
+session's own branch; the worktree's `.git` pointer file and the project's own files on disk match
+the target; and the per-worktree reflog (`.git/worktrees/<name>/logs/HEAD`) shows every branch ever
+checked out there. Report a wrong tree only on these checks, never on the name.
+
 ### Pin the transcript; never re-discover it
 
 Map a builder to its transcript by grepping the **first 4KB** of each transcript file for the

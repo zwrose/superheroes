@@ -1428,7 +1428,9 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
     line-drifted id advances the one record it names instead of birthing a colliding
     second); an ambiguous identity falls back to the exact id, and with none is skipped.
     Every move goes through `guardian_ledger.advance`: absent → candidate → surfaced →
-    target; surfaced/reopened → target when `ALLOWED_TRANSITIONS` allows it. A decision
+    target; any other state → target when `ALLOWED_TRANSITIONS` allows it (surfaced and
+    reopened as before; a `declined` or `triaged-out` record → `filed`, which `advance`
+    allows only with an issue — every other move off a settled state is skipped). A decision
     already at its target is a no-op (idempotent re-run) — except an accepted/declined
     record whose candidate materially worsened, which is re-settled in place at the new
     metric (`_redecide_settled`), and a same-disposition decision whose `deferredByPolicy`
@@ -1474,16 +1476,20 @@ def _apply_decisions(records, decisions, surfaced, sweep_id):
             chain = ["candidate", "surfaced", target]
         elif from_state == "candidate":
             chain = ["surfaced", target]
-        elif from_state in ("surfaced", "reopened"):
+        # Axis: a decision whose target the record's state does not allow is skipped — a
+        # recoverable state takes `filed` and nothing else, so no other settled move lands.
+        elif target in guardian_ledger.ALLOWED_TRANSITIONS.get(from_state, ()):
             chain = [target]
         else:
             chain = None
-        if chain is None or (
-                from_state == "reopened"
-                and target not in guardian_ledger.ALLOWED_TRANSITIONS["reopened"]):
+        if chain is None:
             reason = "no legal path from %s to %s — record left untouched" % (
                 from_state, target)
-            if from_state in guardian_ledger.WONT_FIX_STATES:
+            if from_state in guardian_ledger.RECOVERABLE_STATES:
+                reason = ("%s is terminal except an advance to filed when an issue is filed "
+                          "for it — a different disposition (%s) needs a new ledger entry by "
+                          "hand or a follow-up; record left untouched" % (from_state, target))
+            elif from_state in guardian_ledger.WONT_FIX_STATES:
                 reason = ("%s is terminal — a different disposition (%s) needs a new "
                           "ledger entry by hand or a follow-up; record left untouched"
                           % (from_state, target))
@@ -1739,7 +1745,94 @@ def finalize(cwd, bundle, dispositions, root=None):
         file_lock.release(lock_path)
 
 
-def commit_ledger(cwd, bundle, dispositions, root=None):
+def validate_recoveries(bundle, recoveries):
+    """Check the `--recoveries` input → (ok, errors). `None` is valid (no recoveries).
+
+    Otherwise a list of objects with exactly the keys `id` and `issue`, both non-blank strings
+    (whitespace-only is blank). No `id` may repeat, and none may be the id of a finding in
+    `bundle["surfaced"]` — a surfaced finding goes through its disposition. Error strings name
+    the entry's id, or `recoveries[<index>]` when it has no usable id."""
+    if recoveries is None:
+        return (True, [])
+    if not isinstance(recoveries, list):
+        return (False, ["recoveries must be a list of {id, issue} objects (got %s)"
+                        % type(recoveries).__name__])
+    surfaced_ids = {s.get("id") for s in (bundle or {}).get("surfaced") or []
+                    if isinstance(s, dict) and isinstance(s.get("id"), str)}
+    # The decisions resolve a surfaced id through `guardian_ledger.match`, which compares the
+    # line-drift-tolerant identity, so the overlap check compares that identity too.
+    surfaced_identities = {guardian_ledger.normalize_id(sid) for sid in surfaced_ids}
+    surfaced_identities.discard("")
+    errors = []
+    seen = set()
+    for i, entry in enumerate(recoveries):
+        label = "recoveries[%d]" % i
+        if not isinstance(entry, dict):
+            errors.append("%s: must be an object with keys id and issue" % label)
+            continue
+        rid = entry.get("id")
+        if _nonempty_str(rid):
+            label = rid
+        extra = sorted(str(k) for k in entry if k not in ("id", "issue"))
+        if extra:
+            errors.append("%s: unexpected key(s) %s — only id and issue are allowed"
+                          % (label, ", ".join(extra)))
+        for key in ("id", "issue"):
+            if key not in entry:
+                errors.append("%s: missing key %s" % (label, key))
+            elif not _nonempty_str(entry[key]):
+                errors.append("%s: %s must be a non-empty string" % (label, key))
+        if not _nonempty_str(rid):
+            continue
+        if rid in seen:
+            errors.append("%s: duplicate id — name each record once" % label)
+        seen.add(rid)
+        # Axis: an id that also surfaced this sweep, exactly or as the same line-drifted
+        # identity, is refused — that finding goes through its disposition, never a recovery.
+        if rid in surfaced_ids or guardian_ledger.normalize_id(rid) in surfaced_identities:
+            errors.append("%s: also surfaced this sweep — that finding goes through its "
+                          "disposition, not a recovery" % label)
+    return (len(errors) == 0, errors)
+
+
+def _apply_recoveries(records, recoveries, sweep_id):
+    """Advance named declined/triaged-out records to filed → (new_records, applied, skipped).
+
+    For records that never re-surface, so no disposition can name them. Exact-id lookup only
+    (never `guardian_ledger.match`) and a record is never created. A missing record, or one
+    not in `RECOVERABLE_STATES` (a `filed` record included), is skipped and left untouched;
+    otherwise `guardian_ledger.advance(..., "filed", issue=...)` decides, and a refusal is
+    skipped too. Input is assumed to have passed `validate_recoveries`."""
+    new_records = list(records or [])
+    applied, skipped = [], []
+    for entry in recoveries or []:
+        rid, issue = entry["id"], entry["issue"]
+        existing = next((r for r in new_records
+                         if isinstance(r, dict) and r.get("id") == rid), None)
+        if existing is None:
+            skipped.append({"id": rid, "from": None, "to": "filed",
+                            "reason": "no ledger record with this id — record left untouched"})
+            continue
+        from_state = existing.get("disposition")
+        # Axis: only a declined or triaged-out record recovers — any other state is skipped
+        # and left as it is (a filed record is never re-written).
+        if from_state not in guardian_ledger.RECOVERABLE_STATES:
+            skipped.append({"id": rid, "from": from_state, "to": "filed",
+                            "reason": "%s cannot be recovered to filed — only declined or "
+                                      "triaged-out; record left untouched" % from_state})
+            continue
+        working, result = guardian_ledger.advance(
+            new_records, rid, "filed", issue=issue, sweepId=sweep_id)
+        if not result.get("ok"):
+            skipped.append({"id": rid, "from": from_state, "to": "filed",
+                            "reason": "advance refused: %s" % result.get("reason")})
+            continue
+        new_records = working
+        applied.append({"id": rid, "from": from_state, "to": "filed", "issue": issue})
+    return new_records, applied, skipped
+
+
+def commit_ledger(cwd, bundle, dispositions, root=None, recoveries=None):
     """Advisor-only ledger commit — the sole writer of `guardian/ledger.md`.
 
     Run inline at consult/triage AFTER `finalize`. The fenced JSON block and the
@@ -1758,6 +1851,13 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
     `id` — via `guardian_ledger.advance`. Closures and decisions are recomputed on every
     write attempt from the records read in that attempt (`_write_locked(recompute=...)`).
 
+    `recoveries` (optional; CLI `--recoveries <file>`) is a list of `{"id", "issue"}` for
+    `declined` / `triaged-out` records that no longer surface, so no disposition can name them.
+    Each advances to `filed` under that issue (`_apply_recoveries`, after the decisions, against
+    their output) and is then scored `for` its lens. A malformed input returns
+    `reason: invalid-recoveries` (see `validate_recoveries`) before the lock, writing nothing. The
+    result carries `recoveries` (applied) and `recoveriesSkipped`, both `[]` when none.
+
     Fail-closed on opaque/unreadable ledgers, stale bundles (latest.json moved on), and
     transient roster-read failures. Idempotent for a same-identity re-run: already-
     advanced records are skipped by `_close_filed_records`, and `append_sweep` dedups
@@ -1765,6 +1865,9 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
     ok, errors = validate_dispositions(bundle, dispositions)
     if not ok:
         return {"ok": False, "reason": "invalid-dispositions", "errors": errors}
+    ok, errors = validate_recoveries(bundle, recoveries)
+    if not ok:
+        return {"ok": False, "reason": "invalid-recoveries", "errors": errors}
 
     lock_path = guardian_store.sweep_lock_path(cwd, root)
     try:
@@ -1817,16 +1920,20 @@ def commit_ledger(cwd, bundle, dispositions, root=None):
         sweep_id = bundle.get("sweepId") or guardian_ledger.make_sweep(
             bundle.get("sweptSha") or "unknown")["sweepId"]
         decisions = _decisions_from_dispositions(dispositions)
-        outcome = {"advances": [], "decisions": [], "decisionsSkipped": []}
+        outcome = {"advances": [], "decisions": [], "decisionsSkipped": [],
+                   "recoveries": [], "recoveriesSkipped": []}
 
         def recompute(fresh_records):
             # Runs on every write attempt against the records just read from disk, so an
             # edit made after the read above is built upon, never overwritten.
             closed, advances = _close_filed_records(
                 fresh_records, bundle.get("filedObservations"), sweep_id)
-            proposed, applied, skipped = _apply_decisions(
+            decided, applied, skipped = _apply_decisions(
                 closed, decisions, bundle.get("surfaced"), sweep_id)
-            outcome.update(advances=advances, decisions=applied, decisionsSkipped=skipped)
+            proposed, recovered, recovery_skipped = _apply_recoveries(
+                decided, recoveries, sweep_id)
+            outcome.update(advances=advances, decisions=applied, decisionsSkipped=skipped,
+                           recoveries=recovered, recoveriesSkipped=recovery_skipped)
             return proposed
 
         # R2 — roster tri-state: read failure fails the commit closed (retryable).
@@ -1873,6 +1980,7 @@ def main(argv=None):
     clp.add_argument("--root", default=None)
     clp.add_argument("--bundle", required=True)
     clp.add_argument("--dispositions", required=True)
+    clp.add_argument("--recoveries", default=None)
 
     vp = sub.add_parser("verify-config")
     vp.add_argument("--cwd", default=".")
@@ -1893,7 +2001,12 @@ def main(argv=None):
                 bundle = json.load(fh)
             with open(args.dispositions, encoding="utf-8") as fh:
                 dispositions = json.load(fh)
-            out = commit_ledger(args.cwd, bundle, dispositions, root=args.root)
+            recoveries = None
+            if args.recoveries is not None:
+                with open(args.recoveries, encoding="utf-8") as fh:
+                    recoveries = json.load(fh)
+            out = commit_ledger(args.cwd, bundle, dispositions, root=args.root,
+                                recoveries=recoveries)
         else:
             # Standalone CLI has no lenses — skip spawning the verify command.
             out = verify_config(args.cwd, root=args.root, needed_facts=set())
