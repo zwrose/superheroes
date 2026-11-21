@@ -26,6 +26,15 @@ Check these in a consuming project when it adopts the next release. Each step na
 
 - **After switching.** **Nothing is owed by a caller: a seat map with a seat in a maker's family other than the author's (one the map's `makerFamilies` or the session's makers name) now carries a `maker-family` violation for that seat, so its certificate reads `-constraint-violated` where it read the plain shape or `-degraded` before. A map whose `makerFamilies` is malformed never has its `critical-diversity` excused by liveness, so some such maps that read clean now read `-constraint-violated` too.** No key, token or result shape changes. See [Seat map: a seat in any maker's family is a maker seat](#seat-map-a-seat-in-any-makers-family-is-a-maker-seat).
 - **After switching.** **Nothing is owed: `review_record.py` gains the verb `read-all --pr <n>`, and `read` answers as before.** The advisor's gardening pass now gathers every review record of a PR with it. See [Review record: read-all returns every review record of a PR](#review-record-read-all-returns-every-review-record-of-a-pr).
+- **After switching.** **Nothing is owed: a PR that conflicts with its base now goes back to its builder, and the advisor no longer commits a conflict resolution.** No command, argument or result changes. See [Merge train: a conflicting PR goes back to its builder](#merge-train-a-conflicting-pr-goes-back-to-its-builder).
+
+### Merge train: a conflicting PR goes back to its builder
+
+- **What changes in the advisor's practice.** When an open PR, a single PR or a layer of a stack, conflicts with its base, or bringing it current meets a conflict, the advisor sends it back to its builder (a cloud lane by a send-back order in the issue's STATE line plus the relay, a local lane by its own session, a lane whose session is gone by an adoption). The builder makes the merge commit, runs the returning review on the merge and hands back. Before, duty 6 listed conflict resolution under an advisor-authored recipe among the mechanical duties a subagent could do, and the merge-train guide sent only a conflicting stack layer back.
+- **Why.** The head-coverage check clears only a move the builder made, so an advisor-authored resolution read `needs-review`, put the PR outside the owner's merge word, and sent its sheet back unsigned though nothing material changed.
+- **Unchanged.** The red train's craft fix and a union fix riding the last open PR.
+- Homes: `skills/showrunner/SKILL.md` duty 6, `skills/showrunner/reference/merge-train.md` § A PR that conflicts with its base goes back to its builder, `skills/showrunner/reference/excuses.md`, `rubric/review-discipline.md` (post-handback merges).
+- Replacement. None: no key, token, argument or result shape changes.
 
 ### Seat map: a seat in any maker's family is a maker seat
 

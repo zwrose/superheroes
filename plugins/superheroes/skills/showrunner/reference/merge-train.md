@@ -3,6 +3,7 @@
 - [The merge train](#the-merge-train)
 - [A merge train's "green" includes post-merge `main` CI](#a-merge-trains-green-includes-post-merge-main-ci)
 - [Union fixes ride the last *open* PR, disclosed](#union-fixes-ride-the-last-open-pr-disclosed)
+- [A PR that conflicts with its base goes back to its builder](#a-pr-that-conflicts-with-its-base-goes-back-to-its-builder)
 - [Merging a stack](#merging-a-stack)
 - [Merging a spec PR](#merging-a-spec-pr)
 - [Selecting the run to watch](#selecting-the-run-to-watch)
@@ -94,6 +95,33 @@ follow-up PR gets its own sheet and asks through it. Report it in the thread lik
 an assertion race. While a lane is still open, close it with a disclosed integration commit on the
 last open PR's branch; once the last lane has merged, there is nothing left to absorb into, so
 close it with a disclosed follow-up PR from the failing head instead.
+
+## A PR that conflicts with its base goes back to its builder
+
+**A PR that conflicts with its base goes back to its builder.** When an open PR, a single PR or a
+layer of a stack, conflicts with its base, or bringing it current meets a conflict, send it back to
+its builder, who makes the merge commit, runs the returning review on the merge and hands back. The
+advisor never commits a conflict resolution itself, and no subagent commits one under its recipe.
+
+**Why.** The head-coverage check (`lib/head_coverage.py`) clears only a move the builder made, so a
+resolution the advisor commits reads `needs-review`, puts the PR outside the owner's merge word, and
+sends its sheet back unsigned though nothing material changed.
+
+**How it goes back, by kind of lane.** The conflict is the fix order:
+
+- **A cloud lane.** Write the send-back order into the issue's STATE line, then send it to the
+  lane's live session through the relay, recording the vet `not-ready` first, as
+  `orchestration.md` § Adoption mechanics, *Send a NOT-READY back to a live original builder*, says.
+- **A local lane.** Send the order to the lane's own session while it is still live.
+- **A lane whose session is gone.** Launch an adoption of the PR's branch (a premise with
+  `adoptsBranch` and `adoptsHead`), by `rubric/launch-doctrine.md` § Recovery and
+  `orchestration.md` § Adoption mechanics.
+
+The builder merges the base (for a stack layer, the layer below) into its branch with `--no-ff`,
+resolves the conflict in that merge commit, pushes it plainly, runs the returning review on the
+merge as its charter's post-handback loop grades it, and hands back. The PR then takes a fresh vet
+of its new head. This rule leaves unchanged the red train's craft fix and a union fix riding the
+last open PR (§ Union fixes ride the last *open* PR, disclosed).
 
 ## Merging a stack
 
@@ -363,7 +391,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 
    (2) **Coverage check, for every removed layer.** Run the head-coverage check and `outcome` on its
    new head, with its new base's tip as `--base`, as item 6 says. A layer GitHub left conflicting goes
-   back to its builder for a bring-current merge (item 6) and then takes this check.
+   back to its builder for a bring-current merge (item 6; [A PR that conflicts with its base goes back
+   to its builder](#a-pr-that-conflicts-with-its-base-goes-back-to-its-builder)) and then takes this
+   check.
    That merge puts a merge commit back into the layer, and the base still has its queue, so the
    remaining layers go through item 4 (a) to (f) again, as a whole, before step 3;
    the heads that straightening proves are the ones steps 3 to 7 use.
