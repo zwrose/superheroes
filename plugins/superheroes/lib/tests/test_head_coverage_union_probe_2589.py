@@ -466,10 +466,10 @@ def test_row_13_the_coverage_and_the_carry_check_both_prove_through_the_covered_
     coverage = run_check(repo, base, record, head, proof)
     assert coverage["answer"] == "proven" and tokens(coverage) == [HC.WHY_PROVEN_UNION]
     assert coverage["unionProbe"]["used"] is True and coverage["unionProbe"]["parent"] == s
-    assert run_check(repo, base, record, head)["answer"] == "needs-review"
+    assert run_check(repo, base, record, head)["answer"] == "judgement"
     carry = run_check(repo, base, carry_record, head, proof)
     assert carry["answer"] == "proven" and carry["unionProbe"]["used"] is True and carry["certified"] == s
-    assert run_check(repo, base, carry_record, head)["answer"] == "needs-review"
+    assert run_check(repo, base, carry_record, head)["answer"] == "judgement"
     moved = HC.outcome(coverage["answer"], "green", sheet="live", sheet_commit=s, head=head, carry_answer=carry["answer"])
     assert moved == {"outcome": "READY", "why": "covered", "review": "none", "sheet": "republish-carried"}
 
@@ -480,7 +480,7 @@ def test_row_13_a_one_byte_different_resolution_takes_the_sheet_down(tmp_path):
     coverage = run_check(repo, base, record, head, proof)
     carry = run_check(repo, base, carry_record, head, proof)
     for got in (coverage, carry):
-        assert got["answer"] == "needs-review" and got["unionProbe"]["reason"] == "other-tree" and got["unionProbe"]["used"] is False
+        assert got["answer"] == "judgement" and got["unionProbe"]["reason"] == "other-tree" and got["unionProbe"]["used"] is False
     moved = HC.outcome(coverage["answer"], "green", sheet="live", sheet_commit=s, head=head, carry_answer=carry["answer"])
     assert moved["outcome"] == "NOT-READY" and moved["sheet"] == "take-down"
 
