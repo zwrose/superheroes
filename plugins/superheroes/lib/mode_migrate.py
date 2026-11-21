@@ -497,6 +497,7 @@ def execute(migration, *, root=None):
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
+                              "asideTp": f.get("role") == ROLE_SET_ASIDE and f.get("family") == "test-pilot",
                               "preexisting": os.path.lexists(f["dst"])}
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
@@ -535,10 +536,9 @@ def execute(migration, *, root=None):
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         undeleted = []
         import leftover_settings
-        for f, entry in zip(journal["files"], migration.files):
+        for f in journal["files"]:
             # axis: a set-aside test-pilot profile that gained blocks or manifests since the plan stays, named as undeleted
-            if entry.get("family") == "test-pilot" and entry.get("role") == ROLE_SET_ASIDE \
-                    and leftover_settings._tp_artifacts_beside(f["src"]):
+            if f.get("asideTp") and leftover_settings._tp_artifacts_beside(f["src"]):
                 undeleted.append(f["src"])
             elif not f.get("keep"):
                 _remove(f["src"])
@@ -563,8 +563,9 @@ def _finish_flip(files):
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
-        if f.get("keep"):
-            # axis: a kept source stays; recovery only makes sure its copy exists
+        import leftover_settings
+        if f.get("keep") or (f.get("asideTp") and leftover_settings._tp_artifacts_beside(f["src"])):
+            # axis: a kept source (or a set-aside test-pilot profile that gained artifacts) stays; recovery only makes sure its copy exists
             if not os.path.lexists(f["dst"]):
                 _copy_bytes(f["src"], f["dst"])
             continue
