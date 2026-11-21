@@ -539,7 +539,9 @@ def _finish_flip(files):
         if os.path.isfile(f["dst"]):
             os.remove(f["src"])           # dst already present — just drop the source
         elif not os.path.lexists(f["dst"]):
-            core_md.relocate_file(f["src"], f["dst"])  # the one relocate primitive (copy + unlink)
+            # axis: recovery copies byte for byte as the flip does, then drops the source
+            _copy_bytes(f["src"], f["dst"])
+            os.remove(f["src"])
         # axis: a destination that is present but not a regular file is no copy, so the source stays
     _drop_snapshots(files)
 
