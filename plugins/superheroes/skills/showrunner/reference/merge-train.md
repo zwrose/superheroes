@@ -341,7 +341,9 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    published gives it) and with the same `--union-proof` as the first check when the vet recorded a
    tested-union proof (the vet receipt's head-coverage paragraph), and pass that answer to `outcome`
    as `--carry-answer`, adding
-   `--carry-judged-clear` when it is a judgement you cleared. A live sheet whose head moved, with no
+   `--carry-judged-clear` when it is a judgement you cleared. Both checks take the same
+   `--builder-author`, and a carry cleared as a `conflict-fix` judgement is republished carried with
+   `carriedForward.conflictFix`. A live sheet whose head moved, with no
    `--carry-answer`, is a usage error. The outcome's `sheet` action decides what happens to the sheet:
 
    - `republish-carried`: republish the stack's single sheet with `carriedForward.fromSheet` naming its
