@@ -409,3 +409,47 @@ def test_recover_finishes_after_the_commit(w):
         assert not os.path.lexists(f["src"]), f["src"]
         assert os.path.isfile(f["dst"]), f["dst"]
     assert not os.path.exists(os.path.join(w.store_dir(), "migration-journal.json"))
+
+
+def _alias_config_to_claude(w):
+    """Make the project store's config directory a link to the repository's .claude directory."""
+    claude = w.inrepo()
+    os.makedirs(claude, exist_ok=True)
+    config = os.path.dirname(w.d_gl("x"))
+    os.makedirs(os.path.dirname(config), exist_ok=True)
+    os.symlink(claude, config, target_is_directory=True)
+    return claude
+
+
+def test_aliased_primary_decisions_counts_as_carried(w):
+    # axis: a decisions carry whose source and target are one file is already carried, so a second copy is set aside, never carried over it
+    w.register(mr.GLOBAL)
+    _alias_config_to_claude(w)
+    primary = _put(w.inrepo("review-decisions.json"), '{"primary": true}\n')
+    legacy = _put(os.path.join(w.entry(w.rr), "review-decisions.json"), '{"legacy": true}\n')
+    m = w.plan(mr.IN_REPO)
+    carried = [f for f in m.files if f.get("role") == "carry" and f.get("family") == "decisions"]
+    assert carried == []
+    assert [f["src"] for f in m.files if f.get("role") == "set-aside"] == [legacy]
+    assert mm.execute(m, root=w.root)["status"] == "done"
+    with open(primary, encoding="utf-8") as fh:
+        assert fh.read() == '{"primary": true}\n'
+
+
+def test_every_decisions_slot_aliased_keeps_the_file(w):
+    # axis: with all three decisions slots naming one file, the flip neither carries nor sets it aside, and the file survives
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    claude = _alias_config_to_claude(w)
+    entry = w.entry(w.rr)
+    for name in os.listdir(entry):
+        os.replace(os.path.join(entry, name), os.path.join(claude, name))
+    os.rmdir(entry)
+    os.symlink(claude, entry, target_is_directory=True)
+    assert ls._legacy_entry_dir(w.cwd, w.rr) is not None
+    decisions = _put(w.inrepo("review-decisions.json"), '{"only": true}\n')
+    m = w.plan(mr.GLOBAL)
+    assert [f for f in m.files if f.get("family") == "decisions"] == []
+    assert mm.execute(m, root=w.root)["status"] == "done"
+    with open(decisions, encoding="utf-8") as fh:
+        assert fh.read() == '{"only": true}\n'

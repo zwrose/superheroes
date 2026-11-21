@@ -235,14 +235,20 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
         return bool(path) and os.path.lexists(path)
 
     def leave(path, why):
+        # a copy left in place is reserved, so no later entry reaches it through another spelling
+        used.add(real(path))
         left.append({"path": path, "why": why})
 
     def take(src, dst, role, family):
         # axis: a settings entry never shares a resolved file with another entry, nor its dst with its own src
         targets = [real(src)] + ([real(dst)] if dst is not None else [])
-        if any(t in used for t in targets) or len(set(targets)) < len(targets):
+        if any(t in used for t in targets):
             leave(src, WHY_SHARED_PATH)
             return False
+        if len(set(targets)) < len(targets):
+            # axis: a carry whose source already is the target's file is already carried, and the file stays reserved
+            leave(src, WHY_SHARED_PATH)
+            return role == ROLE_CARRY
         used.update(targets)
         entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family})
         return True
