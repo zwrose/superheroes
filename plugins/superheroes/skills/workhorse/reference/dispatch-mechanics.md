@@ -5,16 +5,17 @@
 3. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
 4. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
 5. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
-6. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
-7. [Supervised review dispatch](#supervised-review-dispatch)
+6. [Name the worktree in every git call](#name-the-worktree-in-every-git-call)
+7. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+8. [Supervised review dispatch](#supervised-review-dispatch)
    - [Result channels](#result-channels)
    - [The conformance probe](#the-conformance-probe)
-8. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
-9. [Supervised write dispatch](#supervised-write-dispatch)
-10. [Declared items](#declared-items)
-11. [Refusal streak — shell health](#refusal-streak--shell-health)
-12. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
-13. [Check-runner — a plain shell task](#check-runner--a-plain-shell-task)
+9. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+10. [Supervised write dispatch](#supervised-write-dispatch)
+11. [Declared items](#declared-items)
+12. [Refusal streak — shell health](#refusal-streak--shell-health)
+13. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+14. [Check-runner — a plain shell task](#check-runner--a-plain-shell-task)
 
 ---
 
@@ -256,6 +257,18 @@ path or checkout — **disclose it and hold the seats off that tree**; never pro
 readers.
 
 **When the probe finishes**, remove the probe worktree with `git worktree` verbs — never `rm`.
+
+## Name the worktree in every git call
+
+A session's working folder can reset between commands: the shell's current directory can return to
+the project root mid-session with no notice, so a bare `git apply` or `git commit` then lands on the
+primary checkout, not the build worktree. **Every mutating git call in a worktree build names the
+worktree** (`git -C <worktree> …`). A `cd` holds only within the call that makes it, and a script
+sets its own directory before it does anything. `round_driver.py next` takes the repository root
+from the process's working folder unless the session recorded one, so run each `next` call where its
+working folder is the build worktree: from a script that changes into the worktree first, never on
+the strength of a `cd` made in an earlier call. When unsure, check before the write:
+`git -C <worktree> rev-parse --show-toplevel` names the build worktree.
 
 ## Launch slice vs continuation slice
 
