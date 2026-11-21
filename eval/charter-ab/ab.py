@@ -331,7 +331,7 @@ def build_identity(a, stage, repo, stored):
     ident = {"base_ref": base[0], "base_sha": base[1], "candidate_ref": cand[0], "candidate_sha": cand[1],
              "charter": charter, "scenarios_file": scen_file,
              "scenarios_sha256": scen_sha, "role": role, "model": pick(a.model, "model", "opus"),
-             "judge_model": pick(a.judge_model, "judge_model", "gpt-6.1-sol"),
+             "judge_model": pick(a.judge_model, "judge_model", "gpt-6.2-sol"),
              "replicates": n_reps, "seed": pick(a.seed, "seed", 1882), "prompt_sha256": sha256_text(PROMPT),
              "plugin_dir": (stored or {}).get("plugin_dir")}  # seats/run: settled from the side worktrees
     return ident, scenarios
@@ -663,7 +663,7 @@ def build_parser():
     ap.add_argument("--scenarios", default=None, help="scenarios JSON (default scenarios/showrunner.json)")
     ap.add_argument("--run-dir", default=None, help="run dir outside the repo (default: a new temp dir)")
     ap.add_argument("--model", default=None, help="seat model (default opus)")
-    ap.add_argument("--judge-model", default=None, help="judge model (default gpt-6.1-sol)")
+    ap.add_argument("--judge-model", default=None, help="judge model (default gpt-6.2-sol)")
     ap.add_argument("--replicates", type=int, default=None, help="replicates per side (default env REPLICATES, else 3)")
     ap.add_argument("--jobs", type=int, default=4, help="concurrent seats, capped at 4")
     ap.add_argument("--judge-jobs", type=int, default=3)

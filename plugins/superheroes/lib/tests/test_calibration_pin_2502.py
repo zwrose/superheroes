@@ -279,7 +279,7 @@ def test_the_pin_reads_the_core_the_storage_mode_selects(repo, tmp_path):
     _put(stale, core_md.render_core(facts, "confirmed", "2026-06-26", "2026-06-26"))
     _put(os.path.join(os.path.dirname(stale), "review-crew.md"), _LAYER_TEXT)  # a stale in-repo layer beside it
     assert mode_registry.write_registry(repo, mode_registry.GLOBAL, "rk") is not None
-    assert calibration_read.resolved_paths(repo)[0] == stale  # premise: the dispatch resolver prefers the stale copy
+    assert calibration_read.resolved_paths(repo)[0] == _core_file(repo)  # the dispatch resolver now takes the mode-selected core too (#2536)
     assert core_md.read_risk_areas(repo)["areas"] == [_SECRETS, _PAYMENTS]  # the live readers take the global core
     pin = calibration_pin.capture(repo, _session(tmp_path, "a"))
     assert pin["files"]["core"]["source"] == _core_file(repo)
