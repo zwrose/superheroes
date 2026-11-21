@@ -100,12 +100,16 @@ close it with a disclosed follow-up PR from the failing head instead.
 
 **A PR that conflicts with its base goes back to its builder.** When an open PR, a single PR or a
 layer of a stack, conflicts with its base, or bringing it current meets a conflict, send it back to
-its builder, who makes the merge commit, runs the returning review on the merge and hands back. The
-advisor never commits a conflict resolution itself, and no subagent commits one under its recipe.
+its builder, who makes the merge commit, pushes it and hands back. The vet judges the builder's
+conflict fix first; a scoped returning review of the merge runs only when the vet calls the fix
+material, or when the head-coverage check answers `needs-review` for another reason. The advisor
+never commits a conflict resolution itself, and no subagent commits one under its recipe.
 
-**Why.** The head-coverage check (`lib/head_coverage.py`) clears only a move the builder made, so a
-resolution the advisor commits reads `needs-review`, puts the PR outside the owner's merge word, and
-sends its sheet back unsigned though nothing material changed.
+**Why.** The vet must be independent of whoever made the fix, and it must not judge a fix it made.
+A resolution the advisor commits is a fix by the seat that vets, so it has no independent judge,
+whatever the head-coverage check reads. A resolution by the builder has one: the check
+(`lib/head_coverage.py`) answers `judgement` (`conflict-fix`) for the vet to clear or call material,
+by the test in `vet-receipt.md` § A builder's code-conflict fix.
 
 **How it goes back, by kind of lane.** The conflict is the fix order:
 
@@ -121,9 +125,10 @@ sends its sheet back unsigned though nothing material changed.
   owner, stating both facts, and never resolve the conflict to get the launch through.
 
 The builder merges the base (for a stack layer, the layer below) into its branch with `--no-ff`,
-resolves the conflict in that merge commit, pushes it plainly, runs the returning review on the
-merge as its charter's post-handback loop grades it, and hands back. The PR then takes a fresh vet
-of its new head. This rule leaves unchanged the red train's craft fix and a union fix riding the
+resolves the conflict in that merge commit, pushes it plainly and hands back. The PR then takes a
+fresh vet of its new head, which judges the conflict fix first. The builder runs a scoped returning
+review of the merge, as its charter's post-handback loop grades it, only when the vet calls the fix
+material or the head-coverage check answers `needs-review` for another reason. This rule leaves unchanged the red train's craft fix and a union fix riding the
 last open PR (§ Union fixes ride the last *open* PR, disclosed).
 
 ## Merging a stack

@@ -794,6 +794,10 @@ merged head, review the catch-up as a returning review, and re-run the handback 
 (`vet_slot.py handback --pr <n> --repo <owner/name>`, which refuses `stack-not-caught-up` until the
 pushed head holds the lower layer's current head; `rubric/native-stacks.md` § How a stack stays current).
 
+**A bring-current that fixes a code conflict is judged by the vet first.** Hand back the conflict-fix
+merge for the vet's judgement; run the scoped returning review only when the vet calls the fix
+material or the check answers `needs-review` for another reason (`skills/showrunner/reference/vet-receipt.md` § A builder's code-conflict fix).
+
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
 route, or a decision you cannot make, **park honestly with receipts**: what is done, what is
