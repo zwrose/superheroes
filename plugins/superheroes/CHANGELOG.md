@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.52.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.51.0...superheroes-v0.52.0) (2026-11-21)
+
+
+### Features
+
+* **superheroes:** a bring-current identical to the vet's tested union keeps the owner's merge word ([#2592](https://github.com/zwrose/superheroes/issues/2592)) ([dbf4e32](https://github.com/zwrose/superheroes/commit/dbf4e32f00c6cc4816cc4150a58ac442d5d756b0))
+* **superheroes:** an out-of-scope ruling and the advisor's bound are recorded decisions a review can check ([#2578](https://github.com/zwrose/superheroes/issues/2578)) ([cd94eaa](https://github.com/zwrose/superheroes/commit/cd94eaa6d7db7aff4ee3ca868b8b8963b26cbf4e))
+* **superheroes:** assemble per-PR upgrade note files into TRANSITION.md (layer 1 of 2) ([#2598](https://github.com/zwrose/superheroes/issues/2598)) ([9503083](https://github.com/zwrose/superheroes/commit/950308310c8531395a0f3b65baa265203ec0832a))
+* **superheroes:** each PR writes its upgrade note as its own file, checked in CI (layer 2 of 2) ([#2599](https://github.com/zwrose/superheroes/issues/2599)) ([0792be2](https://github.com/zwrose/superheroes/commit/0792be237103812bf7621f0db0972366b497ecd7))
+* **superheroes:** GPT-6.2 Sol becomes the codex default, GPT-6.2 Astra the ladder's top rung, Codex CLI floor 0.166.0 ([#2580](https://github.com/zwrose/superheroes/issues/2580)) ([0c53df6](https://github.com/zwrose/superheroes/commit/0c53df67d21a56a4956f6aaddba6af2e6f9da2a1))
+* **superheroes:** one review-record read returns every review record of a PR ([#2577](https://github.com/zwrose/superheroes/issues/2577)) ([60c7255](https://github.com/zwrose/superheroes/commit/60c7255d5582dc118d7ddc1c0c39e9c80820542a))
+
+
+### Bug Fixes
+
+* **superheroes:** a cloud build never moves its session into its build worktree ([#2584](https://github.com/zwrose/superheroes/issues/2584)) ([24ef64a](https://github.com/zwrose/superheroes/commit/24ef64af9b51972d4a13ceaa42b5556b13ab0e93))
+* **superheroes:** a declined or triaged-out guardian finding advances to filed when an issue is filed for it ([#2576](https://github.com/zwrose/superheroes/issues/2576)) ([cd31e4b](https://github.com/zwrose/superheroes/commit/cd31e4b89276c9d19ef1be1009f46e2df66c3907))
+* **superheroes:** a PR that conflicts with its base goes back to its builder ([#2591](https://github.com/zwrose/superheroes/issues/2591)) ([66e590c](https://github.com/zwrose/superheroes/commit/66e590ca23df03baae0c05517463dec81df193f0))
+* **superheroes:** a seat in any maker's family counts as a maker seat in the seat-map check ([#2575](https://github.com/zwrose/superheroes/issues/2575)) ([51c7899](https://github.com/zwrose/superheroes/commit/51c7899f624b02c8774d01197a178d37520cd952))
+* **superheroes:** a transit-redacted break-it test never forces a review session to be abandoned ([#2586](https://github.com/zwrose/superheroes/issues/2586)) ([c848a27](https://github.com/zwrose/superheroes/commit/c848a275cba118ecbaecf1e8d4e644331cb9c12b))
+* **superheroes:** configure, the doctor and adopt-version name a seat pin whose seat no longer exists ([#2579](https://github.com/zwrose/superheroes/issues/2579)) ([4f45d48](https://github.com/zwrose/superheroes/commit/4f45d48d0f9d2a78a16827dfdce3f7890319a0dd))
+* **superheroes:** review setup and the calibration-read stamp use the core.md the storage mode selects ([#2574](https://github.com/zwrose/superheroes/issues/2574)) ([b9e9967](https://github.com/zwrose/superheroes/commit/b9e9967fcc51428324f713606333ade865cf58e3))
+* **superheroes:** reviews read the review-crew layer and core.md the storage setting picks ([#2585](https://github.com/zwrose/superheroes/issues/2585)) ([0e2baf7](https://github.com/zwrose/superheroes/commit/0e2baf76456b34f67bf67dd961f020cd2b73c35a))
+* **superheroes:** the Bash timeout hook stops making auto mode ask the owner to approve Bash calls ([#2564](https://github.com/zwrose/superheroes/issues/2564)) ([c23306b](https://github.com/zwrose/superheroes/commit/c23306b455757921bbd22768e913df40e4750533))
+* **superheroes:** the cloud setup stamp counts only what a session reads before the pin swap ([#2569](https://github.com/zwrose/superheroes/issues/2569)) ([d094c41](https://github.com/zwrose/superheroes/commit/d094c41d7bd7e410b4b442e876144485366e72a6))
+* **superheroes:** the head-coverage check proves a stack layer after the layer below is rewritten ([#2562](https://github.com/zwrose/superheroes/issues/2562)) ([ab15300](https://github.com/zwrose/superheroes/commit/ab15300e18082d96f99237bcb10ee3d2315d12fc))
+* **superheroes:** the pin writer refuses a --commit it would not use ([#2570](https://github.com/zwrose/superheroes/issues/2570)) ([8e4fcbd](https://github.com/zwrose/superheroes/commit/8e4fcbd461219b563747e96e320988665729cf42))
+
+
+### Chores
+
+* **superheroes:** pay four small cleanups re-armed since gardening pass 6 ([#2571](https://github.com/zwrose/superheroes/issues/2571)) ([9bfebb6](https://github.com/zwrose/superheroes/commit/9bfebb63ab05e4c36e65083de335170d4d6760f3))
+
 ## [0.51.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.50.0...superheroes-v0.51.0) (2026-11-17)
 
 
