@@ -434,8 +434,7 @@ def execute(migration, *, root=None):
         for n, f in enumerate(journal["files"]):
             if f["preexisting"] and os.path.isfile(f["dst"]):
                 f["snapshot"] = os.path.join(store_dir, _SNAPSHOT_DIRNAME, "%03d" % n)
-                with open(f["dst"], encoding="utf-8") as fh:
-                    store_core.atomic_write(f["snapshot"], fh.read())
+                _copy_bytes(f["dst"], f["snapshot"])
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         aside = [f for f in migration.files if f.get("role") == ROLE_SET_ASIDE]
         if aside:
@@ -496,10 +495,18 @@ def _backout_flip(files):
         if f.get("preexisting"):
             snap = f.get("snapshot")
             if snap and os.path.isfile(snap):
-                with open(snap, encoding="utf-8") as fh:
-                    store_core.atomic_write(f["dst"], fh.read())
+                _copy_bytes(snap, f["dst"])
             continue
         _remove(f["dst"])  # sources untouched
+
+
+def _copy_bytes(src, dst):
+    """Copy src's exact bytes to dst, published by an atomic rename (no newline translation)."""
+    # axis: a snapshot and its restore keep every byte, CRLF and lone CR included
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    stage = "%s.tmp-%d" % (dst, os.getpid())
+    shutil.copyfile(src, stage)
+    os.replace(stage, dst)
 
 
 def recover(cwd, *, root=None):

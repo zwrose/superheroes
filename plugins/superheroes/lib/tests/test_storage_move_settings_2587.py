@@ -528,3 +528,23 @@ def test_a_broken_target_never_sets_aside_the_only_regular_decisions_copy(w):
     m = w.enumerate(mr.GLOBAL)
     assert legacy not in [f["src"] for f in m.files]
     assert {"path": legacy, "why": "retained"} in mm.preview(m)["leftInPlace"]
+
+
+@pytest.mark.parametrize("original", [b'{"a": 1}\r\n{"b": 2}\r\n', b'{"a": 1}\r{"b": 2}\r'],
+                         ids=["crlf", "lone-cr"])
+def test_backout_restores_an_overwritten_destination_byte_for_byte(w, monkeypatch, original):
+    # axis: a flip that fails after overwriting a destination puts back its exact bytes, line endings included
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    _put(w.inrepo(_DEC), '{"in": true}\n')
+    dst = w.d_gl(_DEC)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "wb") as fh:
+        fh.write(original)
+    m = w.plan(mr.GLOBAL)
+    monkeypatch.setattr(mm, "_commit_registry", lambda *a, **k: False)
+    assert mm.execute(m, root=w.root)["status"] == "blocked"
+    with open(dst, "rb") as fh:
+        assert fh.read() == original
+    assert not os.listdir(os.path.join(w.store_dir(), mm._SNAPSHOT_DIRNAME))
