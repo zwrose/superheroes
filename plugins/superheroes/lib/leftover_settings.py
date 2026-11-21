@@ -224,13 +224,19 @@ def find(cwd, root=None, *, review_root=None, test_pilot_root=None):
             legacy=_slots(legacy_review[mode], legacy_review[other]), populated=populated)
 
         layer = os.path.join(d_m, _TEST_PILOT)
+        tp_legacy = _slots(legacy_tp[mode], legacy_tp[other])
+
+        def tp_vetoed(slot, layer=layer):
+            return _tp_artifacts_beside(slot) or not tp_layer_usable(layer)
+
         found += _gather(
             _slots(layer, legacy_tp[mode]),
             _slots(os.path.join(d_o, _TEST_PILOT), legacy_tp[other]),
             "test-pilot", aligned=aligned, layer_only=True, layer=layer,
-            legacy=_slots(legacy_tp[mode], legacy_tp[other]), populated=populated,
-            legacy_veto=lambda slot, layer=layer: (
-                _tp_artifacts_beside(slot) or not tp_layer_usable(layer)))
+            legacy=tp_legacy, populated=populated,
+            # axis: the present legacy test-pilot profiles are listed all together or none is, since store.resolve reads the first it finds and a retire must not change which
+            legacy_veto=lambda slot, pool=tp_legacy: any(
+                tp_vetoed(other_slot) for other_slot in [slot] + [p for p in pool if _present(p)]))
 
         dec_in = os.path.join(repo, _DEC_IN_REL)
         dec_gl = os.path.join(d_gl, _DECISIONS)

@@ -530,6 +530,75 @@ def test_a_broken_target_never_sets_aside_the_only_regular_decisions_copy(w):
     assert {"path": legacy, "why": "retained"} in mm.preview(m)["leftInPlace"]
 
 
+@pytest.mark.parametrize("vetoed", ["in-repo", "store-entry"])
+def test_a_kept_legacy_test_pilot_profile_keeps_its_sibling(w, vetoed):
+    # axis: when one present legacy test-pilot profile stays (blocks beside it), the other stays too, why kept-with-sibling, so a flip never changes which one store.resolve reads
+    _review_entry, tp_entry = _seed_in_repo(w)
+    in_repo = w.inrepo("test-pilot", "profile.md")
+    entry = os.path.join(tp_entry, "profile.md")
+    kept, sibling = (in_repo, entry) if vetoed == "in-repo" else (entry, in_repo)
+    _put(os.path.join(os.path.dirname(kept), "blocks", "b1.md"), "x\n")
+    pv = mm.preview(w.enumerate(mr.GLOBAL))
+    assert in_repo not in [s["from"] for s in pv["setAside"]]
+    assert entry not in [s["from"] for s in pv["setAside"]]
+    assert {"path": kept, "why": "has-artifacts"} in pv["leftInPlace"]
+    assert {"path": sibling, "why": "kept-with-sibling"} in pv["leftInPlace"]
+
+
+def test_unkept_legacy_test_pilot_profiles_are_set_aside_together(w):
+    # axis: with neither legacy test-pilot profile kept in place a flip sets both aside, as before
+    _review_entry, tp_entry = _seed_in_repo(w)
+    pv = mm.preview(w.enumerate(mr.GLOBAL))
+    aside = [s["from"] for s in pv["setAside"]]
+    assert w.inrepo("test-pilot", "profile.md") in aside
+    assert os.path.join(tp_entry, "profile.md") in aside
+    assert not [e for e in pv["leftInPlace"] if e["path"].endswith(os.path.join("test-pilot", "profile.md"))
+                or e["path"] == os.path.join(tp_entry, "profile.md")]
+
+
+def test_copy_bytes_in_a_cloud_session_refuses_a_calibration_path_before_writing(w, monkeypatch):
+    # axis: in a cloud session the snapshot/restore copy refuses a calibration path before creating any file, as atomic_write does
+    src = _put(os.path.join(str(w.tmp), "snap", "000"), "snapshot\n")
+    dst = _put(w.d_gl("core.md"), "current\n")
+    assert store_core.is_calibration_path(dst)
+    before = sorted(os.listdir(os.path.dirname(dst)))
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    with pytest.raises(store_core.CalibrationWriteRefused) as info:
+        mm._copy_bytes(src, dst)
+    assert str(info.value) == "%s: %s" % (store_core.CLOUD_REFUSAL_REASON, dst)
+    assert sorted(os.listdir(os.path.dirname(dst))) == before
+    assert _text(dst) == "current\n"
+
+
+def test_copy_bytes_fsyncs_the_stage_before_the_rename(w, monkeypatch):
+    # axis: the staged copy is fsynced before os.replace publishes it
+    src = _put(os.path.join(str(w.tmp), "snap", "000"), "snapshot\n")
+    dst = os.path.join(str(w.tmp), "out", "000")
+    calls = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(os, "replace", lambda a, b: (calls.append("replace"), real_replace(a, b))[1])
+    mm._copy_bytes(src, dst)
+    assert calls == ["fsync", "replace"]
+    assert _text(dst) == "snapshot\n"
+    assert os.listdir(os.path.dirname(dst)) == ["000"]
+
+
+def test_a_failed_copy_bytes_leaves_no_stage_file(w, monkeypatch):
+    # axis: a copy that fails after staging removes its stage file and re-raises
+    src = _put(os.path.join(str(w.tmp), "snap", "000"), "snapshot\n")
+    dst = _put(os.path.join(str(w.tmp), "out", "000"), "old\n")
+
+    def boom(a, b):
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError, match="rename failed"):
+        mm._copy_bytes(src, dst)
+    assert os.listdir(os.path.dirname(dst)) == ["000"]
+    assert _text(dst) == "old\n"
+
+
 @pytest.mark.parametrize("original", [b'{"a": 1}\r\n{"b": 2}\r\n', b'{"a": 1}\r{"b": 2}\r'],
                          ids=["crlf", "lone-cr"])
 def test_backout_restores_an_overwritten_destination_byte_for_byte(w, monkeypatch, original):

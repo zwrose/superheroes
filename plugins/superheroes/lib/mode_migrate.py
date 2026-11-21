@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -50,6 +51,7 @@ WHY_NOT_REGULAR = "not-a-regular-file"
 WHY_SHARED_PATH = "shared-path"
 WHY_RETAINED = "retained"
 WHY_HAS_ARTIFACTS = "has-artifacts"
+WHY_KEPT_WITH_SIBLING = "kept-with-sibling"
 _BACKUP_SUFFIX = "-storage-move"
 # Where a flip keeps the bytes of each destination it overwrites until it finishes or backs out.
 _SNAPSHOT_DIRNAME = "flip-snapshots"
@@ -300,14 +302,32 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     for family, layer, legacy in heroes:
         layer_moves = real(os.path.join(m_cal, layer)) in moved_srcs and (
             family != "test-pilot" or ls.tp_layer_usable(os.path.join(m_cal, layer)))
+        if family == "test-pilot":
+            # axis: the present legacy test-pilot profiles are set aside all together or none is, since store.resolve reads the first one it finds and a flip must not change which
+            present_tp = [p for p in legacy if present(p)]
+            whys, seen = {}, set()
+            for path in present_tp:
+                if not _is_regular(path):
+                    whys[path] = WHY_NOT_REGULAR
+                elif ls._tp_artifacts_beside(path):
+                    # axis: a legacy test-pilot profile with blocks or manifests beside it stays, since store.resolve finds them through it
+                    whys[path] = WHY_HAS_ARTIFACTS
+                elif not layer_moves:
+                    whys[path] = WHY_ONLY_COPY
+                elif real(path) in used or real(path) in seen:
+                    whys[path] = WHY_SHARED_PATH
+                seen.add(real(path))
+            for path in present_tp:
+                if whys:
+                    leave(path, whys.get(path, WHY_KEPT_WITH_SIBLING))
+                else:
+                    take(path, None, ROLE_SET_ASIDE, family)
+            continue
         for path in legacy:
             if not present(path):
                 continue
             if not _is_regular(path):
                 leave(path, WHY_NOT_REGULAR)
-            elif family == "test-pilot" and ls._tp_artifacts_beside(path):
-                # axis: a legacy test-pilot profile with blocks or manifests beside it stays, since store.resolve finds them through it
-                leave(path, WHY_HAS_ARTIFACTS)
             elif layer_moves:
                 take(path, None, ROLE_SET_ASIDE, family)
             else:
@@ -501,12 +521,31 @@ def _backout_flip(files):
 
 
 def _copy_bytes(src, dst):
-    """Copy src's exact bytes to dst, published by an atomic rename (no newline translation)."""
+    """Copy src's exact bytes to dst, published by an atomic rename (no newline translation).
+
+    As durable as store_core.atomic_write: the staged file is fsynced before the rename. In a cloud
+    session a calibration path is refused before anything is written, as atomic_write refuses it."""
+    # axis: a cloud session never writes a calibration file, a snapshot copy included
+    if store_core.in_cloud_session() and store_core.is_calibration_path(dst):
+        raise store_core.CalibrationWriteRefused("%s: %s" % (store_core.CLOUD_REFUSAL_REASON, dst))
     # axis: a snapshot and its restore keep every byte, CRLF and lone CR included
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    stage = "%s.tmp-%d" % (dst, os.getpid())
-    shutil.copyfile(src, stage)
-    os.replace(stage, dst)
+    d = os.path.dirname(os.path.abspath(dst)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, stage = tempfile.mkstemp(dir=d, prefix=".copy-bytes.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            with open(src, "rb") as inp:
+                shutil.copyfileobj(inp, out)
+            out.flush()
+            # axis: the staged file is fsynced before the rename, so a crash never publishes a short snapshot
+            os.fsync(out.fileno())
+        os.replace(stage, dst)
+    except BaseException:
+        try:
+            os.unlink(stage)
+        except OSError:
+            pass
+        raise
 
 
 def recover(cwd, *, root=None):

@@ -979,6 +979,33 @@ def test_cli_list_retire_restore_and_usage(w, monkeypatch, capsys):
     capsys.readouterr()
 
 
+def _two_test_pilot_profiles(w):
+    """Recorded global with a usable moving layer, a stale unified copy, and both legacy test-pilot
+    profiles (in the repo and in the store entry); returns (stale_layer, in_repo_profile, entry_profile)."""
+    w.register(mr.GLOBAL)
+    _put(w.d_gl("core.md"), _CORE)
+    _put(w.d_gl("test-pilot.md"), _PILOT)
+    stale_layer = _put(w.d_in("test-pilot.md"), _PILOT + "stale layer\n")
+    in_repo = _put(_tp_profile(w, "in-repo"), _PILOT + "repo profile\n")
+    entry = _put(_tp_profile(w, "store-entry"), _PILOT + "entry profile\n")
+    return stale_layer, in_repo, entry
+
+
+@pytest.mark.parametrize("vetoed", ["in-repo", "store-entry"])
+def test_a_vetoed_legacy_test_pilot_profile_vetoes_its_sibling(w, vetoed):
+    # axis: when one present legacy test-pilot profile is vetoed (blocks beside it), no legacy test-pilot profile is listed, so a retire never changes which one store.resolve reads
+    stale_layer, in_repo, entry = _two_test_pilot_profiles(w)
+    blocks = os.path.join(os.path.dirname(in_repo if vetoed == "in-repo" else entry), "blocks")
+    _put(os.path.join(blocks, "b1.md"), "x\n")
+    assert w.paths() == [stale_layer]
+
+
+def test_unvetoed_legacy_test_pilot_profiles_are_listed_together(w):
+    # axis: with neither legacy test-pilot profile vetoed both are listed, as before; the unified copy is unaffected
+    stale_layer, in_repo, entry = _two_test_pilot_profiles(w)
+    assert w.paths() == sorted([stale_layer, in_repo, entry])
+
+
 def test_placeholder_test_pilot_layer_never_retires_its_legacy_profile(w):
     # axis: a legacy test-pilot profile is listed only while the layer that replaces it carries the config block store.resolve reads
     left = _everything_left_behind(w)
