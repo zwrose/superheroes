@@ -49,6 +49,7 @@ WHY_ONLY_COPY = "only-copy"
 WHY_NOT_REGULAR = "not-a-regular-file"
 WHY_SHARED_PATH = "shared-path"
 WHY_RETAINED = "retained"
+WHY_HAS_ARTIFACTS = "has-artifacts"
 _BACKUP_SUFFIX = "-storage-move"
 # Where a flip keeps the bytes of each destination it overwrites until it finishes or backs out.
 _SNAPSHOT_DIRNAME = "flip-snapshots"
@@ -304,6 +305,9 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
                 continue
             if not _is_regular(path):
                 leave(path, WHY_NOT_REGULAR)
+            elif family == "test-pilot" and ls._tp_artifacts_beside(path):
+                # axis: a legacy test-pilot profile with blocks or manifests beside it stays, since store.resolve finds them through it
+                leave(path, WHY_HAS_ARTIFACTS)
             elif layer_moves:
                 take(path, None, ROLE_SET_ASIDE, family)
             else:
