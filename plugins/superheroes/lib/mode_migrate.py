@@ -216,12 +216,13 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     """The settings entries (#2587) a flip out of `current` adds after today's `files`, and the
     copies it leaves in place: ([entry], [{"path", "why"}]). Nothing is created or written.
 
-    Decisions: the first present regular M-side copy is carried to the target's first slot; every
+    Decisions: the M-side copy read now (review_store.resolve) is carried to the target's first slot; every
     other present regular M-side copy, and the target-side legacy review-entry copy when the target
-    is global, is set aside. Any present decisions copy that ends in no entry (as source or as the
-    carry's replaced destination) and in no other left-in-place row is named with why `retained`.
-    Legacy profiles: set aside when the same hero's unified layer moves in
-    today's entries, else left in place as the only copy. A present path that is not a regular file
+    is global, is set aside. When the copy read now is not on the M side, nothing is carried. Any present
+    decisions copy that ends in no entry (as source or as the carry's replaced destination) and in no other
+    left-in-place row is named with why `retained`.
+    Legacy profiles: set aside when the same hero's unified layer moves in today's entries and core.md
+    is populated, else left in place as the only copy. A present path that is not a regular file
     is never moved."""
     import calibration_paths
     import leftover_settings as ls
@@ -273,28 +274,20 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
     m_side = [dec_in] if to_global else [dec_gl, dec_legacy]
     t_first = dec_gl if to_global else dec_in
     carried = False
-    isf = os.path.isfile
-    IN, GL = mode_registry.IN_REPO, mode_registry.GLOBAL
-    l_in = isf(os.path.join(_in_repo_cal_dir(cwd), "review-crew.md"))
-    l_gl = isf(os.path.join(_global_cal_dir(cwd, root), "review-crew.md"))
-    lg_in = isf(os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE))
-    lg_gl = bool(review_entry) and isf(os.path.join(review_entry, review_store.FILENAMES["profile"]))
-    moves = real(os.path.join(m_cal, "review-crew.md")) in {real(f["src"]) for f in files}
-
-    def review_side(mode, li, lgl, lgi, lgg):
-        # calibration_resolve's order on regular files: the mode's own layer, the in-repo layer, the in-repo
-        # legacy profile, the global layer, the global legacy profile
-        if li if mode == IN else lgl:
-            return mode
-        return next((s for found, s in ((li, IN), (lgi, IN), (lgl, GL), (lgg, GL)) if found), None)
-
-    target = GL if to_global else IN
-    before = review_side(current, l_in, l_gl, lg_in, lg_gl)
-    after = review_side(target, (l_in and not moves) or (moves and not to_global),
-                        (l_gl and not moves) or (moves and to_global), lg_in and not moves, lg_gl and not moves)
-    # axis: decisions follow the review calibration that is read: they are carried only when the flip makes the
-    # target side's calibration the one read (or none is read), and stay where they are otherwise
-    dec_stays = after not in (target, None) or before == target
+    # axis: the decisions copy read now comes from review_store.resolve (calibration_resolve's order, its one
+    # home); the flip carries only that copy, and never carries any copy over it
+    try:
+        import calibration_resolve
+        cal = calibration_resolve.resolve(cwd, root=root, legacy_root=review_root, heal=False)
+        cal_file = cal.get("dispatch_layer") or cal.get("legacy_path") if cal.get("exists") else None
+        read_now = review_store.resolve(cwd, "decisions", legacy_root=review_root, registry_root=root)["path"]
+    except Exception:
+        cal_file = read_now = None
+    read_now = real(read_now) if read_now and os.path.isfile(read_now) else None
+    # axis: decisions are carried only when the calibration file read now leaves its place in this flip
+    dec_stays = read_now is not None and (read_now not in {real(p) for p in m_side if present(p)} or not (
+        cal_file and real(cal_file) in {real(f["src"]) for f in files}))
+    m_side.sort(key=lambda p: bool(p) and real(p) != read_now)
     for path in m_side:
         if not present(path):
             continue
@@ -328,8 +321,13 @@ def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root
          (os.path.join(repo, ls._LEGACY_TP_IN_REL),
           os.path.join(tp_entry, ls._LEGACY_TP_STORE_FILENAME) if tp_entry else None)),
     )
+    try:
+        core_populated = not core_md.core_facts_are_empty(core_md.read(cwd, root, persist_backfill=False))
+    except Exception:
+        core_populated = False
     for family, layer, legacy in heroes:
-        layer_moves = real(os.path.join(m_cal, layer)) in moved_srcs and (
+        # axis: a legacy profile is set aside only while a populated core.md supplies its facts (find's gate); else it stays as only-copy
+        layer_moves = core_populated and real(os.path.join(m_cal, layer)) in moved_srcs and (
             family != "test-pilot" or ls.tp_layer_usable(os.path.join(m_cal, layer)))
         if family == "test-pilot":
             # axis: the present legacy test-pilot profiles are set aside all together or none is, since store.resolve reads the first one it finds and a flip must not change which

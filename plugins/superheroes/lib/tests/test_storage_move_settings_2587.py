@@ -204,20 +204,22 @@ def test_in_repo_to_global_leaves_no_listed_kind_behind(w):
 # --- 2. global -> in-repo ------------------------------------------------------------------------
 
 def test_global_to_in_repo_leaves_no_listed_kind_behind(w):
-    # axis: the mirror flip carries the decisions to the repo and sets every stale copy aside
+    # axis: the mirror flip carries the decisions read now to the repo (the global store reads the legacy
+    # entry's copy first) and sets every other copy aside
     review_entry, tp_entry = _seed_global(w)
     res = mm.execute(w.plan(mr.IN_REPO), root=w.root)
     assert res == {"status": "done"}
     assert mr.resolve(w.cwd, root=w.root)["mode"] == mr.IN_REPO
     assert w.find()["files"] == []
-    assert _text(w.inrepo(_DEC)) == '{"global": true}\n'
+    assert _text(w.inrepo(_DEC)) == '{"stale": "entry"}\n'
     assert not os.path.lexists(w.d_gl(_DEC))
+    assert not os.path.lexists(os.path.join(review_entry, _DEC))
     folder = w.backup_folders()[0]
     manifest = json.loads(_text(os.path.join(folder, ls.MANIFEST_FILENAME)))
     assert manifest["schema"] == ls.MANIFEST_SCHEMA
     assert manifest["mode"] == mr.GLOBAL
     assert sorted(e["from"] for e in manifest["entries"]) == sorted([
-        os.path.join(review_entry, _DEC),
+        w.d_gl(_DEC),
         os.path.join(review_entry, "review-profile.md"),
         w.inrepo("review-profile.md"),
         w.inrepo("test-pilot", "profile.md"),
@@ -228,7 +230,7 @@ def test_global_to_in_repo_leaves_no_listed_kind_behind(w):
         "04-profile.md", "05-profile.md", ls.MANIFEST_FILENAME]
     back = ls.restore(w.cwd, folder, root=w.root)
     assert back["status"] == "restored" and back["skipped"] == []
-    assert _text(os.path.join(review_entry, _DEC)) == '{"stale": "entry"}\n'
+    assert _text(w.d_gl(_DEC)) == '{"global": true}\n'
 
 
 # --- 3. preview ----------------------------------------------------------------------------------
@@ -666,7 +668,8 @@ def test_decisions_stay_when_the_target_side_is_already_read(w):
 
 @pytest.mark.parametrize("global_layer", [False, True])
 def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_layer):
-    # axis: decisions stay beside a legacy review profile that is still read after the flip, and move when a target-side layer is read instead
+    # axis: decisions move only when the calibration file read now moves; a legacy review profile that stays
+    # keeps its decisions beside it, whether or not a target-side layer already exists (never lost, FU1)
     w.register(mr.IN_REPO)
     _put(w.d_in("core.md"), _CORE)
     _put(w.inrepo("review-profile.md"), "## Threat model\nlegacy\n")
@@ -674,7 +677,4 @@ def test_decisions_follow_the_review_calibration_read_after_the_flip(w, global_l
     if global_layer:
         _put(w.d_gl("review-crew.md"), "## Focus hints\n- global\n")
     assert mm.execute(w.plan(mr.GLOBAL), root=w.root) == {"status": "done"}
-    if global_layer:
-        assert _text(w.d_gl(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.inrepo(_DEC))
-    else:
-        assert _text(w.inrepo(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.d_gl(_DEC))
+    assert _text(w.inrepo(_DEC)) == '{"in": true}\n' and not os.path.lexists(w.d_gl(_DEC))
