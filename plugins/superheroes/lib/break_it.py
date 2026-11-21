@@ -1599,6 +1599,19 @@ def transit_redacted(text):
     return isinstance(text, str) and _TRANSIT_PLACEHOLDER_RE.search(text) is not None
 
 
+def test_transit_damaged(finding, *texts):
+    """True when a break-it test is transit-damaged: ``finding`` (a dict) carries ``TRANSIT_FIELD`` True, or its
+    carried block's ``path``, ``run`` or ``content`` holds a transit placeholder, or any of ``texts`` does. A
+    non-dict ``finding`` is read for ``texts`` alone; the one rule every step that reads a test's bytes calls."""
+    if isinstance(finding, dict):
+        if finding.get(TRANSIT_FIELD) is True:
+            return True
+        block = carried_block(finding)[0]
+        if isinstance(block, dict) and any(transit_redacted(block.get(k)) for k in ("path", "run", "content")):
+            return True
+    return any(transit_redacted(text) for text in texts)
+
+
 def transit_not_run(head, block):
     """The ``transit-redacted`` not-run record for a block whose ``path``, ``run`` or ``content`` carries a transit
     redaction placeholder, else ``None``: the one rule for a caller that runs a block outside ``intercept``."""
@@ -1677,7 +1690,11 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
         refusal = None if block else parse_block(copy.get("suggestion"))[1]
         # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so a per-area finding still earns the scope exemption and reaches the verifier
         # axis: a seat-supplied TRANSIT_FIELD is left in place: it can only make a test not run, the fail-closed direction
-        transit = not refusal and copy.get(TRANSIT_FIELD) is True
+        # axis: a placeholder in the block's own text is a transit redaction too, stamped here so every later step reads it; the text is read only when the scrub flag is not set, because the adapter's scrub writes its own placeholder into a header it rewrote and that finding stays suggestion-redacted — see bite-proof record wo_a_2582_transit_restore
+        transit = not refusal and (copy.get(TRANSIT_FIELD) is True
+                                   or (copy.get(REDACTED_FIELD) is not True and test_transit_damaged(copy)))
+        if transit:
+            copy[TRANSIT_FIELD] = True
         redacted = not refusal and not transit and copy.get(REDACTED_FIELD) is True
         if transit:
             refusal = REASON_TRANSIT_REDACTED
@@ -1936,6 +1953,18 @@ def final_diff_candidates(repo_root, base, head, git=None):
     return candidates, None
 
 
+def _head_copy_transit_redacted(repo_root, head, path):
+    """True when the file at ``head:path`` carries a transit placeholder; False when git cannot read it (the
+    caller then keeps today's behaviour)."""
+    try:
+        blob = _git(repo_root, "cat-file", "blob", head + ":" + path)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if blob.returncode != 0:
+        return False
+    return transit_redacted(blob.stdout.decode("utf-8", errors="replace"))
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter, scratch=None):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
@@ -1958,6 +1987,9 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter,
     command, refusal = retention_command(repo_root, head, record["path"], record["command"], found)
     if refusal:
         return res(KEPT_UNRESOLVED, refusal)
+    # axis: a test whose recorded text, or whose located copy at head, carries a transit placeholder is never run, and earns no retention credit — see bite-proof record wo_a_2582_transit_restore
+    if transit_redacted(record.get("content")) or _head_copy_transit_redacted(repo_root, head, found["path"]):
+        return res(KEPT_UNRESOLVED, REASON_TRANSIT_REDACTED)
     run = _safe_run(runner, repo_root, head,
                     {"path": found["path"], "run": command, "content": "", "sha256": record["sha256"]},
                     interpreter, scratch, write=False)
@@ -2010,6 +2042,9 @@ def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UN
     # axis: the committed bytes must hash to the sha256 the loop ran, else the test was changed — see bite-proof record wo_a_1800_break-it
     if hashlib.sha256(blob.stdout).hexdigest() != record["sha256"]:
         return searched(res(KEPT_CHANGED, "sha256-differs"))
+    # axis: a test whose recorded text, or whose committed copy, carries a transit placeholder is never run, and earns no retention credit — see bite-proof record wo_a_2582_transit_restore
+    if transit_redacted(record.get("content")) or transit_redacted(blob.stdout.decode("utf-8", errors="replace")):
+        return res(KEPT_UNRESOLVED, REASON_TRANSIT_REDACTED)
     run = _safe_run(runner, repo_root, head,
                     {"path": path, "run": record["command"], "content": "",
                      "sha256": record["sha256"]}, interpreter, scratch, write=False)

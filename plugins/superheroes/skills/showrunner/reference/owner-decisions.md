@@ -1069,8 +1069,9 @@ chat answer in its place.
 (`lib/head_coverage.py`, as [the vet receipt](vet-receipt.md#the-review-record-checks) says), and its
 `outcome` names the sheet's action. Whether the verdict carries is judged from the commit the
 published sheet describes, never from the latest record alone: run `check` a second time with
-`--record` a file holding `{"ok": true, "finalCommit": {"sha": "<the sheet's commit>"}}`, and pass
-its answer to `outcome` as `--carry-answer` (with `--carry-judged-clear` for a judgement the advisor
+`--record` a file holding `{"ok": true, "finalCommit": {"sha": "<the sheet's commit>"}}`, with the
+same `--union-proof` as the first check when the vet recorded a tested-union proof (the vet
+receipt's head-coverage paragraph), and pass its answer to `outcome` as `--carry-answer` (with `--carry-judged-clear` for a judgement the advisor
 clears), beside `--sheet-commit` and `--head` as full shas. The verdict carries only when that answer
 is `proven`, or `judgement` the advisor clears: `outcome` then answers `republish-carried`, and
 otherwise `republish-unsigned`; a live sheet whose head moved, with no carry answer, is a usage error.
