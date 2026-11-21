@@ -58,6 +58,7 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **After switching.** **Nothing is owed by a caller that does not use the new edge or the new flag: a Guardian ledger record that is `declined` or `triaged-out` may now advance to `filed` when it carries a non-empty `issue`, and `guardian_sweep.py commit-ledger` takes an optional `--recoveries <file>`.** Every other move off a `triaged-out`, `declined`, `accepted` or `verified-fixed` record is still refused. The `commit-ledger` result gains the keys `recoveries` and `recoveriesSkipped`, both `[]` when no file is given. See [Guardian: a declined or triaged-out finding advances to filed when an issue is filed for it](#guardian-a-declined-or-triaged-out-finding-advances-to-filed-when-an-issue-is-filed-for-it).
 - **After switching.** **Nothing is owed by a caller that writes no new kind: a finding's `decidedBy` may now be of kind `scope-ruling` or `advisor-bound`, the vet receipt gains the marker lines `<!-- superheroes:scope-ruling key=<findingKey> -->` and `<!-- superheroes:advisor-bound rounds=<n> -->`, and the decision sources the record writer hands `finding_outcomes.on_record` gain the keys `reviewPr`, `reviewRounds`, `findingKey` and `findingSeverity`.** See [Review record: an out-of-scope ruling and the advisor's bound are recorded decisions](#review-record-an-out-of-scope-ruling-and-the-advisors-bound-are-recorded-decisions).
 - **Before switching.** **Upgrade the Codex CLI to 0.166.0 or later on every machine and cloud environment that runs codex seats.** The codex default is `gpt-6.2-sol` (GPT-6.2 Sol), and an older CLI is refused at preflight with `codex-cli-too-old`, before any codex seat runs. See [Codex: GPT-6.2 Sol default, GPT-6.2 Astra top rung, Codex CLI 0.166.0](#codex-gpt-62-sol-default-gpt-62-astra-top-rung-codex-cli-01660).
+- **After switching.** **Nothing is owed: a cloud build now makes its build worktree under the session's working directory and never moves the session into it.** See [Cloud builds: the build worktree sits under the working directory, and the session never enters it](#cloud-builds-the-build-worktree-sits-under-the-working-directory-and-the-session-never-enters-it).
 
 ### Field gotchas: five doctrine lines move into the plugin
 
@@ -67,6 +68,12 @@ Check these in a consuming project when it adopts 0.51.1. Each step names the no
 - **An app exit or restart kills every watcher silently.** The wait is written into the session ledger before a watcher is armed, and every resume re-checks the waits directly. Homes: `skills/showrunner/reference/wave-watch.md` § The boundary the owner accepted and `skills/showrunner-resume/SKILL.md` Step 6.
 - **A worktree's directory name is not evidence.** A wrong tree is reported only on the git checks, never on the name. Home: `rubric/launch-doctrine.md` § Check for a sibling build at a clean-base intake.
 - Replacement. None: the lines are additive.
+
+### Cloud builds: the build worktree sits under the working directory, and the session never enters it
+
+- **The change.** The workhorse charter (§2) and `skills/workhorse/reference/cloud.md` § Workspace say a cloud build makes its build worktree under the session's working directory (`<root>/.claude/worktrees/<name>`), never switches the session's directory into it, and names the worktree by absolute path in every command, the review included (`git -C`, `--repo-root`, `--cwd`). The charter no longer tells a builder to switch to the worktree it creates.
+- **Why.** Moving a headless session into a worktree outside its working directory waits on an approval prompt nobody can answer, so a cloud lane stalled until a message woke it.
+- Replacement. None: no CLI, flag or result key changes.
 
 ### Bash timeout hook: auto mode refuses instead of rewriting, and a setting switches it off
 

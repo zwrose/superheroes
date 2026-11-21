@@ -210,11 +210,11 @@ record, each under the next unused FU number (in the marker too), with its origi
 `crossed` is read against (the folded `sizeTripwire`, `dispatch-mechanics.md` § Size tripwire at
 fold, or your own `lib/size_count.py count` run), and never its `barCount`, the count the two
 absolute bars read (`rubric/review-discipline.md` § Size). After a mid-build merge of the base branch, `N` counts from the merge
-base of the head and that branch (`git merge-base HEAD <base branch>`) only when the fold's
+base of the head and that branch (`git -C <build worktree> merge-base HEAD <base branch>`) only when the fold's
 `sizeTripwire` reads `status: "ok"` with `countedFrom`, so the base branch's own lines are not the
 build's. When it reads `indeterminate` with `size-base-ref-contains-head`, or the merge base holds
-the build's own commits (the oldest commit of `git rev-list --first-parent --reverse <base>..HEAD`
-is its ancestor), count from the build's original base instead, which overcounts the merged lines
+the build's own commits (the oldest commit of
+`git -C <build worktree> rev-list --first-parent --reverse <base>..HEAD` is its ancestor), count from the build's original base instead, which overcounts the merged lines
 (the safe direction), and say why in the row. It takes one of these forms:
 
 - `not crossed (N of estimate M)`
@@ -290,6 +290,8 @@ stack layer's pull request links its own sub-issue and the feature issue as
 ## Verifying the remote head
 
 "PR ready" requires the remote branch head to contain every commit your receipts claim. After your
-final `git push`, run `git fetch`, then `git merge-base --is-ancestor HEAD origin/<branch>`. The
+final `git push`, run `git -C <build worktree> fetch`, then
+`git -C <build worktree> merge-base --is-ancestor HEAD origin/<branch>`: run from any other
+checkout, `HEAD` is that checkout's commit and the check can pass on work you never pushed. The
 review-fix commit is the usual straggler. A PR that claims a fix its pushed branch does not contain
 is a claim without a receipt.
