@@ -28,11 +28,13 @@ stdout and exits 0 for every result; exit 2 is bad usage.
 """
 import argparse
 import datetime
+import errno
 import hashlib
 import json
 import os
 import shutil
 import sys
+import uuid
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -312,7 +314,7 @@ def retire(cwd, *, owner_authorized, list_digest, root=None, review_root=None,
             moved = []
             for entry in entries:
                 try:
-                    shutil.move(entry["from"], entry["to"])
+                    _staged_move(entry["from"], entry["to"])
                 except Exception as exc:
                     return {"status": "partial", "backup": backup, "manifest": manifest,
                             "moved": moved,
@@ -321,6 +323,40 @@ def retire(cwd, *, owner_authorized, list_digest, root=None, review_root=None,
                 moved.append({"from": entry["from"], "to": entry["to"]})
             return {"status": "retired", "backup": backup, "manifest": manifest, "moved": moved,
                     "undo": _undo_sentence(cwd, backup)}
+
+
+def _remove_object(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
+def _staged_move(src, dst):
+    """Move src to dst, publishing dst only once it is complete. A rename on one filesystem; across
+    filesystems, a copy staged beside dst and renamed into place, then the source removed. A failed
+    copy removes its staging copy, so dst is either absent or whole; links and directories are kept."""
+    try:
+        os.rename(src, dst)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    stage = os.path.join(os.path.dirname(dst), ".%s.staging-%s" % (os.path.basename(dst), uuid.uuid4().hex))
+    try:
+        if os.path.islink(src):
+            os.symlink(os.readlink(src), stage)
+        elif os.path.isdir(src):
+            shutil.copytree(src, stage, symlinks=True)
+        else:
+            shutil.copy2(src, stage)
+        os.replace(stage, dst)
+    except BaseException:
+        # axis: an interrupted cross-filesystem copy leaves no partial file at dst
+        if os.path.lexists(stage):
+            _remove_object(stage)
+        raise
+    _remove_object(src)
 
 
 def _inside(path, directory):
@@ -360,7 +396,7 @@ def restore(cwd, backup, *, root=None):
                     continue
                 try:
                     os.makedirs(os.path.dirname(src), exist_ok=True)
-                    shutil.move(dst, src)
+                    _staged_move(dst, src)
                 except Exception as exc:
                     skipped.append({"from": src, "why": "move-failed: %s: %s"
                                     % (type(exc).__name__, exc)})

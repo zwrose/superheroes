@@ -429,6 +429,47 @@ def test_retire_moves_exactly_the_listed_files_and_restore_puts_them_back(w):
         assert _read(path) == data
 
 
+def _cross_device(monkeypatch):
+    """Make every rename fail as it does across filesystems, so the staged copy path runs."""
+    import errno
+
+    def no_rename(src, dst):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(ls.os, "rename", no_rename)
+
+
+def test_restore_across_filesystems_never_leaves_a_partial_file(w, monkeypatch):
+    # axis: a cross-filesystem restore that fails part way leaves the live slot empty and the backup whole, and the retry succeeds
+    left = _everything_left_behind(w)
+    before = {p: _read(p) for p in left}
+    done = w.retire(w.find()["digest"])
+    _cross_device(monkeypatch)
+    real_copy = ls.shutil.copy2
+
+    def half_copy(src, dst, **kw):
+        with open(dst, "wb") as fh:
+            fh.write(b"half")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ls.shutil, "copy2", half_copy)
+    back = ls.restore(w.cwd, done["backup"], root=w.root)
+    assert back["restored"] == []
+    assert all(s["why"].startswith("move-failed") for s in back["skipped"])
+    for move in done["moved"]:
+        assert not os.path.lexists(move["from"])
+        assert _read(move["to"]) == before[move["from"]]
+        siblings = os.listdir(os.path.dirname(move["from"]))
+        assert not [n for n in siblings if ".staging-" in n]
+    monkeypatch.setattr(ls.shutil, "copy2", real_copy)
+    again = ls.restore(w.cwd, done["backup"], root=w.root)
+    assert sorted(r["from"] for r in again["restored"]) == sorted(left)
+    for path in left:
+        assert _read(path) == before[path]
+    for move in done["moved"]:
+        assert not os.path.lexists(move["to"])
+
+
 def test_restore_skips_a_missing_backup_file(w):
     # axis: an entry whose backed-up file is gone is skipped as missing, and the others still come back
     left = _everything_left_behind(w)
@@ -527,7 +568,7 @@ def test_retire_twice_in_one_second_gets_a_new_folder(w):
 def test_retire_partial_reports_what_moved(w, monkeypatch):
     # axis: a move that raises stops the run, reports what was done and moves nothing back
     left = _everything_left_behind(w)
-    real_move = ls.shutil.move
+    real_move = ls._staged_move
     calls = []
 
     def flaky(src, dst):
@@ -536,7 +577,7 @@ def test_retire_partial_reports_what_moved(w, monkeypatch):
             raise OSError("disk full")
         return real_move(src, dst)
 
-    monkeypatch.setattr(ls.shutil, "move", flaky)
+    monkeypatch.setattr(ls, "_staged_move", flaky)
     done = w.retire(w.find()["digest"])
     assert done["status"] == "partial"
     assert [m["from"] for m in done["moved"]] == left[:1]
