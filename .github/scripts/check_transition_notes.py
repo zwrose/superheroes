@@ -5,7 +5,7 @@ Every decision lives in the lib module; this script only gathers the inputs (the
 head, read-only git for the base) and prints the result: one JSON object on stdout, one
 `<file>: <token>: <detail>` line per problem on stderr. Exit 0 with no problem, 1 otherwise.
 
-    python3 .github/scripts/check_transition_notes.py [--repo-root R] [--base SHA] [--release]
+    scripts/pinned-python .github/scripts/check_transition_notes.py [--repo-root R] [--base SHA] [--release]
 """
 from __future__ import annotations
 
