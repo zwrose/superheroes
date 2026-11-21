@@ -1,7 +1,7 @@
-"""The skills call the nine hook-approved scripts in the one form the hook approves (#2158).
+"""The skills call the hook-approved scripts in the one form the hook approves (#2158).
 
 Invariant: every place under `skills/review-code/`, `skills/workhorse/` and `rubric/orders/` that
-tells an agent to RUN one of the nine scripts on the hook's `APPROVED_SCRIPTS` shows the call as one
+tells an agent to RUN one of the scripts on the hook's `APPROVED_SCRIPTS` shows the call as one
 physical line, `python3 -B <plugin root>/lib/<script>.py <verb> <args…>`: no `$` (no `$ROOT_DIR`,
 `$SESSION_DIR`, `${…}`, `$(…)`), no trailing `\\`, no operator, and no unquoted `[ ] { } * ? ~` or
 `<`/`>` beyond the `<…>` placeholders an agent replaces. The session folder is written `<session dir>`
@@ -32,8 +32,8 @@ _spec = importlib.util.spec_from_file_location("plugin_scripts_allow_2158", _HOO
 hook = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hook)
 
-_NINE = tuple(sorted(name[: -len(".py")] for name in hook.APPROVED_SCRIPTS))
-_NINE_ALT = "|".join(_NINE)
+_APPROVED = tuple(sorted(name[: -len(".py")] for name in hook.APPROVED_SCRIPTS))
+_APPROVED_ALT = "|".join(_APPROVED)
 _ROOTS = (
     os.path.join(_PLUGIN, "skills", "review-code"),
     os.path.join(_PLUGIN, "skills", "workhorse"),
@@ -43,8 +43,8 @@ _ROOTS = (
 # Measured at the 2158 fix: 35 call forms across the three trees (fenced lines plus inline spans).
 POPULATION_FLOOR = 31  # the grounding stage's call forms left with it (C1-L2); the owner-gate advance form left with the gates
 
-_SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
-_FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
+_SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _APPROVED_ALT)
+_FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _APPROVED_ALT)
 # Only these named documentation placeholders (besides `<plugin root>` and `<session dir>`) are
 # replaced by an argument. Any other `<…>` is left in place and refused, so a shell redirect pair
 # (`< f >`, `<input.txt>output.txt`) is never erased. Syntax alone cannot tell the two apart.
@@ -65,9 +65,9 @@ def _erase_placeholder(match):
     return "x" if match.group(1) in _PLACEHOLDER_NAMES else match.group(0)
 _INLINE_SPAN = re.compile(r"`([^`\n]+)`")
 _FORBIDDEN_ROOT_DIR = re.compile(
-    r"\$(?:\{ROOT_DIR\}|ROOT_DIR)/lib/(?:%s)\.py" % _NINE_ALT
+    r"\$(?:\{ROOT_DIR\}|ROOT_DIR)/lib/(?:%s)\.py" % _APPROVED_ALT
 )
-_NAMES_NINE = re.compile(r"(?<![A-Za-z0-9_])(?:%s)\.py" % _NINE_ALT)
+_NAMES_APPROVED = re.compile(r"(?<![A-Za-z0-9_])(?:%s)\.py" % _APPROVED_ALT)
 _SESSION_DIR_VAR = re.compile(r"--session-dir[ =]\"?\$\{?SESSION_DIR\}?\"?")
 _UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule", "extra-audit", "break-it-change")
 # the unapproved verbs the population must show a form of; `extra-audit` is asserted not approved when
@@ -88,7 +88,7 @@ def _is_call_text(text):
 
 def _call_forms_in_text(rel, text):
     """Every call form in one file: a fenced-code line, or an inline backtick span, that holds
-    `python3` and `lib/<one of the nine>.py`."""
+    `python3` and `lib/<a hook-approved script>.py`."""
     forms = []
     in_fence = False
     pending = []  # physical lines of a fenced command continued with a trailing backslash
@@ -163,12 +163,12 @@ def _logical_lines(text):
 
 
 def _forbidden_hits(rel, text):
-    """Shell-variable forms of the nine scripts, anywhere in the text, on logical lines."""
+    """Shell-variable forms of the hook-approved scripts, anywhere in the text, on logical lines."""
     hits = []
     for lineno, line in _logical_lines(text):
         if _FORBIDDEN_ROOT_DIR.search(line):
             hits.append("%s:%d: $ROOT_DIR form of a hook-approved script" % (rel, lineno))
-        if _NAMES_NINE.search(line) and _SESSION_DIR_VAR.search(line):
+        if _NAMES_APPROVED.search(line) and _SESSION_DIR_VAR.search(line):
             hits.append("%s:%d: hook-approved script with --session-dir $SESSION_DIR" % (rel, lineno))
     return hits
 
@@ -269,7 +269,7 @@ def test_no_forbidden_forms_in_the_skill_text():
     hits = []
     for path in _markdown_files():
         hits.extend(_forbidden_hits(os.path.relpath(path, _PLUGIN), _read(path)))
-    assert not hits, "shell-variable forms of the nine scripts (#2158):\n" + "\n".join(hits)
+    assert not hits, "shell-variable forms of the hook-approved scripts (#2158):\n" + "\n".join(hits)
 
 
 def test_rendered_call_forms_get_the_hooks_decision(scene):
@@ -316,7 +316,7 @@ def test_forbidden_form_check_flags_a_reintroduced_multiline_block():
 
 
 def test_every_approved_script_is_matched_by_the_census():
-    assert _NINE
+    assert _APPROVED
     assert all(_SCRIPT_IN_FORM.search("lib/" + name) for name in hook.APPROVED_SCRIPTS)
 
 
