@@ -61,7 +61,8 @@ before any other.
    issue and end the lane. Build nothing; the advisor relaunches on the owner's machine. At intake,
    before the preflight, post with `gh api` or the session's GitHub tools, whichever works.
 4. On `ok: true` for a launch with no `Adopts branch:` line, the clone is checked out detached at
-   the launch's base commit. Create the build branch there, its name carrying the issue number as a whole
+   the launch's base commit. Create the build branch at that commit, as the build worktree is made
+   (§ Workspace), its name carrying the issue number as a whole
    number (for example `<prefix>-<issue>-<suffix>`), because recovery finds pushed work by that number, and post the result's `comment` as the
    first comment on the issue. It states three facts: a cloud build, the plugin version, and that
    commits carry the cloud's author name while the PR is under the owner's name. Never re-word it.
@@ -84,8 +85,9 @@ history. There is no app to bring up on the owner's machine and no slot.
 
 **The build worktree lives under the session's working directory, and the session never moves into
 it.** Make it with `git -C <root> worktree add <root>/.claude/worktrees/<name> <branch>`, where
-`<root>` is the session's working directory (the clone intake checked); on a fresh launch, add
-`-b <branch>` and the base commit to create the build branch in the worktree. On an adoption,
+`<root>` is the session's working directory (the clone intake checked). On a fresh launch this is
+where the build branch is created (§ Intake, step 4): add `-b <branch>` and the base commit, or drop
+`-b` when the branch already exists at the base commit. On an adoption,
 intake left the clone on the adopted branch, and git refuses a second worktree for a branch already
 checked out, so run `git -C <root> checkout --detach` first. Never switch the session's
 directory: no host worktree-entering tool, and no `cd` into the worktree. Address the worktree by
@@ -130,8 +132,9 @@ which the launcher checked on the owner's machine before launch. The order names
 branch.
 
 1. **Branch.** On a launch with no `Adopts branch:` line, intake leaves the clone at the base
-   commit: create the build branch there. On an adoption, intake leaves the clone on the adopted
-   branch: continue it and create no branch (§ Intake, step 5). Then run
+   commit: create the build branch at that commit as the build worktree is made (above). On an
+   adoption, intake leaves the clone on the adopted branch: continue it in the build worktree and
+   create no branch (§ Intake, step 5). Then run
    `git fetch origin <lower branch>` and check that `git rev-parse FETCH_HEAD` equals the base
    commit. This needs no pull request on the layer below. When the two differ, the layer below moved
    after the launch: bring it forward as step 2 says.
