@@ -58,6 +58,23 @@ def test_a_move_never_loses_the_decisions_read_now(w, case):
     assert after == before
 
 
+def test_an_unresolvable_calibration_carries_no_decisions(w, monkeypatch):
+    # axis: when the review calibration cannot be resolved, the flip carries no decisions copy and keeps each in place
+    import calibration_resolve
+    w.register(mr.IN_REPO)
+    _put(w.d_in("core.md"), _CORE)
+    _put(w.d_in("review-crew.md"), "## Focus hints\n- in-repo\n")
+    dec = _put(w.inrepo(_DEC), '{"in": true}\n')
+
+    def refuse(*a, **k):
+        raise calibration_resolve.UnresolvableRootError(root="r", cwd=w.cwd, hero="review-crew",
+                                                         default_location="in-repo", default_layer_path=None)
+    monkeypatch.setattr(calibration_resolve, "resolve", refuse)
+    m = w.enumerate(mr.GLOBAL)
+    assert not any(f["src"] == dec for f in m.files)
+    assert (dec, "retained") in [(e["path"], e["why"]) for e in m.left_in_place]
+
+
 def test_a_failed_delete_is_named_and_not_a_plain_done(w, monkeypatch):
     # axis: a source the flip could not delete is named in the result, and the status is not a plain done
     w.register(mr.IN_REPO)
