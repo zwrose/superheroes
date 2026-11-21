@@ -405,7 +405,8 @@ def execute(migration, *, root=None):
             return {"status": "busy"}
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
-                   "files": [{"src": f["src"], "dst": f["dst"], "done": False}
+                   "files": [{"src": f["src"], "dst": f["dst"], "done": False,
+                              "preexisting": os.path.lexists(f["dst"])}
                              for f in migration.files]}
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         aside = [f for f in migration.files if f.get("role") == ROLE_SET_ASIDE]
@@ -428,7 +429,7 @@ def execute(migration, *, root=None):
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
             # abort before any delete (UFR-6): remove copied dsts, leave sources, clear journal
             for f in journal["files"]:
-                if f["done"]:
+                if f["done"] and not f.get("preexisting"):
                     _remove(f["dst"])
             _remove(jpath)
             return {"status": "blocked"}
@@ -455,6 +456,9 @@ def _finish_flip(files):
 
 def _backout_flip(files):
     for f in files:
+        # axis: a back-out removes only a destination this flip created; one already there stays
+        if f.get("preexisting"):
+            continue
         _remove(f["dst"])  # sources untouched
 
 
