@@ -21,6 +21,7 @@ import cloud_builder
 import mention_guard
 import round_commit
 import round_records
+import session_contract
 
 CITATION = "SUPERHEROES_PR_BODY.md"  # the file name a finding cites for the PR body
 PUBLISH_SCHEMA = "pr-body-publish/1"
@@ -202,7 +203,7 @@ def _converged(session_dir):
 
 def _audited_sha(session_dir):
     """The ``prBodyAudited`` sha of the highest-numbered round that recorded one, or None."""
-    state = _json(os.path.join(session_dir, "loop-state.json"))
+    state = _json(os.path.join(session_dir, session_contract.STATE_FILE))
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return None
