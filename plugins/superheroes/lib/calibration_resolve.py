@@ -125,7 +125,23 @@ def _core_beside_layer(layer_p, cwd, root):
     return global_core if os.path.isfile(global_core) else None
 
 
-def _with_dispatch_fields(out):
+def _mode_selected_core(cwd, root):
+    """The core.md the storage mode selects when BOTH candidates are regular files, else None.
+
+    Read-only: the mode is read with persist_backfill=False, so nothing is written. Any failure
+    to compute the candidates or the mode (e.g. RepoRootUnavailable) gives None — the caller keeps
+    today's value and resolve never gains a new exception."""
+    try:
+        in_repo, global_path = core_md._core_candidates(cwd, root)
+        if not (os.path.isfile(in_repo) and os.path.isfile(global_path)):
+            return None
+        mode = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
+    except Exception:
+        return None
+    return in_repo if mode == mode_registry.IN_REPO else global_path
+
+
+def _with_dispatch_fields(out, cwd=None, root=None):
     """dispatch_core/dispatch_layer: unified paths when present, else legacy single-file."""
     legacy = out.get("legacy_path")
     layer = out.get("layer_path")
@@ -137,6 +153,10 @@ def _with_dispatch_fields(out):
         or (legacy if leg_ok else None)
         or (layer if layer_ok else None)
     )
+    # axis: with both core.md files regular, dispatch_core is the one the storage mode selects, whichever branch won
+    selected = _mode_selected_core(cwd, root) if cwd is not None else None
+    if selected:
+        out["dispatch_core"] = selected
     return out
 
 
@@ -162,14 +182,14 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
             "layer_path": layer_p,
             "legacy_path": legacy_in if legacy_in and os.path.isfile(legacy_in) else None,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     if legacy_in and os.path.isfile(legacy_in):
         return _with_dispatch_fields({
             "location": mode_registry.IN_REPO, "exists": True, "layout": "legacy",
             "core_path": None, "layer_path": None, "legacy_path": legacy_in,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     layer_p = _unified_global_layer(cwd, hero, root)
     if layer_p:
@@ -178,7 +198,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
             "core_path": _core_beside_layer(layer_p, cwd, root),
             "layer_path": layer_p, "legacy_path": None,
             "healed": False, "entry_id": None,
-        })
+        }, cwd, root)
 
     g = store_core.resolve_global(cwd, legacy_root, heal=heal, _consumer="review_store")
     if g is not None:
@@ -188,7 +208,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
                 "location": mode_registry.GLOBAL, "exists": True, "layout": "legacy",
                 "core_path": None, "layer_path": None, "legacy_path": legacy_p,
                 "healed": g["healed"], "entry_id": g["entry_id"],
-            })
+            }, cwd, root)
 
     if root is not None and _contradiction_check:
         probe = resolve(
@@ -209,7 +229,7 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
         "core_path": None, "layer_path": None, "legacy_path": None,
         "healed": g["healed"] if g else False,
         "entry_id": g["entry_id"] if g else None,
-    })
+    }, cwd, root)
 
 
 def resolve_profile_path(cwd=None, root=None):
