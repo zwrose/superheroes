@@ -484,3 +484,34 @@ E        +  where 'registry.json' = mr.REGISTRY_FILENAME
 **Raw green:** the fixed head runs the same file and the scoped suites: `667 passed, 14 skipped in 29.76s` (the new file and 9 neighbouring suites).
 
 **Disclosure:** FX2 reverses the brief check's R4 disposition (a regular core beat a non-file peer in the pin). The review's premortem finding showed that a stale peer's settings then drive the security-seat plan, so the pin now fails closed. `test_r_pin_nonfile_peer` asserts the fail-closed result.
+
+
+## Review round 2 fix (orchestrator-typed at the review's apply-fixes step)
+
+**FX7, guarded element:** the `candidate_profile_paths` early return for a picked layer that is present but not a regular file. Axis: the tier gate refuses that layer instead of reading a stale copy.
+
+**Neutralization:** `if picked and os.path.lexists(picked) and not os.path.isfile(picked):` became `if False and picked and os.path.lexists(picked) and not os.path.isfile(picked):`.
+
+**Node:** `test_storage_mode_calibration_2581.py::test_r_gate_unreadable_picked_layer` (both params).
+
+**Raw red:**
+```
+E       AssertionError: assert '/tmp/pytest-...eview-crew.md' == '/tmp/pytest-...eview-crew.md'
+E         
+E         Skipping 52 identical leading characters in diff, use -v to show
+E         - _picked_0/_store_isolation/projects/238a7b644f5fb344/config/review-crew.md
+E         + _picked_0/repo/.claude/superheroes/review-crew.md
+E       AssertionError: assert '/tmp/pytest-...eview-crew.md' == '/tmp/pytest-...eview-crew.md'
+E         
+E         Skipping 52 identical leading characters in diff, use -v to show
+E         - _picked_1/_store_isolation/projects/238a7b644f5fb344/config/review-crew.md
+E         + _picked_1/repo/.claude/superheroes/review-crew.md
+2 failed in 43.01s
+```
+
+**Restore:** the inverse edit dropped `False and `. **Restore receipt:** the restored line reads `    if picked and os.path.lexists(picked) and not os.path.isfile(picked):`, and `git status --porcelain` printed nothing afterwards.
+
+**Raw green:**
+```
+2 passed in 0.53s
+```
