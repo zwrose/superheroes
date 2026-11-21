@@ -210,8 +210,11 @@ the launch project's settings in force, so never go autonomous with one.
 
 **Second, before your first write, confirm you are in your own build worktree.** It is never the
 primary checkout and never a tree another live session controls. If it is not yours, create one
-with `git worktree add` and switch to it before writing anything. A shared tree lets one session's
-`git checkout` wipe a sibling's uncommitted work.
+with `git worktree add` and do all your work in it, before writing anything. A shared tree lets one session's
+`git checkout` wipe a sibling's uncommitted work. **In a cloud session, make the build worktree under
+the session's working directory, never switch the session's directory into it, and address it by
+absolute path in every command, the review included** (`git -C`, `--repo-root`, `--cwd`):
+entering a worktree outside the working directory waits on an approval nobody can answer.
 
 **Verify or create the slot, before your first write.** If the launch supplied a slot, verify it
 and use it. Otherwise create a worktree. **A builder told a slot was supplied, who cannot find it,

@@ -82,6 +82,22 @@ The cloud clone may be shallow. `python3 -B <plugin root>/lib/cloud_builder.py e
 makes history complete. Intake already ran it; re-run it before any review if a later step needs
 history. There is no app to bring up on the owner's machine and no slot.
 
+**The build worktree lives under the session's working directory, and the session never moves into
+it.** Make it with `git -C <root> worktree add <root>/.claude/worktrees/<name> <branch>`, where
+`<root>` is the session's working directory (the clone intake checked). Never switch the session's
+directory: no host worktree-entering tool, and no `cd` into the worktree. Address the worktree by
+absolute path in every command, the review included: `git -C <worktree>`, `--repo-root <worktree>`,
+`--cwd <worktree>`, and the worktree's path for every file you read or edit. Where a skill's block
+runs a bare `git` or `gh` command against the current directory, run it with `git -C <worktree>`
+or the helper's path flag instead.
+
+Why: the host asks for approval before a worktree-entering tool moves the session into a worktree
+outside its working directory, in auto mode too, and a headless session cannot answer, so the lane
+stalls until something wakes it. A Bash `cd` to a directory outside the working directory does not
+carry to the next call (the shell returns to the start folder), so it cannot enter one either.
+Commands that name the worktree by absolute path, and writes to files in it, ran with no prompt in
+the same probe.
+
 **Push after every commit.** Use `git push -u origin <branch>` the first time and plain `git push`
 after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
