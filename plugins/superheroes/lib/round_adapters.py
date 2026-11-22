@@ -543,6 +543,7 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
     supplied = []
     omitted = []
     landed = []
+    landed_slots = []
     for seat, occurrence in _roster_slots(roster):
         entry, is_result = _landed(indexed, seat, occurrence)
         if not is_result:
@@ -550,6 +551,7 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
             continue
         landed.append(seat)
         skey = round_records.storage_key(seat, occurrence)
+        landed_slots.append((seat, occurrence, skey))
         for verdict in entry["payload"]["verdicts"]:
             supplied.append((seat, skey, dict(verdict)))
     if omitted:
@@ -578,6 +580,26 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
         disclosures["doubleAssigned"] = sorted(double)
     verdicts = [verdict for _seat, verdict in kept]
     artifact = {"verdicts": verdicts}
+    # A seat that LANDED a result naming none of the ids its order assigned (the manifest's `ids`, non-empty) is
+    # silent: the fold records the seat, never as a seat that did not run (those stay in `unverifiedClusters`).
+    # A seat with no manifest entry or no `ids` is not judged. Always set, `[]` when no seat is silent, so every
+    # `advance` fold takes the seat grain and never the whole-answer check.
+    silent_clusters, silent_keys, silent_items = [], [], 0
+    for seat, occurrence, skey in landed_slots:
+        entry = manifest_seats.get(skey) if isinstance(manifest_seats, dict) else None
+        ids = entry.get("ids") if isinstance(entry, dict) else None
+        ordered = [vid for vid in ids if isinstance(vid, str)] if isinstance(ids, list) else []
+        if not ordered:
+            continue
+        answered = {verdict.get("id") for _seat, sk, verdict in supplied if sk == skey}
+        if not answered & set(ordered):
+            silent_clusters.append({"seat": seat, "occurrence": occurrence})
+            silent_keys.append(skey)
+            silent_items += len(ordered)
+    if silent_clusters:
+        disclosures["silentClusters"] = silent_clusters
+    artifact["verifierSilentClusters"] = sorted(silent_keys)
+    artifact["verifierSilentItems"] = silent_items
     if landed:
         # The vendor that RAN each verifier is the runner's execution record (the same provenance
         # `_assemble_audits` derives `collectionManifest` from), never the payload's own claim and

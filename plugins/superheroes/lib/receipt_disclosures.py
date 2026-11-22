@@ -96,6 +96,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "verifierProvenance": dict_list,
     "synthesisUnseatable": dict_list,
     "secondTestUnseatable": dict_list,
+    "silentSeats": dict_list,
     "sweeps": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
@@ -783,6 +784,19 @@ def _round_verifier_synthesis_prose(rkey, declared, degraded_out):
             "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
             "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
             % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
+    silent = declared.get("silentSeats")
+    if isinstance(silent, list):
+        # axis: a seat that answered none of its items is a degradation the receipt names, never a quiet pass — see bite-proof record silent_seat_fold_2617
+        for row in silent:
+            if not isinstance(row, dict):
+                continue
+            seats = row.get("seats")
+            who = ("verifier seat(s) %s" % ", ".join(str(s) for s in seats)
+                   if row.get("grain") == "seat" and isinstance(seats, list)
+                   else "the %s seat" % row.get("phase"))
+            degraded_out.append(
+                "silent-seat (round %s): %s answered none of its %s item(s); they are recorded as unanswered "
+                "(unverified or no new test) and nothing was re-asked" % (rkey, who, row.get("items")))
 
 
 def _round_sweeps_prose(rkey, declared, degraded_out):
