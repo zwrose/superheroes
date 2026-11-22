@@ -11,6 +11,7 @@ deadlock-to-None). The reconciler keeps owning mode *recording*; this module own
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import shutil
@@ -499,8 +500,9 @@ def execute(migration, *, root=None):
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
-                              "asideTp": f.get("role") == ROLE_SET_ASIDE and f.get("family") == "test-pilot",
-                              "preexisting": os.path.lexists(f["dst"])}
+                              # axis: other sessions write only the decisions copy read now (the carried one) and test-pilot profiles; a set-aside decisions copy is read by no one and still moves, so it never shadows the carry
+                              "shared": f.get("family") == "test-pilot" or (f.get("family") == "decisions" and f.get("role") == ROLE_CARRY),
+                              "preexisting": os.path.lexists(f["dst"]), "copied": _sha(f["src"])}
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
         for n, f in enumerate(journal["files"]):
@@ -523,7 +525,14 @@ def execute(migration, *, root=None):
                  "entries": [{"from": f["src"], "to": f["dst"], "family": f.get("family")}
                              for f in aside]}, indent=2))
         for f in journal["files"]:
-            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original
+            if f.get("snapshot") and _sha(f["dst"]) != _sha(f["snapshot"]):
+                # axis: a destination saved after its snapshot is snapshotted again just before its copy
+                _copy_bytes(f["dst"], f["snapshot"])
+            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original;
+            # its copied hash is the source's just before the copy, journaled before the copy so recovery reads the same one,
+            # and a write landing on the copy is never adopted as the flip's own
+            f["copied"] = _sha(f["src"])
+            store_core.atomic_write(jpath, json.dumps(journal, indent=2))
             _copy_bytes(f["src"], f["dst"])
             f["done"] = True
         journal["phase"] = "committing"
@@ -531,58 +540,79 @@ def execute(migration, *, root=None):
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
             # abort before any delete (UFR-6): remove copied dsts, leave sources, clear journal
             _backout_flip([f for f in journal["files"] if f["done"]])
-            _drop_snapshots(journal["files"])
+            kept = _keep_snapshots(journal["files"], store_dir)
             _remove(jpath)
-            return {"status": "blocked"}
+            return dict({"status": "blocked"}, **({"overwritten": kept} if kept else {}))
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         undeleted = []
-        import leftover_settings
         for f in journal["files"]:
-            # axis: a set-aside test-pilot profile that gained blocks or manifests since the plan stays, named as undeleted
-            if f.get("asideTp") and leftover_settings._tp_artifacts_beside(f["src"]):
-                undeleted.append(f["src"])
-            elif not f.get("keep"):
+            # axis: a file other sessions write (decisions, test-pilot profiles) is copied and never deleted: it stays, named as a leftover
+            if not f.get("keep") and _settled(f) and not f.get("shared"):
                 _remove(f["src"])
-                if os.path.lexists(f["src"]):
-                    undeleted.append(f["src"])
-        _drop_snapshots(journal["files"])
+            if not f.get("keep") and os.path.lexists(f["src"]):
+                undeleted.append(f["src"])
+        overwritten = _keep_snapshots(journal["files"], store_dir)
         _remove(jpath)
         # axis: a source the flip could not delete is named, and the move is not reported as a plain done
-        return {"status": "done-with-leftovers", "undeleted": undeleted} if undeleted else {"status": "done"}
+        result = {"status": "done-with-leftovers", "undeleted": undeleted} if undeleted else {"status": "done"}
+        return dict(result, overwritten=overwritten) if overwritten else result
 
 
 # --------------------------------------------------------------------------- recover
 
 
-def _drop_snapshots(files):
+def _sha(path):
+    if os.path.isfile(path):
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+
+def _settled(f, tries=3):
+    # axis: a source is dropped only when its bytes are at its copy; one written since is copied again (a bounded number of times), and a copy written since is never overwritten
+    for _ in range(tries):
+        now, dst = _sha(f["src"]), _sha(f["dst"])
+        if now == dst or dst != f.get("copied"):
+            return now is not None and now == dst
+        f["copied"] = now
+        _copy_bytes(f["src"], f["dst"])
+    return False
+
+
+def _keep_snapshots(files, store_dir):
+    # axis: an overwritten destination's prior bytes move to a dated backup folder and are named, never dropped on success
+    import leftover_settings
     for f in files:
-        if f.get("snapshot"):
-            _remove(f["snapshot"])
+        if f.get("snapshot") and os.path.isfile(f["snapshot"]) and _sha(f["snapshot"]) == _sha(f["dst"]):
+            _remove(f["snapshot"])  # the destination still holds these bytes: nothing to keep
+    snaps = [f for f in files if f.get("snapshot") and os.path.isfile(f["snapshot"])]
+    backup = leftover_settings._make_backup_dir(store_dir, None) if snaps else None
+    for f in snaps:
+        f["backup"] = os.path.join(backup, "overwritten-%s-%s" % (os.path.basename(f["snapshot"]), os.path.basename(f["dst"])))
+        os.replace(f["snapshot"], f["backup"])
+    return [{"path": f["dst"], "backup": f["backup"]} for f in snaps]
 
 
-def _finish_flip(files):
+def _finish_flip(files, store_dir):
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
-        import leftover_settings
-        if f.get("keep") or (f.get("asideTp") and leftover_settings._tp_artifacts_beside(f["src"])):
-            # axis: a kept source (or a set-aside test-pilot profile that gained artifacts) stays; recovery only makes sure its copy exists
-            if not os.path.lexists(f["dst"]):
-                _copy_bytes(f["src"], f["dst"])
-            continue
-        if os.path.isfile(f["dst"]):
-            os.remove(f["src"])           # dst already present — just drop the source
-        elif not os.path.lexists(f["dst"]):
+        if not os.path.lexists(f["dst"]):
             # axis: recovery copies byte for byte as the flip does, then drops the source
+            f["copied"] = _sha(f["src"])
             _copy_bytes(f["src"], f["dst"])
+        # axis: a kept or shared source stays, a destination that is not a regular file is no copy, and a source whose bytes are not at its copy stays
+        if not f.get("keep") and os.path.isfile(f["dst"]) and _settled(f) and not f.get("shared"):
             os.remove(f["src"])
-        # axis: a destination that is present but not a regular file is no copy, so the source stays
-    _drop_snapshots(files)
+    return _keep_snapshots(files, store_dir)
 
 
 def _backout_flip(files):
     for f in files:
+        # axis: a back-out touches a destination only while it holds this flip's own copy (known by the hash recorded at
+        # copy time), so a destination saved since is kept, and an unrestored snapshot is kept by the caller in the backup folder
+        if _sha(f["dst"]) not in (f.get("copied"), _sha(f["src"])):
+            continue
         # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
         if f.get("preexisting"):
             if f.get("link") is not None:
@@ -599,6 +629,7 @@ def _backout_flip(files):
             snap = f.get("snapshot")
             if snap and os.path.isfile(snap):
                 _copy_bytes(snap, f["dst"])
+                _remove(snap)
             continue
         _remove(f["dst"])  # sources untouched
 
@@ -681,13 +712,14 @@ def recover(cwd, *, root=None):
                 return {"status": "busy"}
             target = journal.get("target")
             files = journal.get("files", [])
+            overwritten = []
             if mode_registry.resolve(cwd, root)["mode"] == target:
-                _finish_flip(files)        # commit landed → finish the move
+                overwritten = _finish_flip(files, store_dir)   # commit landed → finish the move
             else:
                 _backout_flip(files)       # pre-commit → back out
-                _drop_snapshots(files)
+                overwritten = _keep_snapshots(files, store_dir)
             _remove(jpath)
-            return {"status": "recovered"}
+            return dict({"status": "recovered"}, **({"overwritten": overwritten} if overwritten else {}))
     return {"status": "noop"}
 
 

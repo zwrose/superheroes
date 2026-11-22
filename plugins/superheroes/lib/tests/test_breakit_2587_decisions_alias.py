@@ -58,7 +58,12 @@ def test_flip_preserves_decisions_when_legacy_directory_aliases_target(tmp_path)
         cwd, mode_registry.GLOBAL, root=root, owner_authorized=True,
         review_root=review_root, test_pilot_root=str(tmp_path / "legacy-pilot-store"))
     assert migration.blocked is False
-    assert mode_migrate.execute(migration, root=root) == {"status": "done"}
+    result = mode_migrate.execute(migration, root=root)
+    # axis: the carried decisions copy is one other sessions write, so its original stays, named as a leftover (owner ruling 690 b)
+    assert result["status"] == "done-with-leftovers"
+    assert result["undeleted"] == [str(repo / ".claude" / name)]
+    # axis: the destination the carry overwrote keeps its prior bytes in the backup folder
+    assert [Path(o["backup"]).read_text(encoding="utf-8") for o in result["overwritten"]] == ['{"previous": true}\n']
     assert mode_registry.read_registry(cwd, root)["storageMode"] == mode_registry.GLOBAL
     assert target.is_file(), "successful flip deleted the carried decisions through an alias"
     assert target.read_text(encoding="utf-8") == expected

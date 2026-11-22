@@ -164,14 +164,17 @@ def test_in_repo_to_global_leaves_no_listed_kind_behind(w):
     m = w.plan(mr.GLOBAL)
     assert m.blocked is False
     res = mm.execute(m, root=w.root)
-    assert res == {"status": "done"}
+    # axis: the files other sessions write (the carried decisions, the test-pilot profiles) are copied and
+    # their originals stay, named as leftovers that find lists until they are retired (owner ruling 690 b)
+    kept = [w.inrepo(_DEC), w.inrepo("test-pilot", "profile.md"), os.path.join(tp_entry, "profile.md")]
+    assert res == {"status": "done-with-leftovers", "undeleted": kept}
     assert mr.resolve(w.cwd, root=w.root)["mode"] == mr.GLOBAL
     result = w.find()
     assert result["mode"] == mr.GLOBAL
-    assert result["files"] == []
+    assert sorted(f["path"] for f in result["files"]) == sorted(kept)
     # the carried decisions
     assert _text(w.d_gl(_DEC)) == '{"in": true}\n'
-    assert not os.path.lexists(w.inrepo(_DEC))
+    assert _text(w.inrepo(_DEC)) == '{"in": true}\n'
     # the set-asides, in one dated folder, in entry order
     folders = w.backup_folders()
     assert len(folders) == 1 and folders[0].endswith("-storage-move")
@@ -192,11 +195,12 @@ def test_in_repo_to_global_leaves_no_listed_kind_behind(w):
     }
     for name, src in sources.items():
         assert _text(os.path.join(folder, name)) == texts[name]
-        assert not os.path.lexists(src)
-    # restore puts every one back where it came from
+        assert os.path.lexists(src) == (src in kept)
+    # restore puts every one back where it came from, and never overwrites a kept original
     back = ls.restore(w.cwd, folder, root=w.root)
     assert back["status"] == "restored"
-    assert back["skipped"] == []
+    assert sorted(s["from"] for s in back["skipped"]) == sorted(s for s in sources.values() if s in kept)
+    assert {s["why"] for s in back["skipped"]} == {"occupied"}
     for name, src in sources.items():
         assert _text(src) == texts[name]
 
@@ -208,12 +212,14 @@ def test_global_to_in_repo_leaves_no_listed_kind_behind(w):
     # entry's copy first) and sets every other copy aside
     review_entry, tp_entry = _seed_global(w)
     res = mm.execute(w.plan(mr.IN_REPO), root=w.root)
-    assert res == {"status": "done"}
+    # axis: the carried decisions and the test-pilot profiles stay as named leftovers (owner ruling 690 b)
+    kept = [os.path.join(review_entry, _DEC), w.inrepo("test-pilot", "profile.md"), os.path.join(tp_entry, "profile.md")]
+    assert res == {"status": "done-with-leftovers", "undeleted": kept}
     assert mr.resolve(w.cwd, root=w.root)["mode"] == mr.IN_REPO
-    assert w.find()["files"] == []
+    assert sorted(f["path"] for f in w.find()["files"]) == sorted(kept)
     assert _text(w.inrepo(_DEC)) == '{"stale": "entry"}\n'
     assert not os.path.lexists(w.d_gl(_DEC))
-    assert not os.path.lexists(os.path.join(review_entry, _DEC))
+    assert _text(os.path.join(review_entry, _DEC)) == '{"stale": "entry"}\n'
     folder = w.backup_folders()[0]
     manifest = json.loads(_text(os.path.join(folder, ls.MANIFEST_FILENAME)))
     assert manifest["schema"] == ls.MANIFEST_SCHEMA
@@ -229,7 +235,8 @@ def test_global_to_in_repo_leaves_no_listed_kind_behind(w):
         "01-review-decisions.json", "02-review-profile.md", "03-review-profile.md",
         "04-profile.md", "05-profile.md", ls.MANIFEST_FILENAME]
     back = ls.restore(w.cwd, folder, root=w.root)
-    assert back["status"] == "restored" and back["skipped"] == []
+    assert back["status"] == "restored"
+    assert sorted(s["from"] for s in back["skipped"]) == sorted(kept[1:])
     assert _text(w.d_gl(_DEC)) == '{"global": true}\n'
 
 
@@ -632,7 +639,8 @@ def test_a_destination_link_does_not_reserve_the_file_it_points_to(w):
     os.symlink(legacy, dst)
     m = w.plan(mr.GLOBAL)
     assert any(f["src"] == legacy and f["role"] == mm.ROLE_SET_ASIDE for f in m.files)
-    assert mm.execute(m, root=w.root) == {"status": "done"}
+    res = mm.execute(m, root=w.root)
+    assert res["status"] == "done-with-leftovers" and legacy not in res["undeleted"]
     assert not os.path.islink(dst) and _text(dst) == '{"in": true}\n'
     assert not os.path.lexists(legacy)
 
