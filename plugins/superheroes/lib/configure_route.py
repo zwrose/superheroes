@@ -72,7 +72,19 @@ def route(cwd, *, root=None):
         return {"path": "fix", "reasons": [f"a structural fix is pending: {kinds}"],
                 "signals": signals}
 
-    # 5. Configured and healthy — any routine drift renders as the FR-7 notice in the view.
+    # 5. Old settings copies sit beside the ones the storage setting reads — the fix path retires them.
+    try:
+        import leftover_settings
+        files = leftover_settings.find(cwd, root)["files"]
+    except Exception:
+        files = []
+    if files:
+        return {"path": "fix",
+                "reasons": ['old settings copies sit where the storage setting does not keep them: %d file(s) '
+                            '(fix step "Retire leftover settings copies")' % len(files)],
+                "signals": signals}
+
+    # 6. Configured and healthy — any routine drift renders as the FR-7 notice in the view.
     return {"path": "view", "reasons": ["configured and healthy"], "signals": signals}
 
 
