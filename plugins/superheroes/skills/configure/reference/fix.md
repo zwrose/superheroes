@@ -55,8 +55,10 @@ The remedy is **re-calibration through this skill**, and it has two shapes:
 - **`core.md` present + stray legacy** → **fix** via `legacy-profile-unsupported`. Branch on
   `coreFactsEmpty` from the reconcile signal's `detail` (step 1's `configure_route.route` JSON) —
   not from `resolve_shared`, which carries only hero detail and `coreMd`. Treat a missing or
-  unknown `coreFactsEmpty` as true (cautious). When false, tell the owner the stray file is no
-  longer read and they may remove or archive it. When true, name the legacy path as the only
+  unknown `coreFactsEmpty` as true (cautious). When false and the stray file is a review profile,
+  tell the owner it is no longer read and they may remove or archive it. When false and it is a
+  test-pilot profile, test-pilot still reads it: never call it unread or suggest removing it by
+  hand; retire it in section 5 if section 5 lists it, and otherwise leave it in place. When true, name the legacy path as the only
   populated calibration and require its content into `core.md` + the layer before removal.
 
 **Superheroes never deletes the legacy file** — the owner does. An unreadable or malformed legacy

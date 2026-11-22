@@ -33,7 +33,7 @@ import store_core  # noqa: E402
 ORIGIN = "https://github.com/acme/corner-shop.git"
 SECTION = "### Leftover settings copies"
 VIEW_HEADING = "## Leftover settings copies"
-REASON = ('old settings copies sit where the storage setting does not read: %d file(s) '
+REASON = ('old settings copies sit where the storage setting does not keep them: %d file(s) '
           '(fix step "Retire leftover settings copies")')
 
 _CORE = cm.render_core(

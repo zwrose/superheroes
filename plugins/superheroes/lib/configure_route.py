@@ -80,7 +80,7 @@ def route(cwd, *, root=None):
         files = []
     if files:
         return {"path": "fix",
-                "reasons": ['old settings copies sit where the storage setting does not read: %d file(s) '
+                "reasons": ['old settings copies sit where the storage setting does not keep them: %d file(s) '
                             '(fix step "Retire leftover settings copies")' % len(files)],
                 "signals": signals}
 
