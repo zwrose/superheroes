@@ -476,6 +476,10 @@ never `gh run list --limit 1`, which returns whichever workflow ran latest on th
 report another workflow's green as the one you are watching. The canonical statement is field 1 of the vet receipt's spine, in
 `skills/showrunner/reference/vet-receipt.md`.
 
+Re-running a pull-request workflow (`gh run rerun` or the re-run button) replays the merge commit
+recorded at its first run, so it never sees a newer base. To get CI on a newer base, push to the PR
+branch or close and reopen the PR; for the release PR, let the next push to `main` regenerate it.
+
 ## Cleaning up a finished cloud lane
 
 A cloud lane leaves a session on the owner's account and a pushed branch, and no checkout or worktree
