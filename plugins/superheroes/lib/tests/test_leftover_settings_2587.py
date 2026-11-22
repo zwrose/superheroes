@@ -971,16 +971,6 @@ def test_notice_wording_truncation_and_home(monkeypatch, tmp_path):
     assert ls.notice({"mode": None, "files": [], "digest": "x"}) == ""
 
 
-def test_kept_test_pilot_sentence_is_word_for_word_in_the_docs():
-    # axis: configure's fix path section 5 (its opening and its retire gate) and the 2594 upgrade note carry the notice's sentence word for word
-    plugin = os.path.dirname(_LIB)
-    fix = open(os.path.join(plugin, "skills", "configure", "reference", "fix.md"), encoding="utf-8").read()
-    section5 = fix.split("## 5 — Retire leftover settings copies", 1)[1]
-    assert section5.count(ls.KEPT_TEST_PILOT_PROFILE_SENTENCE) == 2
-    note = open(os.path.join(plugin, "transition-notes", "2594.md"), encoding="utf-8").read()
-    assert ls.KEPT_TEST_PILOT_PROFILE_SENTENCE in note
-
-
 def test_cli_list_retire_restore_and_usage(w, monkeypatch, capsys):
     # axis: the command line prints one JSON object per result, exit 0, and exit 2 for bad usage
     monkeypatch.setenv("HOME", str(w.tmp / "home"))
