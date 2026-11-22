@@ -365,14 +365,17 @@ needs fresh remote-head checks and CI on the new head; review follows the head-c
 
 ## A layer is pushed before its review
 
-A layer's review runs in PR mode, and PR mode pins the review to the pull request's **remote** head
-(`skills/review-code/SKILL.md` § 1. Setup) while the seats' views are built at the local head. A layer
-whose commits sit only in the local worktree therefore loses its review session at the first round:
-the driver refuses the mismatch with `view-head-anchor-mismatch`, after the panel seats have already
-run. So before `review-code` starts on a layer, the builder **pushes the layer's branch and has its
-draft pull request open**, and confirms the remote head equals the local head. When local fix
-commits land after a review session ends, the builder **pushes them again before any fresh review
-session** on the layer. Pushing only at handback is the shape that fails.
+This section covers a layer reviewed through `review-code`. That review runs in PR mode, and PR mode
+pins the review to the pull request's **remote** head (`skills/review-code/SKILL.md` § 1. Setup)
+while the seats' views are built at the local head. A layer whose commits sit only in the local
+worktree therefore loses its review session at the first round: the driver refuses the mismatch
+with `view-head-anchor-mismatch`, after the panel seats have already run. So before `review-code`
+starts on a layer, the builder **pushes the layer's branch and has its draft pull request open**,
+and confirms the remote head equals the local head. When local fix commits land after a review
+session ends, the builder **pushes them again before any fresh review session** on the layer.
+Pushing only at handback is the shape that fails. A light-lane layer's one independent reviewer is
+not a `review-code` session; its draft stage is the one `skills/workhorse/reference/handback.md`
+gives a stacked light-lane layer for the handback check.
 
 ## Anti-patterns
 
