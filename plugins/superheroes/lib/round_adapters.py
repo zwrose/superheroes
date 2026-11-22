@@ -584,7 +584,7 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
     # silent: the fold records the seat, never as a seat that did not run (those stay in `unverifiedClusters`).
     # A seat with no manifest entry or no `ids` is not judged. Always set, `[]` when no seat is silent, so every
     # `advance` fold takes the seat grain and never the whole-answer check.
-    silent_clusters, silent_keys, silent_items = [], [], 0
+    silent_clusters, silent_names, silent_items = [], [], 0
     for seat, occurrence, skey in landed_slots:
         entry = manifest_seats.get(skey) if isinstance(manifest_seats, dict) else None
         ids = entry.get("ids") if isinstance(entry, dict) else None
@@ -594,11 +594,12 @@ def _assemble_verifiers(roster, indexed, dispatch_manifest, disclosures, orders_
         answered = {verdict.get("id") for _seat, sk, verdict in supplied if sk == skey}
         if not answered & set(ordered):
             silent_clusters.append({"seat": seat, "occurrence": occurrence})
-            silent_keys.append(skey)
+            silent_names.append(seat)
             silent_items += len(ordered)
     if silent_clusters:
         disclosures["silentClusters"] = silent_clusters
-    artifact["verifierSilentClusters"] = sorted(silent_keys)
+    # The readable seat name (the one `silentClusters` and `unverifiedClusters` carry), never the storage key.
+    artifact["verifierSilentClusters"] = sorted(silent_names)
     artifact["verifierSilentItems"] = silent_items
     if landed:
         # The vendor that RAN each verifier is the runner's execution record (the same provenance

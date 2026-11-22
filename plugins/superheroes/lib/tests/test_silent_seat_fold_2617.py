@@ -409,6 +409,36 @@ def test_correction_hand_submit_of_an_empty_answer_is_silent(tmp_path):
                                                        "reason": "no-result"}]
 
 
+def test_correction_advance_an_empty_answer_is_silent(tmp_path):
+    w = _correction_world(tmp_path)
+    session = tmp_path / "adv-session"
+    session.mkdir()
+    gitdir = tmp_path / "adv-gitdir"
+    gitdir.mkdir()
+    (session / RR.META_FILE).write_text(json.dumps({"sessionId": "s-2617", "repoRoot": str(w.root),
+                                                    "headSha": w.fix_head}))
+    w.state["reviewedDiff"] = TRD.DIFF
+    RD.save_state(str(session), w.state)
+    n = RD.cmd_next(str(session))
+    assert n["ok"] is True and n["phase"] == RD.P_SECOND_TEST and n["payload"]["correction"] is True, n
+    state = IT._state(str(session))
+    pend = state["pending"]
+    roster, reason = RA.roster_for(RD.P_SECOND_TEST, state, state["config"])
+    assert reason is None
+    slots = IT._slots_of(roster)
+    IT._write_dispatch_manifest(str(session), pend, slots, IT._auditor_vendor_for(state))
+    for seat, occurrence in slots:
+        IT._land(str(session), state, pend, seat, {"findings": []}, occurrence=occurrence)
+        assert IT._record(str(session), seat, occurrence=occurrence)["ok"]
+    out = RD.cmd_advance(str(session), git=IT._fake_git(str(gitdir)))
+    assert out["ok"] and out["folded"]["phase"] == RD.P_SECOND_TEST, out
+    after = IT._state(str(session))
+    assert _silent(after, "2") == [_row("second-test-correction", 1)]
+    _assert_decision(after, "break-it-correction-silent", 1)
+    assert after["rounds"]["2"]["testCorrection"] == [{"findingKey": w.key, "outcome": "none",
+                                                       "reason": "no-result"}]
+
+
 # ---- verifiers: the answer grain ---------------------------------------------------------------------------------------
 
 def _two_item_state(count=2):
@@ -606,7 +636,7 @@ _FAR = [P1797._blocking_finding("unchecked index", 2),
 
 def _advance_verifiers(tmp_path, name, findings, answer):
     """advance over the verifier seats. ``answer(index, ids)`` is the seat's verdict list, or None to record the
-    seat missing. -> (state, [the seats' storage keys], [the seats' ordered ids])"""
+    seat missing. -> (state, [the seats' names, as `unverifiedClusters` names them], [the seats' ordered ids])"""
     session_dir, gitdir, head_path = IT._bootstrap(tmp_path, name=name)
     IT._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_VERIFIERS)
     state = IT._state(session_dir)
@@ -618,7 +648,7 @@ def _advance_verifiers(tmp_path, name, findings, answer):
     keys, ordered = [], []
     for index, (seat, occurrence) in enumerate(slots):
         ids = [f["id"] for f in IT._cluster_for(pend, seat).get("findings") or []]
-        keys.append(RR.storage_key(seat, occurrence))
+        keys.append(seat)
         ordered.append(ids)
         verdicts = answer(index, ids)
         if verdicts is None:
@@ -696,8 +726,13 @@ def test_verifiers_advance_a_missing_seat_is_never_named_with_a_silent_one(tmp_p
         tmp_path, "adv-mixed", _FAR, lambda i, ids: None if i == 0 else [])
     assert _silent(state) == [_row("verifiers", 1, grain="seat", seats=[keys[1]])]
     prov = state["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_VERIFIERS]
+    # the seat that did not run is in `unverifiedClusters` only; the seat that ran and said nothing is in
+    # `silentSeats` (and `silentClusters`) only
     assert [m["seat"] for m in prov["unverifiedClusters"]] == [keys[0]]
     assert [m["seat"] for m in prov["silentClusters"]] == [keys[1]]
+    named = [seat for row in _silent(state) for seat in row["seats"]]
+    assert keys[0] not in named and named == [keys[1]]
+    assert all(not seat.startswith("verifier-") for seat in named), named  # a seat name, never a storage key
 
 
 def test_verifiers_advance_with_no_silent_seat_records_no_silence(tmp_path):
@@ -727,14 +762,14 @@ def _assembly(tmp_path, answer, manifest="ids", landed=True):
 
 def test_assembly_a_landed_seat_naming_none_of_its_ids_is_silent(tmp_path):
     artifact, seat, skey, ids = _assembly(tmp_path, lambda ids: [])
-    assert artifact["verifierSilentClusters"] == [skey]
+    assert artifact["verifierSilentClusters"] == [seat] != [skey]
     assert artifact["verifierSilentItems"] == len(ids) == 2
     assert artifact["provenance"]["silentClusters"] == [{"seat": seat, "occurrence": 0}]
 
 
 def test_assembly_a_seat_naming_only_an_unknown_id_is_silent(tmp_path):
-    artifact, _seat, skey, _ids = _assembly(tmp_path, lambda ids: [_verdict("v99")])
-    assert artifact["verifierSilentClusters"] == [skey]
+    artifact, seat, _skey, _ids = _assembly(tmp_path, lambda ids: [_verdict("v99")])
+    assert artifact["verifierSilentClusters"] == [seat]
 
 
 def test_assembly_a_partial_answer_is_not_silent(tmp_path):
