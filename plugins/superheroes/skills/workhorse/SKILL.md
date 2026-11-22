@@ -182,6 +182,16 @@ you quote and stating the redaction. **Second, treat every claim you inherit as
 unverified until you re-run it yourself** (§8). A receipt that was claimed is not a receipt that
 was earned. **The resume-or-adopt call is the advisor's, not yours.**
 
+**A build that starts at a head another lane produced owes one more duty before new work, whether
+or not it is an adoption** (`rubric/launch-doctrine.md` § Recovery, Re-run inherited bite-proofs on
+the new head):
+
+1. **Re-run every inherited bite-proof on this head.** A build whose worktree starts at a head
+   another lane produced (a resumption after a death, an adoption, or a stack layer built on a
+   sibling's head) re-runs every bite-proof record the branch carries on this head, posts the tally
+   (reproduced / could-not-bite / stale receipt) in the build record, and fixes in-lane whatever no
+   longer bites.
+
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery at a takeover or a clean-base intake.**
 
 Intake is the last owner-interactive step. You set up the workspace and run the preflight (§2 and
