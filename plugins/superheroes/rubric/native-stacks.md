@@ -348,7 +348,10 @@ brings the layer current by a local `--no-ff` merge, runs the calibrated verify 
 and reviews the catch-up with a returning review session, which reads only what the catch-up changed
 in the layer's own lines. A catch-up that changed none of them is an empty returning round that
 carries the earlier review, and any finding still open is re-checked against the caught-up head. No
-finding comes from the lower layer's code. The handback check (`lib/vet_slot.py handback --pr <n>
+finding comes from the lower layer's code. After handback, a catch-up that fixes a code conflict on a
+layer already handed back (a send-back) is judged by the vet first, as
+`skills/showrunner/reference/merge-train.md` § A PR that conflicts with its base goes back to its
+builder says, and its returning review runs only when the vet calls the fix material. The handback check (`lib/vet_slot.py handback --pr <n>
 --repo <owner/name>`) refuses `stack-not-caught-up` until the layer's pushed head holds the lower
 layer's current head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 

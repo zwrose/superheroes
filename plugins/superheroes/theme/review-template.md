@@ -447,7 +447,10 @@ When the PR moved and the vet's head-coverage check covers the move, the advisor
 then carries `previousCommit` (the earlier sheet's commit) and `prSheet.carriedForward`, whose `sheets`
 lists the digest of the earlier sheet and then the digests that one carried, newest first. A carried
 sheet shows neither a carried box nor the changed box, and the answers to unchanged items are kept as for
-any republish.
+any republish. The one exception is the optional `conflictFix`, the vet's one-line reason a code conflict
+fixed when the base was brought in is immaterial: the owner then sees one line, "A code conflict was fixed
+when the base was brought in, and it was judged immaterial: ..." (`pr.conflictFixed`), on the page and in
+the chat prose. A carry without it still shows no note.
 
 When the check does not cover the move, `pr_sheet.py hold` writes the published sheet again with
 `prSheet.held` true and no cards. The page shows one notice and no controls, no verdict is read for it,

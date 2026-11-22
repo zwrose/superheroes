@@ -5,7 +5,8 @@ sibling lib modules only.
 A review record certifies one commit, ``finalCommit.sha`` (X). This check decides whether X covers the pull request's
 head, and the advisor's vet runs it for every pull request. It answers ``proven`` (git itself shows the pull
 request's own change at the head equals the reviewed change at X), ``judgement`` (the vet must read the listed hunks:
-every remaining difference is prose or comment and blank lines, and every new commit is the builder's) or
+every new commit is the builder's, and every remaining difference is either prose or comment and blank lines
+(``prose-or-comments``) or the builder's hand-made lines of a merge that brings the base in (``conflict-fix``)) or
 ``needs-review`` (a returning-round review of the listed files is owed). It reads the repository and writes nothing.
 A second, pure function, ``outcome``, turns that answer and CI on the head into the vet's outcome and the merge
 sheet's action.
@@ -34,7 +35,21 @@ The rule, in order; the first step that applies answers:
      other extension never qualify. A commit whose author email is not the builder's (the ``builder_author``
      given, else the author email of X), authors git cannot read, or no new commit to vouch for the difference:
      needs-review (``other-author``). All files qualify and every author is the builder: judgement
-     (``prose-or-comments``), with the hunks to read. Otherwise needs-review (``behaviour-change``).
+     (``prose-or-comments``), with the hunks to read. Otherwise needs-review (``behaviour-change``), except for a
+     builder's conflict fix: when the files do not qualify, every author is the builder, no rename or copy source is
+     outstanding, no remaining file is a moved one, and every new commit is a two-parent merge whose second parent is
+     the base or an ancestor of it, whose first parent is X or another new commit, and whose two parents have one
+     merge base, judgement (``conflict-fix``). Each remaining file is then read at every such merge. When the merge
+     holds the first parent's version and the second parent still holds the merge base's, or the merge holds the
+     second parent's version and the first still holds the merge base's, the file has no hand-made line there.
+     Otherwise the file must be a regular file of one mode in all four trees, with no ``merge`` or
+     ``conflict-marker-size`` attribute and no NUL byte, and git's own automatic merge of it (``git merge-file
+     --diff3``, conflict blocks included) is compared with the file at the merge. The same: nothing to list. Git
+     merged it cleanly yet the file differs, or a conflict block's markers survive in the file: needs-review.
+     Otherwise every difference, each conflict block it touches widened to the whole block and given three lines of
+     context, is a hunk (git's text against the file) the vet reads, so a resolution that drops one side's line
+     shows the line. A merge with no hand-made line lists nothing, and the answer is the one above. Any failed git
+     read leaves the answer as above.
   9. Any exception: needs-review (``check-failed``).
 Every failure to read anything answers needs-review. The check never raises.
 
@@ -81,6 +96,7 @@ CLI:
 prints the result as one JSON object. Exit 0 for every answer, 2 on a usage error (an unreadable record, proof or
 union-proof file, a union-proof file holding null, a bad value)."""
 import argparse
+import difflib
 import io
 import json
 import os
@@ -115,9 +131,10 @@ WHY_BASE_AT_REVIEW = "base-at-review"
 WHY_BASE_AT_REVIEW_IGNORED = "base-at-review-ignored"
 WHY_PROVEN_UNION = "proven-union"
 WHY_UNION_IGNORED = "union-probe-ignored"
+WHY_CONFLICT_FIX = "conflict-fix"
 WHY_TOKENS = (WHY_RECORD_UNUSABLE, WHY_SAME_COMMIT, WHY_INPUT_INVALID, WHY_DIFF_UNREADABLE, WHY_OWN_CHANGE_UNCHANGED,
               WHY_PROVEN_COPIES, WHY_PROSE_OR_COMMENTS, WHY_OTHER_AUTHOR, WHY_BEHAVIOUR_CHANGE, WHY_CHECK_FAILED,
-              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_IGNORED, WHY_PROVEN_UNION, WHY_UNION_IGNORED)
+              WHY_BASE_AT_REVIEW, WHY_BASE_AT_REVIEW_IGNORED, WHY_PROVEN_UNION, WHY_UNION_IGNORED, WHY_CONFLICT_FIX)
 
 UNION_SCHEMA = "union-probe/1"
 UNION_REASONS = ("malformed", "no-receipt", "other-base", "probe-unreadable", "tree-unconfirmed", "other-commit",
@@ -386,6 +403,216 @@ def _authors(run, base, x, head):
             return None
         commits.append({"sha": sha, "author": email})
     return commits
+
+
+# --------------------------------------------------------------------------------------------
+# a builder's conflict fix (step 8)
+# --------------------------------------------------------------------------------------------
+
+KIND_CONFLICT_FIX = "conflict-fix"
+_BLOB_ENTRY_RE = re.compile(r"^(\d{6}) blob ([0-9a-f]{40}|[0-9a-f]{64})\t.+$")
+_CONFLICT_START, _CONFLICT_BASE, _CONFLICT_MID, _CONFLICT_END = "<<<<<<< ", "||||||| ", "=======", ">>>>>>> "
+_HUNK_CONTEXT = 3
+_MAX_CONFLICTS = 127  # ``git merge-file`` exits with the number of conflicts, at most this
+
+
+def _blob_entry(run, rev, path):
+    """``(mode, blob sha)`` of ``path`` at ``rev``; ``ABSENT`` when git exited 0 and listed nothing; None when git
+    failed or printed anything but one blob entry."""
+    code, text = run(["ls-tree", rev, "--", path])
+    if code != 0 or not isinstance(text, str):
+        return None
+    if not text.strip():
+        return ABSENT
+    lines = text.splitlines()
+    entry = _BLOB_ENTRY_RE.match(lines[0]) if len(lines) == 1 else None
+    return (entry.group(1), entry.group(2)) if entry else None
+
+
+def _lines_of(text):
+    """``text`` as lines that keep their ``\\n``; git's own line ends, never a form feed or a separator character."""
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def _conflict_blocks(lines):
+    """``[(start, end, marker line numbers)]`` of every conflict block of git's diff3 text (half-open, markers
+    included); None when a block is not exactly ``<<<<<<<``, ``|||||||``, ``=======`` and ``>>>>>>>``."""
+    blocks = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].startswith(_CONFLICT_START):
+            i += 1
+            continue
+        marks = [i]
+        j = i + 1
+        while j < len(lines) and not lines[j].startswith(_CONFLICT_END):
+            if lines[j].startswith(_CONFLICT_BASE) or lines[j].rstrip("\r\n") == _CONFLICT_MID:
+                marks.append(j)
+            j += 1
+        if j >= len(lines):
+            return None
+        marks.append(j)
+        if len(marks) != 4:
+            return None
+        blocks.append((i, j + 1, marks))
+        i = j + 1
+    return blocks
+
+
+def _b_position(ops, pos):
+    """The line of the file that sits where line ``pos`` of git's text does."""
+    for tag, i1, i2, j1, j2 in ops:
+        if i1 <= pos <= i2:
+            if tag == "equal":
+                return j1 + (pos - i1)
+            return j1 if pos == i1 else j2
+    return ops[-1][4] if ops else 0
+
+
+def _hunk_text(a, b, ops, lo, hi):
+    """``(header, text)``: lines ``lo`` to ``hi`` of git's text ``a`` as ``-`` lines against the file ``b`` as ``+``
+    lines, in unified form (1-based numbers, git's convention)."""
+    start_b = _b_position(ops, lo)
+    body, a_n, b_n = [], 0, 0
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "equal":
+            for k in range(max(i1, lo), min(i2, hi)):
+                body.append(" " + a[k])
+                a_n, b_n = a_n + 1, b_n + 1
+        elif i1 >= lo and i2 <= hi:
+            body.extend("-" + a[k] for k in range(i1, i2))
+            body.extend("+" + b[k] for k in range(j1, j2))
+            a_n, b_n = a_n + (i2 - i1), b_n + (j2 - j1)
+    header = "@@ -%d,%d +%d,%d @@" % (lo + 1 if a_n else lo, a_n, start_b + 1 if b_n else start_b, b_n)
+    return header, header + "\n" + "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                                           for line in body)
+
+
+def _hunk_ranges(ops, blocks, length):
+    """The merged half-open ranges of git's text that the hand-made lines (every non-equal opcode) fall in: each range
+    widened to the whole of every conflict block it overlaps, given context, and joined with those it touches."""
+    ranges = []
+    for tag, i1, i2, _, _ in ops:
+        if tag == "equal":
+            continue
+        lo, hi = i1, i2
+        for start, end, _ in blocks:
+            overlaps = (i1 < end and i2 > start) if i2 > i1 else (start < i1 < end)
+            # axis: a hand-made line inside a conflict block is listed with the whole block, so the vet reads both sides and the markers beside the resolution — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-span)
+            if overlaps:
+                lo, hi = min(lo, start), max(hi, end)
+        ranges.append((max(0, lo - _HUNK_CONTEXT), min(length, hi + _HUNK_CONTEXT)))
+    merged = []
+    for lo, hi in sorted(ranges):
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _conflict_fix_file(run, path, c, p1, p2, mb):
+    """The hunks of ``path`` at the merge ``c`` (parents ``p1``, ``p2``, merge base ``mb``) that git's own automatic
+    merge did not make: ``[]`` when there are none, None when the file cannot be read this way."""
+    entries = [_blob_entry(run, rev, path) for rev in (c, p1, mb, p2)]
+    # axis: a tree entry git could not read is no absent file, so a failed read never passes the equality below and hides a hand edit — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-unreadable)
+    if any(entry is None for entry in entries):
+        return None
+    at_c, at_p1, at_mb, at_p2 = entries
+    # axis: a side's version taken wholesale counts as no hand-made line only while the other side still holds the merge base's, so a resolution that drops one side's change is read — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-onesided)
+    if (at_c == at_p1 and at_p2 == at_mb) or (at_c == at_p2 and at_p1 == at_mb):
+        return []
+    if not all(isinstance(entry, tuple) for entry in entries):
+        return None
+    # axis: a merge that changes the file's mode, or a file that is not a regular file, is never read as a conflict fix, since a mode is no line of text — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-mode)
+    if len({entry[0] for entry in entries}) != 1 or at_c[0] not in _REGULAR_MODES:
+        return None
+    code, text = run(["check-attr", "--source", c, "merge", "conflict-marker-size", "--", path])
+    rows = [line.rsplit(": ", 2) for line in text.splitlines()] if code == 0 and isinstance(text, str) else []
+    # axis: a file with a merge driver or a marker size attribute was not merged the way the check rebuilds it, so it is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-attr)
+    if not (len(rows) == 2 and all(len(row) == 3 for row in rows)
+            and [row[1] for row in rows] == ["merge", "conflict-marker-size"] and all(row[2] == "unspecified" for row in rows)):
+        return None
+    texts = []
+    for entry in (at_p1, at_mb, at_p2, at_c):
+        code, text = run(["cat-file", "blob", entry[1]])
+        if code != 0 or not isinstance(text, str):
+            return None
+        texts.append(text)
+    # axis: a file with a NUL byte anywhere is binary to the eye even when git's merge reads it as text, so it is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-binary)
+    if any("\0" in text for text in texts):
+        return None
+    code, merged = run(["merge-file", "-p", "--diff3", "--object-id", "-L", "ours", "-L", "base", "-L", "theirs",
+                        at_p1[1], at_mb[1], at_p2[1]])
+    if not isinstance(code, int) or isinstance(code, bool) or not 0 <= code <= _MAX_CONFLICTS or not isinstance(merged, str):
+        return None
+    a, b = _lines_of(merged), _lines_of(texts[3])
+    # axis: a file identical to git's automatic merge has no hand-made line only when that merge was clean; one that still holds git's conflict blocks was never resolved, so it is never passed over while another file's hunks are listed — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-unresolved-whole)
+    if a == b:
+        return [] if code == 0 else None
+    # axis: a file git merged without a conflict has no hand-made line to read, so an edit in it, or in a file neither parent changed, is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-clean-edit, E-cf-untouched)
+    if code == 0:
+        return None
+    blocks = _conflict_blocks(a)
+    if blocks is None or min(len(blocks), _MAX_CONFLICTS) != code:
+        return None
+    ops = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+    removed = set()
+    for tag, i1, i2, _, _ in ops:
+        if tag in ("replace", "delete"):
+            removed.update(range(i1, i2))
+    # axis: a conflict block whose markers survive in the file was never resolved, so it is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-unresolved)
+    if not all(mark in removed for _, _, marks in blocks for mark in marks):
+        return None
+    hunks = []
+    for lo, hi in _hunk_ranges(ops, blocks, len(a)):
+        header, hunk = _hunk_text(a, b, ops, lo, hi)
+        hunks.append({"file": path, "merge": c, "parents": [p1, p2], "mergeBase": mb, "kind": KIND_CONFLICT_FIX,
+                      "header": header, "text": hunk})
+    return hunks
+
+
+def _conflict_fix(run, base, x, head, remaining, commits):
+    """The hunks the vet reads when every new commit is the builder's merge of the base into the pull request and the
+    only lines of the head that git's own automatic merge did not make are listed; else None (the module docstring's
+    step 8 paragraph). ``[]`` means no hand-made line anywhere. Every failed git read is None."""
+    if not commits:
+        return None
+    shas = {commit["sha"] for commit in commits}
+    hunks = []
+    for commit in commits:
+        c = commit["sha"]
+        code, text = run(["rev-list", "--parents", "-n", "1", c])
+        words = text.split() if code == 0 and isinstance(text, str) else []
+        if not words or words[0] != c or not all(returning_review._is_sha(word) for word in words):
+            return None
+        parents = words[1:]
+        # axis: a new commit that is not a two-parent merge is code nobody saw merged, so it is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-nonmerge)
+        if len(parents) != 2:
+            return None
+        p1, p2 = parents
+        code, _ = run(["merge-base", "--is-ancestor", p2, base])
+        # axis: the second parent is the base or an ancestor of it, so a merge of a side branch is never read as the base brought in — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-side)
+        if code != 0:
+            return None
+        # axis: the first parent is the certified commit or another new commit, so a merge built on an older commit that drops reviewed code is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-first)
+        if p1 != x and p1 not in shas:
+            return None
+        code, text = run(["merge-base", "--all", p1, p2])
+        bases = text.split() if code == 0 and isinstance(text, str) else []
+        # axis: the two parents have exactly one merge base, so a criss-cross merge, whose automatic merge the check cannot rebuild, is never read as a conflict fix — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-criss)
+        if len(bases) != 1 or not returning_review._is_sha(bases[0]):
+            return None
+        for path in remaining:
+            got = _conflict_fix_file(run, path, c, p1, p2, bases[0])
+            if got is None:
+                return None
+            hunks.extend(got)
+    return hunks
 
 
 def check(repo_root, base, record, head, proof=(), builder_author=None, git=None, base_at_review=(), union_proof=None):
@@ -717,9 +944,23 @@ def _check(repo_root, base, record, head, proof, builder_author, git, x_base=Non
             text = "a new commit is by someone other than the builder: %s" % ", ".join(
                 sorted({c["author"] for c in commits if c["author"].lower() != builder.lower()}))
         _needs_review(result, WHY_OTHER_AUTHOR, text)
-    # A judgement answer needs the content rule and the author rule both; either failing is needs-review.
+    # A judgement answer needs the content rule and the author rule both; either failing is needs-review. The one
+    # exception is a builder's conflict fix: files that do not qualify, read at the merges that made them.
     if not qualifies:
-        _needs_review(result, WHY_BEHAVIOUR_CHANGE, reason)
+        # axis: a conflict fix is read only when the builder authored every new commit, so another author's merge stays needs-review — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-author)
+        may_read = authors_ok
+        # axis: a conflict fix is read only when no rename or copy source is outstanding and no remaining file is a moved one, so a move after review keeps today's answer — see bite-proof record i2600_head_coverage_conflict_fix (E-cf-rename)
+        may_read = may_read and not outstanding and not any(path in moved for path in remaining)
+        fix = _conflict_fix(run, base, x, head, remaining, commits) if may_read else None
+        if fix:
+            result["answer"] = JUDGEMENT
+            result["hunks"] = fix
+            result["files"] = list(dict.fromkeys([*remaining, *(h["file"] for h in fix)]))
+            result["why"].append(_line(WHY_CONFLICT_FIX, "every new commit is a merge by the builder that brings the base in; "
+                                                         "the vet reads the %d hand-made hunk(s) of the conflict fix against "
+                                                         "both sides" % len(fix)))
+        else:
+            _needs_review(result, WHY_BEHAVIOUR_CHANGE, reason)
     if authors_ok and qualifies:
         result["answer"] = JUDGEMENT
         result["hunks"] = hunks

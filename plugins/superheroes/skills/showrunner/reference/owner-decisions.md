@@ -1080,7 +1080,7 @@ before it. A
 move the check covers from the sheet's commit keeps the word: the advisor republishes
 the sheet for the new head carrying the answers and the verdict forward, with the `carriedForward`
 input key, whose `fromSheet` is the sheet published last and whose `heads` are the new head commit
-of each PR on the sheet. The sheet shows no note of the carry. The builder refuses a carry across a
+of each PR on the sheet. The sheet shows no note of the carry, with one exception: a carry cleared as a judged code-conflict fix shows one line naming it and the vet's reason (`carriedForward.conflictFix`). The builder refuses a carry across a
 different PR or a different stack membership. A move the check does not cover takes the sheet down
 with `lib/pr_sheet.py hold`, and the PR goes back for a returning review. When the PR is READY again,
 the advisor republishes an ordinary sheet for the new commit with `previousCommit`: the sheet shows

@@ -556,6 +556,10 @@ def _pr_body(sheet):
     # axis: a carried sheet shows no note of the carry (neither the carried box nor the changed box); only an uncarried sheet with previousCommit shows the changed box — see bite-proof record i2496_wo_c_sheet_head (E-nonote)
     if "carriedForward" not in prsheet and "previousCommit" in prsheet:
         lines += ["**%s**" % PR["changedHeading"], "", _fill(PR["changed"], previous=_short(prsheet["previousCommit"])), ""]
+    # axis: a carried sheet built with carriedForward.conflictFix shows exactly one line saying the conflict fix was judged immaterial; without it, nothing — see bite-proof record i2600_sheet_conflict_fix (E-cf-line-prose)
+    why = prsheet.get("carriedForward", {}).get("conflictFix")
+    if isinstance(why, str):
+        lines += [_fill(PR["conflictFixed"], why=_text(why)), ""]
     if "walk" in prsheet:
         lines += _pr_walk(sheet)
     lines += ["**%s**" % PR["acceptingHeading"], ""]
