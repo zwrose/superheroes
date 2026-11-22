@@ -952,6 +952,15 @@ def test_notice_wording_truncation_and_home(monkeypatch, tmp_path):
     assert kept_lines[1] == ("- /x/profile.md (test-pilot reads this one; retiring it switches "
                              "test-pilot to its newer settings file)")
     assert kept_lines[2] == "- /x/test-pilot.md"
+    # axis: a kept test-pilot profile listed: the notice says to retire it before the next test-pilot run, just above how to retire
+    assert kept_lines[3] == ("A kept test-pilot profile leaves this list once test-pilot saves a block "
+                             "beside it, so retire it before the next test-pilot run.")
+    assert kept_lines[4].startswith("To retire them, run /superheroes:configure and say yes at")
+    # axis: no kept test-pilot profile listed (none at all, or only the newer test-pilot file): the sentence is absent
+    newer_only = {"mode": mr.GLOBAL, "digest": "x", "files": [
+        {"path": "/x/test-pilot.md", "family": "test-pilot", "reads": "r"}]}
+    for result in (one, newer_only):
+        assert "A kept test-pilot profile" not in ls.notice(result)
     assert text.splitlines()[-1].startswith("To retire them, run /superheroes:configure and say yes at")
     many = {"mode": mr.GLOBAL, "digest": "x", "files": [
         {"path": "/x/%02d.md" % i, "family": "core", "reads": "r"} for i in range(12)]}

@@ -133,6 +133,12 @@ The build record holds, below the marker:
 - **In the light lane**, the review dispositions table and the receipts. There is no brief.
 - **In both lanes**, bite-proof records for every detector the build added or changed, or the line
   `None — this build added or changed no detector` when there are none, plus disclosures.
+- **In both lanes, when the build started at a head another lane produced** (a resumption after a
+  death, an adoption, or a stack layer built on a sibling's head), the inherited bite-proof tally,
+  directly after the bite-proof records: each bite-proof record the branch carried, re-run on this
+  head, with its outcome (reproduced, could-not-bite, or stale receipt) and, for each that no longer
+  bites, the in-lane fix (`rubric/launch-doctrine.md` § Recovery). A build that inherited no record
+  writes `Inherited bite-proofs: none`.
 - **In both lanes, on the superheroes source repository**, when the change edited plugin Markdown,
   the whole-tree text tests' run among the receipts: the command, the head, the pass count and the
   run time (the charter's §8).
