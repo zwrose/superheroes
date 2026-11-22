@@ -108,7 +108,7 @@ Only this explicit owner-confirm confirms the profile; merely viewing it never d
 
 ## 5 — Retire leftover settings copies
 
-A leftover is an old copy of a settings file that sits where the storage setting does not read first, beside the copy it does read.
+A leftover is an old copy of a settings file that sits where the storage setting does not keep it, beside the copy the setting keeps. One kind is still read: an old test-pilot profile a storage move left in place is the one test-pilot reads until it is retired, and retiring it switches test-pilot to its newer settings file. The notice marks it.
 
 List the leftovers. The command writes nothing:
 
@@ -117,7 +117,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/leftover_settings.py" list --cwd .
 ```
 
-The result carries `files` (each with `path`, `family`, and `reads`), `digest`, and `notice`. An empty `files` list means nothing is left over, and this step is done. Otherwise show the owner the `notice` text and, for each file, the copy the setting reads instead (`reads`).
+The result carries `files` (each with `path`, `family`, and `reads`), `digest`, and `notice`. An empty `files` list means nothing is left over, and this step is done. Otherwise show the owner the `notice` text and, for each file, the copy the setting reads instead (`reads`; for a marked test-pilot profile, the file test-pilot switches to once it is retired).
 
 <!-- decision-point: id=configure-fix-retire-leftovers mode=gate kind=owner-gate default="list only — no retire without current-turn owner authorization" carrier=run-output -->
 
