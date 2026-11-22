@@ -110,7 +110,7 @@ Only this explicit owner-confirm confirms the profile; merely viewing it never d
 
 ## 5 — Retire leftover settings copies
 
-A leftover is an old copy of a settings file that sits where the storage setting does not keep it, beside the copy the setting keeps. One kind is still read: an old test-pilot profile a storage move left in place is the one test-pilot reads until it is retired, and retiring it switches test-pilot to its newer settings file. The notice marks it.
+A leftover is an old copy of a settings file that sits where the storage setting does not keep it, beside the copy the setting keeps. One kind is still read: an old test-pilot profile a storage move left in place is the one test-pilot reads until it is retired, and retiring it switches test-pilot to its newer settings file. The notice marks it. A kept test-pilot profile leaves this list once test-pilot saves a block beside it, so retire it before the next test-pilot run.
 
 List the leftovers. The command writes nothing:
 
@@ -123,7 +123,7 @@ The result carries `files` (each with `path`, `family`, and `reads`), `digest`, 
 
 <!-- decision-point: id=configure-fix-retire-leftovers mode=gate kind=owner-gate default="list only — no retire without current-turn owner authorization" carrier=run-output -->
 
-Retiring moves files, so it needs the owner's yes. GATE: write the list down in the run output, with the `notice` text, each file's `reads`, and the `digest`, and hand back. Do **not** run `retire` on the default path.
+Retiring moves files, so it needs the owner's yes. GATE: write the list down in the run output, with the `notice` text, each file's `reads`, and the `digest`, and hand back. When the list marks a test-pilot profile, the run output also says: "A kept test-pilot profile leaves this list once test-pilot saves a block beside it, so retire it before the next test-pilot run." Do **not** run `retire` on the default path.
 
 **Only when the owner says yes in this turn.** Invoking `/superheroes:configure` is not the yes. Pass the digest the list printed, so the move covers exactly the files the owner saw:
 
