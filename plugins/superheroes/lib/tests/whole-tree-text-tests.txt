@@ -14,6 +14,7 @@ plugins/superheroes/lib/tests/test_disposition_flow.py
 plugins/superheroes/lib/tests/test_heartbeat_docs_drift.py
 plugins/superheroes/lib/tests/test_i2272_stand_down.py
 plugins/superheroes/lib/tests/test_invocation_hygiene.py
+plugins/superheroes/lib/tests/test_kept_test_pilot_sentence_2610.py
 plugins/superheroes/lib/tests/test_model_tier_wiring.py
 plugins/superheroes/lib/tests/test_no_fixer_phase_c1l9a.py
 plugins/superheroes/lib/tests/test_one_result_contract_2450.py

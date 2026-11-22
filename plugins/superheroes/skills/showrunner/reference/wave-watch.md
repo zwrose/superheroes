@@ -620,7 +620,11 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    alone. Then print the whole composed `relayMessage`, never a truncated view such as `head` or the
    message id alone, so the text you send is text you have read.
 5. Send exactly the `relayMessage` you printed by `SendMessage` to the relay's `name`, copied from
-   that output and never retyped from your own draft.
+   that output and never retyped from your own draft. Only the advisor's own session sends it, never a
+   fork of that session: a fork's send reaches the relay inside the fork's own framing, so its first
+   line is not the RELAY line and the relay ignores it, telling only the fork (`RELAY_PROMPT` in
+   `lib/cloud_relay.py`). A fork that ran the steps above writes the printed `relayMessage` to a file
+   and hands the file back; the advisor's own session prints that file, sends its text, and runs step 6.
 6. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`, and it needs both
    legs. The pointer leg holds when the text the relay sent equals `forward` exactly and the send
    succeeded; the relay's own words about what it sent are never the receipt. The comment leg holds
