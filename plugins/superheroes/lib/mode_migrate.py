@@ -607,6 +607,10 @@ def _finish_flip(files, store_dir):
 
 def _backout_flip(files):
     for f in files:
+        # axis: a back-out touches a destination only while it holds this flip's own copy (known by the hash recorded at
+        # copy time), so a destination saved since is kept, and an unrestored snapshot is kept by the caller in the backup folder
+        if _sha(f["dst"]) not in (f.get("copied"), _sha(f["src"])):
+            continue
         # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
         if f.get("preexisting"):
             if f.get("link") is not None:
@@ -621,9 +625,7 @@ def _backout_flip(files):
                     shutil.rmtree(stage_dir, ignore_errors=True)
                 continue
             snap = f.get("snapshot")
-            # axis: a back-out restores the snapshot only over this flip's own copy (known by the hash recorded at copy time),
-            # so a destination saved since is kept, and an unrestored snapshot is kept by the caller in the backup folder
-            if snap and os.path.isfile(snap) and _sha(f["dst"]) in (f.get("copied"), _sha(f["src"])):
+            if snap and os.path.isfile(snap):
                 _copy_bytes(snap, f["dst"])
                 _remove(snap)
             continue
