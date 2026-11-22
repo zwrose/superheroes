@@ -502,7 +502,7 @@ def execute(migration, *, root=None):
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
                               # axis: other sessions write only the decisions copy read now (the carried one) and test-pilot profiles; a set-aside decisions copy is read by no one and still moves, so it never shadows the carry
                               "shared": f.get("family") == "test-pilot" or (f.get("family") == "decisions" and f.get("role") == ROLE_CARRY),
-                              "preexisting": os.path.lexists(f["dst"])}
+                              "preexisting": os.path.lexists(f["dst"]), "copied": _sha(f["src"])}
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
         for n, f in enumerate(journal["files"]):
@@ -538,9 +538,9 @@ def execute(migration, *, root=None):
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
             # abort before any delete (UFR-6): remove copied dsts, leave sources, clear journal
             _backout_flip([f for f in journal["files"] if f["done"]])
-            _drop_snapshots(journal["files"])
+            kept = _keep_snapshots(journal["files"], store_dir)
             _remove(jpath)
-            return {"status": "blocked"}
+            return dict({"status": "blocked"}, **({"overwritten": kept} if kept else {}))
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         undeleted = []
@@ -558,12 +558,6 @@ def execute(migration, *, root=None):
 
 
 # --------------------------------------------------------------------------- recover
-
-
-def _drop_snapshots(files):
-    for f in files:
-        if f.get("snapshot"):
-            _remove(f["snapshot"])
 
 
 def _sha(path):
@@ -586,6 +580,9 @@ def _settled(f, tries=3):
 def _keep_snapshots(files, store_dir):
     # axis: an overwritten destination's prior bytes move to a dated backup folder and are named, never dropped on success
     import leftover_settings
+    for f in files:
+        if f.get("snapshot") and os.path.isfile(f["snapshot"]) and _sha(f["snapshot"]) == _sha(f["dst"]):
+            _remove(f["snapshot"])  # the destination still holds these bytes: nothing to keep
     snaps = [f for f in files if f.get("snapshot") and os.path.isfile(f["snapshot"])]
     backup = leftover_settings._make_backup_dir(store_dir, None) if snaps else None
     for f in snaps:
@@ -624,9 +621,11 @@ def _backout_flip(files):
                     shutil.rmtree(stage_dir, ignore_errors=True)
                 continue
             snap = f.get("snapshot")
-            # axis: a back-out restores the snapshot only over this flip's own copy, so a destination saved since is kept
-            if snap and os.path.isfile(snap) and _sha(f["dst"]) == _sha(f["src"]):
+            # axis: a back-out restores the snapshot only over this flip's own copy (known by the hash recorded at copy time),
+            # so a destination saved since is kept, and an unrestored snapshot is kept by the caller in the backup folder
+            if snap and os.path.isfile(snap) and _sha(f["dst"]) in (f.get("copied"), _sha(f["src"])):
                 _copy_bytes(snap, f["dst"])
+                _remove(snap)
             continue
         _remove(f["dst"])  # sources untouched
 
@@ -714,7 +713,7 @@ def recover(cwd, *, root=None):
                 overwritten = _finish_flip(files, store_dir)   # commit landed → finish the move
             else:
                 _backout_flip(files)       # pre-commit → back out
-                _drop_snapshots(files)
+                overwritten = _keep_snapshots(files, store_dir)
             _remove(jpath)
             return dict({"status": "recovered"}, **({"overwritten": overwritten} if overwritten else {}))
     return {"status": "noop"}
