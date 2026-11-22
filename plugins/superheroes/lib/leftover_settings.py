@@ -55,6 +55,9 @@ BACKUPS_DIRNAME = "leftover-backups"
 MANIFEST_FILENAME = "retired.json"
 MANIFEST_SCHEMA = 1
 MAX_NOTICE_PATHS = 10
+# The one wording, repeated word for word in configure's fix path section 5 and the 2594 upgrade note.
+KEPT_TEST_PILOT_PROFILE_SENTENCE = ("A kept test-pilot profile leaves this list once test-pilot saves a "
+                                    "block beside it, so retire it before the next test-pilot run.")
 
 REASON_OWNER_AUTHORIZATION = "owner-authorization-required"
 REASON_STORE_UNWRITABLE = "store-unwritable"
@@ -292,6 +295,9 @@ def notice(result):
                      "test-pilot to its newer settings file)" if entry["path"] in tp else ""))
     if count > MAX_NOTICE_PATHS:
         lines.append("- and %d more (configure lists them all)" % (count - MAX_NOTICE_PATHS))
+    # axis: a kept test-pilot profile drops off this list once test-pilot saves a block beside it, so the notice says to retire it before the next run
+    if tp:
+        lines.append(KEPT_TEST_PILOT_PROFILE_SENTENCE)
     lines.append("To retire them, run /superheroes:configure and say yes at \"Retire leftover "
                  "settings copies\". They move to a dated backup folder (never deleted), and the "
                  "step says how to undo it.")

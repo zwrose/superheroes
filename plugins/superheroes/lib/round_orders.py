@@ -798,3 +798,119 @@ def scan_all_order_templates_shell_violations(root: str | None = None) -> list[s
         template_id = name[:-3]
         violations.extend(scan_template_shell_violations(body, template_id))
     return violations
+
+
+# --- the order shapes the round driver can emit (issue 2609) -------------------
+#
+# One row per payload shape `round_driver._advance` emits. Module data only: no runtime path reads it
+# (`_advance` never calls `order_shape`); a test grades every seat-answered row's answers with the
+# real gate. `P_TERMINAL` is not an order and has no row.
+
+CHANNEL_RUNNER = "runner"  # graded by engine_dispatch._grade_review_attempt
+CHANNEL_HOST_REPLY = "host-reply"  # a read-only searcher replies; the runner never grades it
+CHANNEL_ORCHESTRATOR = "orchestrator"  # no seat answers; census only
+ORDER_SHAPE_CHANNELS = (CHANNEL_RUNNER, CHANNEL_HOST_REPLY, CHANNEL_ORCHESTRATOR)
+
+# The gates that can refuse an empty answer, first in line first.
+REFUSED_BY_RUNNER = "runner"
+REFUSED_BY_PAYLOAD_FAULT = "payload-fault"  # payload_contracts.payload_fault
+EMPTY_REFUSED_BY = (REFUSED_BY_RUNNER, REFUSED_BY_PAYLOAD_FAULT)
+
+
+def _shape(shape_id, phase, channel, payload_keys, *, result_kind=None, expected_result_kind=None,
+           nothing_to_group=False, empty_answer_valid=None, empty_refused_by=None, order_allows_empty=None,
+           when=()):
+    """One row. For a seat row, ``orderAllowsEmpty`` is what the order's template says of an empty answer and
+    ``emptyAnswerValid`` is how the answer's gate grades the empty answer the order's seat would send (with its read
+    list where the order asks for one); they differ only where no gate enforces the order (a known gap the row
+    declares). ``emptyRefusedBy`` is set only when ``emptyAnswerValid`` is False. ``when`` picks the row by value:
+    (key, "empty"|"nonempty") pairs."""
+    row = {"id": shape_id, "phase": phase, "channel": channel, "resultKind": result_kind,
+           "expectedResultKind": expected_result_kind, "nothingToGroup": nothing_to_group,
+           "payloadKeys": frozenset(payload_keys), "when": tuple(when)}
+    if empty_answer_valid is not None:
+        row["emptyAnswerValid"] = empty_answer_valid
+        row["orderAllowsEmpty"] = empty_answer_valid if order_allows_empty is None else order_allows_empty
+    if empty_refused_by is not None:
+        row["emptyRefusedBy"] = empty_refused_by
+    return row
+
+
+_SYNTHESIS_KEYS = ("findings", "refuted", "earlier")
+
+ORDER_SHAPES = (
+    # templates: rubric/orders/dispatch-<phase>.md; pins: review-code/reference/auto-fix-loop.md ("Review panel seats pass the findings pin; the verify phase passes the verdicts pin")
+    # dispatch-panel.md delivery: "a review with nothing to flag emits findings: []" plus `investigated` always
+    _shape("panel", round_phases.P_PANEL, CHANNEL_RUNNER, ("dimensions", "tier", "slices", "ceilings"),
+           result_kind="findings", expected_result_kind="findings", empty_answer_valid=True),
+    # dispatch-verifiers.md: "Return one object per input issue". No gate counts the verdicts: the runner grades an
+    # empty list that carries its read list ok (a known gap, declared rather than tested away).
+    _shape("verifiers", round_phases.P_VERIFIERS, CHANNEL_RUNNER, ("clusters",),
+           result_kind="verdicts", expected_result_kind="verdicts", empty_answer_valid=True,
+           order_allows_empty=False),
+    # dispatch-synthesis.md: "Your groups must account for every staged survivor id"
+    _shape("synthesis-survivors-earlier", round_phases.P_SYNTHESIS, CHANNEL_RUNNER, _SYNTHESIS_KEYS,
+           result_kind="grouping", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER,
+           when=(("findings", "nonempty"), ("earlier", "nonempty"))),
+    _shape("synthesis-survivors", round_phases.P_SYNTHESIS, CHANNEL_RUNNER, _SYNTHESIS_KEYS,
+           result_kind="grouping", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER,
+           when=(("findings", "nonempty"), ("earlier", "empty"))),
+    # dispatch-synthesis.md: "When `findings` is empty ... an empty list of groups (`[]`) is the complete, correct answer"
+    _shape("synthesis-repeat-only", round_phases.P_SYNTHESIS, CHANNEL_RUNNER,
+           _SYNTHESIS_KEYS + ("nothingToGroup",), result_kind="grouping", nothing_to_group=True,
+           empty_answer_valid=True, when=(("findings", "empty"), ("earlier", "nonempty"))),
+    _shape("synthesis-repeat-none", round_phases.P_SYNTHESIS, CHANNEL_RUNNER,
+           _SYNTHESIS_KEYS + ("nothingToGroup",), result_kind="grouping", nothing_to_group=True,
+           empty_answer_valid=True, when=(("findings", "empty"), ("earlier", "empty"))),
+    # dispatch-seams-check.md delivery (round_orders._channel_derived_placeholders): an empty findings list when nothing to flag
+    _shape("seams", round_phases.P_SEAMS, CHANNEL_RUNNER, ("fullDiff", "slices"),
+           result_kind="findings", empty_answer_valid=True),
+    # dispatch-second-test.md: "Return only the items you were given, each once". As for the verifiers, no gate
+    # counts the items: an empty list that carries its read list grades ok (the same declared gap).
+    _shape("second-test", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("findings",),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
+    # dispatch-second-test-correction.md: "Return only the items you were given, each once" (_correction_payload)
+    _shape("second-test-correction", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("correction", "findings"),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
+    # dispatch-audits.md: "Return exactly one audit result for this target"
+    _shape("audits", round_phases.P_AUDITS, CHANNEL_RUNNER, ("targets",),
+           result_kind="ruling", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),
+    _shape("audits-verify", round_phases.P_AUDITS, CHANNEL_RUNNER, ("targets", "verify"),
+           result_kind="ruling", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),
+    # dispatch-scoped-finder.md delivery: an empty findings list when nothing to flag
+    _shape("scoped-finder", round_phases.P_SCOPED, CHANNEL_RUNNER, ("hunks", "tier"),
+           result_kind="findings", empty_answer_valid=True),
+    # dispatch-sweep.md: "When no place makes it, return an empty list: that is a complete answer"
+    _shape("sweep", round_phases.P_SWEEP, CHANNEL_HOST_REPLY, ("sweeps", "searcher"),
+           empty_answer_valid=True),
+    _shape("run-verify", round_phases.P_VERIFY, CHANNEL_ORCHESTRATOR, ("command",)),
+    _shape("run-verify-restored", round_phases.P_VERIFY, CHANNEL_ORCHESTRATOR, ("command", "restoredHead")),
+    _shape("apply-fixes-batch", round_phases.P_APPLY_FIXES, CHANNEL_ORCHESTRATOR, ("batch", "startHead")),
+    _shape("apply-fixes-restore", round_phases.P_APPLY_FIXES, CHANNEL_ORCHESTRATOR,
+           ("restoreOnly", "restores", "startHead")),
+)
+
+
+def _when_holds(payload: dict, when) -> bool:
+    for key, state in when:
+        value = payload.get(key)
+        if state == "empty" and value:
+            return False
+        if state == "nonempty" and not value:
+            return False
+    return True
+
+
+def matching_order_shapes(phase: str, payload) -> list[str]:
+    """The ids of every row whose phase, exact payload key set and value conditions match. Never raises."""
+    if not isinstance(payload, dict):
+        return []
+    keys = frozenset(payload)
+    return [row["id"] for row in ORDER_SHAPES
+            if row["phase"] == phase and row["payloadKeys"] == keys and _when_holds(payload, row["when"])]
+
+
+def order_shape(phase: str, payload) -> str | None:
+    """The id of the one order shape ``payload`` is, or None when no row matches or more than one does."""
+    found = matching_order_shapes(phase, payload)
+    return found[0] if len(found) == 1 else None

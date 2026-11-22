@@ -161,7 +161,11 @@ def _another_account_steps():
     "never retyped from your own draft",
     "composing a new message; never edit a composed one",
     "a mismatch does not say which step changed it",
-], ids=["no-unseen-shell-value", "print-whole", "send-printed", "no-retype", "recompose", "no-blame"])
+    "Only the advisor's own session sends it, never a fork of that session",
+    "A fork that ran the steps above writes the printed `relayMessage` to a file and hands the file back",
+], ids=["no-unseen-shell-value", "print-whole", "send-printed", "no-retype", "recompose", "no-blame",
+        "parent-sends", "fork-hands-back"])
 def test_the_relayed_answer_steps_carry_the_advisor_send_rule(rule):
     # axis: the advisor sends exactly the composed text it read and recomposes on a change — see bite-proof record wo_2124_relay_say.md
+    # axis: only the advisor's own session sends; a fork hands the message back — see bite-proof record wo_2621_relay_parent_send.md
     assert rule in _another_account_steps()
