@@ -93,6 +93,16 @@ def test_native_stacks_holds_no_stop_and_restart_wording():
         assert banned not in section, banned
 
 
+def test_native_stacks_pushes_a_layer_before_its_review():
+    # axis: a layer is pushed with its draft PR open before review-code starts, and pushed again
+    # after local fix commits before a fresh review session (#2622)
+    section = _flat(_slice(_text(_NATIVE_STACKS), "## A layer is pushed before its review", "## Anti-patterns"))
+    assert "pushes the layer's branch and has its draft pull request open" in section
+    assert "before `review-code` starts on a layer" in section
+    assert "pushes them again before any fresh review session" in section
+    assert "`view-head-anchor-mismatch`" in section
+
+
 # --- review-code ----------------------------------------------------------------------------------
 
 def test_review_code_docs_hold_no_retired_stack_tokens():
