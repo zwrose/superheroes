@@ -84,6 +84,7 @@ PAUSED_PARTS = {
     "pin": ("the plugin pin", "commit a current plugin pin on the branch builds start from"),
     "hook": ("the dependency hook", "commit the dependency hook files on the branch builds start from"),
     "calibration": ("the calibration", FIX_PASTE_SETUP),
+    "start": ("the plugin copy the cloud session started from", FIX_PASTE_SETUP),
     "reviewer": ("the reviewer pass", FIX_FRESH_PASS),
     "identity": ("the git identity", "set the git identity variables in the environment"),
     # the marker records this part when the cloud session never reported its identity

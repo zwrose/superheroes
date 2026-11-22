@@ -27,6 +27,7 @@ import launch_report  # noqa: E402
 import store_core  # noqa: E402
 import test_cloud_branch_hook_2021 as T  # noqa: E402
 import test_launch_report as TLR  # noqa: E402
+from test_cloud_check import _start_env  # noqa: E402
 
 ENV_ID = "env_01ABCdef"
 NONCE = "abcd1234efgh"
@@ -37,7 +38,7 @@ CHECK_AGAIN = 'Then say "check again".'
 
 def _report_line(w):
     """The check session's report for the fixture project itself, so every other part matches."""
-    obj = CC.report(env=dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID},
+    obj = CC.report(env=dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **_start_env(),
                               **dict.fromkeys(CC.IDENTITY_VARIABLES, "x")), cwd=w.cwd, root=w.root, nonce=NONCE,
                     confirm_fn=lambda env: {"schema": cloud_pass.CONFIRMATION_SCHEMA,
                                             "reviewerAnswered": True, "passLapses": FAR,

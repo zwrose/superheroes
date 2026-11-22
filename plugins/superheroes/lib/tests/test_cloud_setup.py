@@ -646,8 +646,8 @@ def test_paused_failure_names_the_legacy_setting_part_without_a_fix():
 
 def test_every_paused_part_is_named_and_the_resume_rule_is_stated_once():
     assert list(CS.PAUSED_PARTS) == ["environment", "version", "pin", "hook", "calibration",
-                                     "reviewer", "identity", "identity-unreported", "record",
-                                     "unread", "setting"]
+                                     "start", "reviewer", "identity", "identity-unreported",
+                                     "record", "unread", "setting"]
     for part, (what, fix) in CS.PAUSED_PARTS.items():
         assert what in CS.paused_failure([part]), part
     assert CS.PAUSED_RESUME == "They resume by themselves once the check passes."
