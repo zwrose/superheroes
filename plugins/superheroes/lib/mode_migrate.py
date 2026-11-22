@@ -529,8 +529,10 @@ def execute(migration, *, root=None):
                 # axis: a destination saved after its snapshot is snapshotted again just before its copy
                 _copy_bytes(f["dst"], f["snapshot"])
             # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original;
-            # its copied hash is the source's just before the copy, so a write landing on the copy is never adopted as the flip's own
+            # its copied hash is the source's just before the copy, journaled before the copy so recovery reads the same one,
+            # and a write landing on the copy is never adopted as the flip's own
             f["copied"] = _sha(f["src"])
+            store_core.atomic_write(jpath, json.dumps(journal, indent=2))
             _copy_bytes(f["src"], f["dst"])
             f["done"] = True
         journal["phase"] = "committing"
