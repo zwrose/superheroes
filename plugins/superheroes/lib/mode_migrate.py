@@ -11,10 +11,12 @@ deadlock-to-None). The reconciler keeps owning mode *recording*; this module own
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import shutil
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -42,15 +44,30 @@ _WORK_ITEM_RECORDS = ("findings.md",)
 # set; keep it the union, so a new work-item file is moved by being added to one of the two
 # sets above rather than to a third place.
 _WORK_ITEM_DOCS = _DEFINITION_DOCS + _WORK_ITEM_RECORDS
+# The two roles a settings entry (#2587) can carry, and the reasons a settings copy stays put.
+ROLE_CARRY = "carry"
+ROLE_SET_ASIDE = "set-aside"
+WHY_ONLY_COPY = "only-copy"
+WHY_NOT_REGULAR = "not-a-regular-file"
+WHY_SHARED_PATH = "shared-path"
+WHY_RETAINED = "retained"
+WHY_HAS_ARTIFACTS = "has-artifacts"
+WHY_KEPT_WITH_SIBLING = "kept-with-sibling"
+_BACKUP_SUFFIX = "-storage-move"
+# Where a flip keeps the bytes of each destination it overwrites until it finishes or backs out.
+_SNAPSHOT_DIRNAME = "flip-snapshots"
 
 
 class Migration:
     """An enumerated, not-yet-applied storage-mode move. `files` is a list of
     {"src","dst","done"} dicts; machine-local bookkeeping (registry.json/config.lock/run
-    state) is deliberately NOT in `files` for a flip (FR-10)."""
+    state) is deliberately NOT in `files` for a flip (FR-10). A settings entry (#2587) also
+    carries "role": "carry" (moved to the target's slot) or "set-aside" (moved into the flip's
+    dated backup folder); `left_in_place` names the settings copies the flip does not move."""
 
     def __init__(self, *, kind="flip", target=None, files=None, cwd=None, root=None,
-                 remote_key=None, blocked=False, reason="", owner_authorized=False):
+                 remote_key=None, blocked=False, reason="", owner_authorized=False,
+                 left_in_place=None, source_mode=None):
         self.kind = kind
         self.target = target
         self.files = files or []
@@ -60,6 +77,8 @@ class Migration:
         self.blocked = blocked
         self.reason = reason
         self.owner_authorized = owner_authorized
+        self.left_in_place = left_in_place or []
+        self.source_mode = source_mode
 
 
 # --------------------------------------------------------------------------- paths
@@ -178,9 +197,195 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
     return files
 
 
-def enumerate_flip(cwd, target_mode, *, root=None):
+def _is_regular(path):
+    return os.path.isfile(path) and not os.path.islink(path)
+
+
+def _backup_folder(cwd, root, backups_dirname):
+    """The not-yet-created dated folder this flip's set-asides share (computed, never made)."""
+    import leftover_settings
+    parent = os.path.join(mode_registry.project_store_dir(cwd, root), backups_dirname)
+    stamp = leftover_settings._stamp(None) + _BACKUP_SUFFIX
+    candidate, n = os.path.join(parent, stamp), 1
+    while os.path.lexists(candidate):
+        n += 1
+        candidate = os.path.join(parent, "%s-%d" % (stamp, n))
+    return candidate
+
+
+def _settings_entries(cwd, current, files, *, root, review_root, test_pilot_root):
+    """The settings entries (#2587) a flip out of `current` adds after today's `files`, and the
+    copies it leaves in place: ([entry], [{"path", "why"}]). Nothing is created or written.
+
+    Decisions: the M-side copy read now (review_store.resolve) is carried to the target's first slot; every
+    other present regular M-side copy, and the target-side legacy review-entry copy when the target
+    is global, is set aside. When the copy read now is not on the M side, nothing is carried. Any present
+    decisions copy that ends in no entry (as source or as the carry's replaced destination) and in no other
+    left-in-place row is named with why `retained`.
+    Legacy profiles: set aside when the same hero's unified layer moves in today's entries and core.md
+    is populated, else left in place as the only copy. A present path that is not a regular file
+    is never moved."""
+    import calibration_paths
+    import leftover_settings as ls
+    import review_store
+    import store
+    repo = _repo_root(cwd)
+    to_global = current == mode_registry.IN_REPO
+    m_cal = _in_repo_cal_dir(cwd) if to_global else _global_cal_dir(cwd, root)
+    review_entry = ls._legacy_entry_dir(
+        cwd, review_root if review_root is not None else review_store.store_root())
+    tp_entry = ls._legacy_entry_dir(
+        cwd, test_pilot_root if test_pilot_root is not None else store.store_root())
+    entries, left = [], []
+    # paths are compared resolved, so two spellings of one file through a linked directory meet
+    real = os.path.realpath
+
+    def real_dst(path):
+        # axis: a destination is the name atomic_write replaces, so only its folder is resolved and a link at it is not followed
+        return os.path.join(real(os.path.dirname(path)), os.path.basename(path))
+
+    used = {real(f["src"]) for f in files} | {real_dst(f["dst"]) for f in files}
+
+    def present(path):
+        return bool(path) and os.path.lexists(path)
+
+    def leave(path, why):
+        # a copy left in place is reserved, so no later entry reaches it through another spelling
+        used.add(real(path))
+        left.append({"path": path, "why": why})
+
+    def take(src, dst, role, family, keep=False):
+        # axis: a settings entry never shares a resolved file with another entry, nor its dst with its own src
+        targets = [real(src)] + ([real_dst(dst)] if dst is not None else [])
+        if any(t in used for t in targets):
+            leave(src, WHY_SHARED_PATH)
+            return False
+        if len(set(targets)) < len(targets):
+            # axis: a carry whose source already is the target's file is already carried, and the file stays reserved
+            leave(src, WHY_SHARED_PATH)
+            return role == ROLE_CARRY
+        used.update(targets)
+        entries.append({"src": src, "dst": dst, "done": False, "role": role, "family": family, "keep": keep})
+        return True
+
+    # decisions
+    dec_in = os.path.join(repo, ls._DEC_IN_REL)
+    dec_gl = os.path.join(_global_cal_dir(cwd, root), ls._DECISIONS)
+    dec_legacy = os.path.join(review_entry, ls._DECISIONS) if review_entry else None
+    m_side = [dec_in] if to_global else [dec_gl, dec_legacy]
+    t_first = dec_gl if to_global else dec_in
+    carried = False
+    # axis: the decisions copy read now comes from review_store.resolve (calibration_resolve's order, its one
+    # home); the flip carries only that copy, and never carries any copy over it
+    try:
+        import calibration_resolve
+        cal = calibration_resolve.resolve(cwd, root=root, legacy_root=review_root, heal=False)
+        cal_file = cal.get("dispatch_layer") or cal.get("legacy_path") if cal.get("exists") else None
+        read_now = review_store.resolve(cwd, "decisions", legacy_root=review_root, registry_root=root)["path"]
+    except Exception:
+        # axis: a calibration that cannot be resolved (UnresolvableRootError included) is never read as "none": every decisions copy stays
+        cal_file, read_now = "", None
+    read_now = real(read_now) if read_now else None
+    read_src = next((p for p in m_side if present(p) and real(p) == read_now), None)
+    # axis: with a review calibration read, decisions are carried only when its file leaves its place in this flip
+    # and the copy read now is a regular file on the moving side; any other state (missing, linked) carries nothing
+    dec_stays = cal_file is not None and not (
+        cal_file and real(cal_file) in {real(f["src"]) for f in files} and read_src is not None
+        and os.path.isfile(read_src))
+    m_side.sort(key=lambda p: bool(p) and real(p) != read_now)
+    for path in m_side:
+        if not present(path):
+            continue
+        if path == read_src and os.path.isfile(path) and not carried:
+            # axis: the copy read now is carried by its bytes even through a live link; while the calibration read
+            # now stays, the original is kept too, so the decisions are found whichever side is read after the flip
+            carried = take(path, t_first, ROLE_CARRY, "decisions", keep=dec_stays)
+        elif not _is_regular(path):
+            leave(path, WHY_NOT_REGULAR)
+        elif dec_stays:
+            leave(path, WHY_RETAINED)
+        elif not carried:
+            carried = take(path, t_first, ROLE_CARRY, "decisions")
+        else:
+            take(path, None, ROLE_SET_ASIDE, "decisions")
+    if to_global and present(dec_legacy):
+        if not _is_regular(dec_legacy):
+            leave(dec_legacy, WHY_NOT_REGULAR)
+        elif carried:
+            # axis: the global store reads a legacy decisions copy first, so it is set aside only when this flip carries the read copy over it
+            take(dec_legacy, None, ROLE_SET_ASIDE, "decisions")
+    # axis: every decisions copy that remains after the move is named: one that no entry carries, sets
+    # aside or replaces and no other row already names stays where it is, and the preview says so
+    for path in (dec_in, dec_gl, dec_legacy):
+        if present(path) and real(path) not in used:
+            leave(path, WHY_RETAINED)
+
+    # legacy profiles
+    moved_srcs = {real(f["src"]) for f in files}
+    heroes = (
+        ("review-crew", "review-crew.md",
+         (os.path.join(repo, calibration_paths.LEGACY_INREPO_REVIEW_PROFILE),
+          os.path.join(review_entry, review_store.FILENAMES["profile"]) if review_entry else None)),
+        ("test-pilot", "test-pilot.md",
+         (os.path.join(repo, ls._LEGACY_TP_IN_REL),
+          os.path.join(tp_entry, ls._LEGACY_TP_STORE_FILENAME) if tp_entry else None)),
+    )
+    try:
+        core_populated = not core_md.core_facts_are_empty(core_md.read(cwd, root, persist_backfill=False))
+    except Exception:
+        core_populated = False
+    for family, layer, legacy in heroes:
+        # axis: a legacy profile is set aside only while a populated core.md supplies its facts (find's gate); else it stays as only-copy
+        layer_moves = core_populated and real(os.path.join(m_cal, layer)) in moved_srcs and (
+            family != "test-pilot" or ls.tp_layer_usable(os.path.join(m_cal, layer)))
+        if family == "test-pilot":
+            # axis: the present legacy test-pilot profiles are set aside all together or none is, since store.resolve reads the first one it finds and a flip must not change which
+            present_tp = [p for p in legacy if present(p)]
+            whys, seen = {}, set()
+            for path in present_tp:
+                if not _is_regular(path):
+                    whys[path] = WHY_NOT_REGULAR
+                elif ls._tp_artifacts_beside(path):
+                    # axis: a legacy test-pilot profile with blocks or manifests beside it stays, since store.resolve finds them through it
+                    whys[path] = WHY_HAS_ARTIFACTS
+                elif not layer_moves:
+                    whys[path] = WHY_ONLY_COPY
+                elif real(path) in used or real(path) in seen:
+                    whys[path] = WHY_SHARED_PATH
+                seen.add(real(path))
+            for path in present_tp:
+                if whys:
+                    leave(path, whys.get(path, WHY_KEPT_WITH_SIBLING))
+                else:
+                    take(path, None, ROLE_SET_ASIDE, family)
+            continue
+        for path in legacy:
+            if not present(path):
+                continue
+            if not _is_regular(path):
+                leave(path, WHY_NOT_REGULAR)
+            elif layer_moves:
+                take(path, None, ROLE_SET_ASIDE, family)
+            else:
+                leave(path, WHY_ONLY_COPY)
+
+    # one shared dated folder for every set-aside, numbered in entry order
+    if any(e["role"] == ROLE_SET_ASIDE for e in entries):
+        folder = _backup_folder(cwd, root, ls.BACKUPS_DIRNAME)
+        n = 0
+        for e in entries:
+            if e["role"] == ROLE_SET_ASIDE:
+                n += 1
+                e["dst"] = os.path.join(folder, "%02d-%s" % (n, os.path.basename(e["src"])))
+    return entries, left
+
+
+def enumerate_flip(cwd, target_mode, *, root=None, review_root=None, test_pilot_root=None):
     """Enumerate a flip to target_mode. Read-only — no owner authorization required (FR-10 preview).
-    Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
+    Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params.
+    After the calibration and work-item files come the settings entries (#2587): the review
+    decisions file and the legacy review / test-pilot profiles, found under `review_root` and
+    `test_pilot_root` (default: each legacy store's own root)."""
     current = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
     in_cal, gl_cal = _in_repo_cal_dir(cwd), _global_cal_dir(cwd, root)
     in_docs, gl_docs = _in_repo_docs_base(cwd), _global_docs_base(cwd, root)
@@ -188,13 +393,27 @@ def enumerate_flip(cwd, target_mode, *, root=None):
         files = _enumerate(in_cal, gl_cal, in_docs, gl_docs)
     else:
         files = _enumerate(gl_cal, in_cal, gl_docs, in_docs)
+    extra, left = _settings_entries(cwd, current, files, root=root, review_root=review_root,
+                                    test_pilot_root=test_pilot_root)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
-    return Migration(kind="flip", target=target_mode, files=files,
-                     cwd=cwd, root=root, remote_key=remote_key,
-                     owner_authorized=False)
+    m = Migration(kind="flip", target=target_mode, files=files + extra,
+                  cwd=cwd, root=root, remote_key=remote_key,
+                  owner_authorized=False, left_in_place=left, source_mode=current)
+    m.plan_roots = (review_root, test_pilot_root)
+    m.dst_existed = [f.get("role") != ROLE_SET_ASIDE and os.path.lexists(f["dst"]) for f in m.files]
+    return m
 
 
-def plan(cwd, target_mode, *, root=None, owner_authorized):
+def _plan_key(m):
+    """What a plan decides, without the set-aside folder's per-run stamp."""
+    # axis: a destination that comes to exist (or stops existing) after the preview changes the plan, since it changes what is overwritten
+    return ([(f["src"], f.get("role"), bool(f.get("keep")), None if f.get("role") == ROLE_SET_ASIDE else f["dst"])
+             for f in m.files], getattr(m, "dst_existed", None),
+            sorted((e["path"], e["why"]) for e in m.left_in_place))
+
+
+def plan(cwd, target_mode, *, root=None, owner_authorized, review_root=None,
+         test_pilot_root=None):
     """Enumerate a flip to target_mode. Refuses without owner authorization (FR-14). Records
     cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
     if not owner_authorized:
@@ -202,7 +421,8 @@ def plan(cwd, target_mode, *, root=None, owner_authorized):
                          reason="storage migration requires owner authorization (FR-14)",
                          cwd=cwd, root=root, target=target_mode,
                          owner_authorized=False)
-    m = enumerate_flip(cwd, target_mode, root=root)
+    m = enumerate_flip(cwd, target_mode, root=root, review_root=review_root,
+                       test_pilot_root=test_pilot_root)
     m.owner_authorized = True
     return m
 
@@ -219,11 +439,18 @@ def _is_definition_doc(path):
 def preview(migration):
     """The plain-language 'exactly what will move' summary FR-10 requires before any confirm.
     Enumerates calibration, definition-docs, and non-definition-doc work-item records, with a
-    one-line collaborator-visibility disclosure."""
-    calibration, def_docs, work_item_records = [], [], []
+    one-line collaborator-visibility disclosure. A settings entry (#2587) is reported apart:
+    a carried one counts as calibration, a set-aside one is listed under `setAside` (where it
+    goes), `leftInPlace` names the copies the flip does not move (every decisions copy that remains
+    after the move among them, with why `retained` when nothing else explains it), and `overwrites` names every
+    destination of a non-set-aside entry that already exists (the flip replaces it)."""
+    calibration, def_docs, work_item_records, set_aside = [], [], [], []
     for f in migration.files:
         src = f["src"]
-        if _is_calibration(src):
+        role = f.get("role")
+        if role == ROLE_SET_ASIDE:
+            set_aside.append({"from": src, "to": f["dst"]})
+        elif role == ROLE_CARRY or _is_calibration(src):
             calibration.append(src)
         elif _is_definition_doc(src):
             def_docs.append(src)
@@ -237,9 +464,12 @@ def preview(migration):
     else:
         disclosure = ("Switching to out-of-repo moves the calibration, the definition documents "
                       "and the work-item records out of the repo — the repo stays pristine.")
+    overwrites = [f["dst"] for f in migration.files
+                  if f.get("role") != ROLE_SET_ASIDE and os.path.lexists(f["dst"])]
     return {"target": migration.target, "calibration": calibration,
             "definitionDocs": def_docs, "workItemRecords": work_item_records,
-            "disclosure": disclosure}
+            "setAside": set_aside, "leftInPlace": list(migration.left_in_place),
+            "overwrites": overwrites, "disclosure": disclosure}
 
 
 # --------------------------------------------------------------------------- execute
@@ -262,48 +492,182 @@ def execute(migration, *, root=None):
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             return {"status": "busy"}
+        # axis: a move never starts over an interrupted one: any journal left at the store refuses and changes nothing
+        if os.path.lexists(_journal_path(store_dir)):
+            return {"status": "blocked", "reason": "recover-first"}
+        roots = getattr(migration, "plan_roots", (None, None))
+        # axis: the flip acts only on the plan the owner saw: re-planned under the lock, any difference refuses and changes nothing
+        if _plan_key(enumerate_flip(cwd, migration.target, root=root, review_root=roots[0],
+                                    test_pilot_root=roots[1])) != _plan_key(migration) or any(
+                # axis: the plan's set-aside folder is not yet made when planned, so one there now appeared after the preview
+                f.get("role") == ROLE_SET_ASIDE and os.path.lexists(os.path.dirname(f["dst"])) for f in migration.files):
+            return {"status": "blocked", "reason": "plan-changed: the preview is out of date; run the move again"}
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
-                   "files": [{"src": f["src"], "dst": f["dst"], "done": False}
+                   "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
+                              # axis: other sessions write only the decisions copy read now (the carried one) and test-pilot profiles; a set-aside decisions copy is read by no one and still moves, so it never shadows the carry
+                              "shared": f.get("family") == "test-pilot" or (f.get("family") == "decisions" and f.get("role") == ROLE_CARRY),
+                              "preexisting": os.path.lexists(f["dst"]), "copied": _sha(f["src"])}
                              for f in migration.files]}
+        # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
+        for n, f in enumerate(journal["files"]):
+            if f["preexisting"] and os.path.islink(f["dst"]):
+                # axis: a destination that is a link, live or dangling, is recorded as its link text, so a back-out puts the link itself back
+                f["link"] = os.readlink(f["dst"])
+            elif f["preexisting"] and os.path.isfile(f["dst"]):
+                f["snapshot"] = os.path.join(store_dir, _SNAPSHOT_DIRNAME, "%03d" % n)
+                _copy_bytes(f["dst"], f["snapshot"])
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
+        aside = [f for f in migration.files if f.get("role") == ROLE_SET_ASIDE]
+        if aside:
+            # the manifest `leftover_settings.restore` reads, written before any copy so a flip
+            # that dies half way is still undoable
+            import leftover_settings
+            manifest = os.path.join(os.path.dirname(aside[0]["dst"]),
+                                    leftover_settings.MANIFEST_FILENAME)
+            store_core.atomic_write(manifest, json.dumps(
+                {"schema": leftover_settings.MANIFEST_SCHEMA, "mode": migration.source_mode,
+                 "entries": [{"from": f["src"], "to": f["dst"], "family": f.get("family")}
+                             for f in aside]}, indent=2))
         for f in journal["files"]:
-            with open(f["src"], encoding="utf-8") as fh:
-                store_core.atomic_write(f["dst"], fh.read())
+            if f.get("snapshot") and _sha(f["dst"]) != _sha(f["snapshot"]):
+                # axis: a destination saved after its snapshot is snapshotted again just before its copy
+                _copy_bytes(f["dst"], f["snapshot"])
+            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original;
+            # its copied hash is the source's just before the copy, journaled before the copy so recovery reads the same one,
+            # and a write landing on the copy is never adopted as the flip's own
+            f["copied"] = _sha(f["src"])
+            store_core.atomic_write(jpath, json.dumps(journal, indent=2))
+            _copy_bytes(f["src"], f["dst"])
             f["done"] = True
+        # axis: a file other sessions write is settled once, just before the commit; after it the destination is the one read and is never copied over
+        for f in (f for f in journal["files"] if f.get("shared")):
+            _settled(f)
         journal["phase"] = "committing"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
             # abort before any delete (UFR-6): remove copied dsts, leave sources, clear journal
-            for f in journal["files"]:
-                if f["done"]:
-                    _remove(f["dst"])
+            _backout_flip([f for f in journal["files"] if f["done"]])
+            kept = _keep_snapshots(journal["files"], store_dir)
             _remove(jpath)
-            return {"status": "blocked"}
+            return dict({"status": "blocked"}, **({"overwritten": kept} if kept else {}))
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
+        undeleted = []
         for f in journal["files"]:
-            _remove(f["src"])
+            # axis: a file other sessions write (decisions, test-pilot profiles) is copied and never deleted: it stays, named as a leftover
+            if not f.get("keep") and not f.get("shared") and _settled(f):
+                _remove(f["src"])
+            if not f.get("keep") and os.path.lexists(f["src"]):
+                undeleted.append(f["src"])
+        overwritten = _keep_snapshots(journal["files"], store_dir)
         _remove(jpath)
-        return {"status": "done"}
+        # axis: a source the flip could not delete is named, and the move is not reported as a plain done
+        result = {"status": "done-with-leftovers", "undeleted": undeleted} if undeleted else {"status": "done"}
+        return dict(result, overwritten=overwritten) if overwritten else result
 
 
 # --------------------------------------------------------------------------- recover
 
 
-def _finish_flip(files):
+def _sha(path):
+    if os.path.isfile(path):
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+
+def _settled(f, tries=3):
+    # axis: a source is dropped only when its bytes are at its copy; one written since is copied again (a bounded number of times), and a copy written since is never overwritten
+    for _ in range(tries):
+        now, dst = _sha(f["src"]), _sha(f["dst"])
+        if now == dst or dst != f.get("copied"):
+            return now is not None and now == dst
+        f["copied"] = now
+        _copy_bytes(f["src"], f["dst"])
+    return False
+
+
+def _keep_snapshots(files, store_dir):
+    # axis: an overwritten destination's prior bytes move to a dated backup folder and are named, never dropped on success
+    import leftover_settings
+    for f in files:
+        if f.get("snapshot") and os.path.isfile(f["snapshot"]) and _sha(f["snapshot"]) == _sha(f["dst"]):
+            _remove(f["snapshot"])  # the destination still holds these bytes: nothing to keep
+    snaps = [f for f in files if f.get("snapshot") and os.path.isfile(f["snapshot"])]
+    backup = leftover_settings._make_backup_dir(store_dir, None) if snaps else None
+    for f in snaps:
+        f["backup"] = os.path.join(backup, "overwritten-%s-%s" % (os.path.basename(f["snapshot"]), os.path.basename(f["dst"])))
+        os.replace(f["snapshot"], f["backup"])
+    return [{"path": f["dst"], "backup": f["backup"]} for f in snaps]
+
+
+def _finish_flip(files, store_dir):
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
-        if os.path.exists(f["dst"]):
-            os.remove(f["src"])           # dst already present — just drop the source
-        else:
-            core_md.relocate_file(f["src"], f["dst"])  # the one relocate primitive (copy + unlink)
+        if not os.path.lexists(f["dst"]):
+            # axis: recovery copies byte for byte as the flip does, then drops the source
+            f["copied"] = _sha(f["src"])
+            _copy_bytes(f["src"], f["dst"])
+        # axis: a kept or shared source stays, a destination that is not a regular file is no copy, and a source whose bytes are not at its copy stays
+        if not f.get("keep") and os.path.isfile(f["dst"]) and not f.get("shared") and _settled(f):
+            os.remove(f["src"])
+    return _keep_snapshots(files, store_dir)
 
 
 def _backout_flip(files):
     for f in files:
+        # axis: a back-out touches a destination only while it holds this flip's own copy (known by the hash recorded at
+        # copy time), so a destination saved since is kept, and an unrestored snapshot is kept by the caller in the backup folder
+        if _sha(f["dst"]) not in (f.get("copied"), _sha(f["src"])):
+            continue
+        # axis: a back-out removes only a destination this flip created; one already there gets its snapshotted bytes back
+        if f.get("preexisting"):
+            if f.get("link") is not None:
+                # axis: the link is staged in a fresh private folder, so no existing file is ever touched
+                stage_dir = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(f["dst"])),
+                                             prefix=".link-restore.")
+                try:
+                    os.symlink(f["link"], os.path.join(stage_dir, "link"))
+                    os.replace(os.path.join(stage_dir, "link"), f["dst"])
+                finally:
+                    # axis: the private staging folder never outlives the restore, even one that fails
+                    shutil.rmtree(stage_dir, ignore_errors=True)
+                continue
+            snap = f.get("snapshot")
+            if snap and os.path.isfile(snap):
+                _copy_bytes(snap, f["dst"])
+                _remove(snap)
+            continue
         _remove(f["dst"])  # sources untouched
+
+
+def _copy_bytes(src, dst):
+    """Copy src's exact bytes to dst, published by an atomic rename (no newline translation).
+
+    As durable as store_core.atomic_write: the staged file is fsynced before the rename. In a cloud
+    session a calibration path is refused before anything is written, as atomic_write refuses it."""
+    # axis: a cloud session never writes a calibration file, a snapshot copy included
+    if store_core.in_cloud_session() and store_core.is_calibration_path(dst):
+        raise store_core.CalibrationWriteRefused("%s: %s" % (store_core.CLOUD_REFUSAL_REASON, dst))
+    # axis: a snapshot and its restore keep every byte, CRLF and lone CR included
+    d = os.path.dirname(os.path.abspath(dst)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, stage = tempfile.mkstemp(dir=d, prefix=".copy-bytes.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            with open(src, "rb") as inp:
+                shutil.copyfileobj(inp, out)
+            out.flush()
+            # axis: the staged file is fsynced before the rename, so a crash never publishes a short snapshot
+            os.fsync(out.fileno())
+        os.replace(stage, dst)
+    except BaseException:
+        try:
+            os.unlink(stage)
+        except OSError:
+            pass
+        raise
 
 
 def recover(cwd, *, root=None):
@@ -356,12 +720,14 @@ def recover(cwd, *, root=None):
                 return {"status": "busy"}
             target = journal.get("target")
             files = journal.get("files", [])
+            overwritten = []
             if mode_registry.resolve(cwd, root)["mode"] == target:
-                _finish_flip(files)        # commit landed → finish the move
+                overwritten = _finish_flip(files, store_dir)   # commit landed → finish the move
             else:
                 _backout_flip(files)       # pre-commit → back out
+                overwritten = _keep_snapshots(files, store_dir)
             _remove(jpath)
-            return {"status": "recovered"}
+            return dict({"status": "recovered"}, **({"overwritten": overwritten} if overwritten else {}))
     return {"status": "noop"}
 
 

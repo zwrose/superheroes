@@ -18,6 +18,10 @@ _REQUIRED_BASENAMES = ("review_code_config.py", "configure_view.py")
 # Site key: "<module basename>::<enclosing def name>::<attr-or-name>"
 # Value: how that call site handles UnresolvableRootError (must not swallow into uncalibrated-looking output).
 ADJUDICATED = {
+    "mode_migrate.py::_settings_entries::resolve": (
+        "any exception (UnresolvableRootError included) keeps every review decisions copy in place; "
+        "the flip never reads the refusal as no calibration and carries nothing"
+    ),
     "configure_view.py::collect::resolve": (
         "re-raise UnresolvableRootError on TIERS_ROOT_UNAVAILABLE re-probe; "
         "surfaces model_tier_refusal with tiers=None (no default-tier fall-open)"
