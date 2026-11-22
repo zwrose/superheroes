@@ -589,9 +589,7 @@ def _native_in_session_seats(journal):
     return sorted(disclosed)
 
 
-def build_degraded_prose(state, form, journal=None):
-    cfg = state.get("config") or {}
-    degraded_out = []
+def _run_level_prose(state, cfg, degraded_out):
     if degraded(state):
         degraded_out.append("independence: no live vendor outside the fixer's and the makers' "
                             "families — the fix's audit did not run; independence degraded and "
@@ -624,6 +622,9 @@ def build_degraded_prose(state, form, journal=None):
             degraded_out.append(
                 "seat-map constraint breach: %s — breach recorded; certification withheld"
                 % ", ".join(_viol_parts))
+
+
+def _skipped_blockers_prose(state, degraded_out):
     skipped_blockers = []
     for s in state.get("_skippedBlockers") or []:
         if not isinstance(s, dict):
@@ -632,213 +633,243 @@ def build_degraded_prose(state, form, journal=None):
                                  "severity": s.get("severity"), "reason": s.get("reason")})
         degraded_out.append("skipped-blocker: %r (%s:%s) owner-skipped as a product-choice tradeoff — "
                             "reason: %s" % (s.get("title"), s.get("file"), s.get("line"), s.get("reason")))
-    _emitted_seat_map_unjudgeable = False
-    for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
-        rrec = state["rounds"][rkey]
-        declared = receipt_round_disclosures(rrec, form, state)
-        for row in (declared.get("fellOpen") or []):
-            degraded_out.append(
-                "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
-                "that seat's cross-vendor mix degraded" % (
-                    rkey, row.get("seat"), row.get("configured"), row.get("reason"), row.get("ran")))
-        miss = declared.get("fellOpenProvenanceMissing")
-        if miss:
-            degraded_out.append(
-                "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
-                "without a trusted ranManifest entry — fall-open provenance unverified" % (
-                    rkey, ", ".join(miss)))
-        smu = declared.get("seatMapUnavailable")
-        if smu:
-            degraded_out.append(
-                "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
-                "but no seat map submitted — fall-open provenance unverified for the panel" % (
-                    rkey, ", ".join(smu)))
-        smuj = declared.get("seatMapUnjudgeable")
-        if smuj:
-            _emitted_seat_map_unjudgeable = True
-            degraded_out.append(
-                "seat-map-unjudgeable (round %s): a seat map was submitted and is readable, but "
-                "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
-                % (rkey, ", ".join(smuj)))
-        vac = declared.get("vacuousSeats")
-        if vac:
-            degraded_out.append(
-                "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
-                "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
-        eng_art = declared.get("engagedArtifactSeats")
-        if eng_art:
-            degraded_out.append(
-                "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
-                "could not carry — they do not count toward certification; salvaged artifacts "
-                "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        roi = declared.get("recordOrphansIgnored")
-        if roi:
-            degraded_out.append(
-                "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
-                "%s still at this slot — records ignored (session already on hand-submit path)"
-                % (rkey, ", ".join(roi)))
-        pcu = declared.get("priorCommentsUnavailable")
-        if pcu:
-            degraded_out.append(
-                "prior-comments-unavailable (round %s): orchestrator did not supply "
-                "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
-                "that prior comments were considered is not supported for this round"
-                % rkey)
-        fnn = declared.get("focusNotesNotCarried")
-        if isinstance(fnn, list) and fnn:
-            fnn_phases, fnn_seats = [], []
-            for row in fnn:
-                if not isinstance(row, dict):
-                    continue
-                row_phase, row_seats = row.get("phase"), row.get("seats")
-                if not (isinstance(row_phase, str) and row_phase):
-                    continue
-                if not (isinstance(row_seats, list) and all(isinstance(s, str) for s in row_seats)):
-                    continue
-                fnn_phases.append(row_phase)
-                fnn_seats.extend(row_seats)
-            if fnn_phases:
-                degraded_out.append(
-                    "focus-notes-not-carried (round %s): the %s order(s) cannot carry the session's "
-                    "focus notes — seat(s) %s did not see them"
-                    % (rkey, ", ".join(fnn_phases), ", ".join(fnn_seats)))
-        jd = declared.get("judgmentDispositions")
-        if isinstance(jd, list) and jd:
-            fail_closed = [e for e in jd if isinstance(e, dict) and e.get("failClosed")]
-            if fail_closed:
-                degraded_out.append(
-                    "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
-                    "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
-                    % (rkey, len(fail_closed)))
-        # Nothing writes this channel now; it reads only an older session's stored disclosure.
-        ggc = declared.get("gateGuidanceRowCarried")
-        if ggc:
-            degraded_out.append(
-                "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
-                "key while the fold recorded none for them — row-carried text is never rendered "
-                "as owner guidance" % (rkey, len(ggc)))
-        vvia = declared.get("verifyVia")
-        # axis: the receipt discloses a CI stand-in for the local verify — see bite-proof record wo_b_2072_ci_verify
-        if vvia and vvia.get("via") == "ci-exact-head":
-            degraded_out.append(
-                "verify-via-ci (round %s): CI workflow %s run %s on %s (%s) stood in for the local "
-                "verify command: %s" % (rkey, vvia.get("workflow"), vvia.get("runId"),
-                                        str(vvia.get("headSha"))[:7], vvia.get("conclusion"),
-                                        vvia.get("reason")))
-        bir = declared.get("breakItRuns")
-        if bir:
-            not_run = [r for r in bir if r.get("outcome") == "not-run"]
-            if not_run:
-                degraded_out.append(
-                    "break-it-test-not-run (round %s): %d break-it test(s) could not be run (%s) "
-                    "— the finding was kept without a recorded failing run"
-                    % (rkey, len(not_run),
-                       ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
-        bim = declared.get("breakItMalformed")
-        if isinstance(bim, list):
-            # axis: the receipt discloses each break-it test dropped as malformed seat output
-            malformed = [r for r in bim if isinstance(r, dict)]
-            if malformed:
-                degraded_out.append(
-                    "break-it-test-malformed (round %s): %d break-it test(s) a seat returned did not load "
-                    "and were dropped from their findings, which stand without them (%s)"
-                    % (rkey, len(malformed),
-                       ", ".join("%s %s: %s" % (r.get("seat"), r.get("path"), r.get("error"))
-                                 for r in malformed)))
-        vprov = declared.get("verifierProvenance")
-        if vprov:
-            ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]
-            if ignored:
-                degraded_out.append(
-                    "verifier-verdicts-ignored (round %s): verdicts not folded — %s"
-                    % (rkey, "; ".join(
-                        "expected %s, ran %s%s" % (
-                            r.get("expected"), r.get("ran"),
-                            " (%s)" % r.get("reason") if r.get("reason") else "")
-                        for r in ignored)))
-        syn = declared.get("synthesisUnseatable")
-        if syn:
-            degraded_out.append(
-                "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
-                "proven cell — findings were not grouped (nothing dropped)" % rkey)
-        stu = declared.get("secondTestUnseatable")
-        if stu:
-            degraded_out.append(
-                "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
-                "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
-                % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
-        sweeps = declared.get("sweeps")
-        if sweeps:
-            # axis: a sweep that did not run, a part no searcher answered and a hit left ungraded are each a degradation of the repository search, never a pass that hides them
-            for sweep in sweeps:
-                if not isinstance(sweep, dict):
-                    continue
-                if sweep.get("notRun"):
-                    degraded_out.append(
-                        "sweep-not-run (round %s): %s for \"%s\" — %s; no search ran and nothing stood in"
-                        % (rkey, sweep.get("sweepId"), sweep.get("title"), sweep.get("notRun")))
-                missing = sweep.get("missing")
-                if isinstance(missing, list) and missing:
-                    degraded_out.append(
-                        "sweep-incomplete (round %s): %s — searcher part(s) %s returned nothing; the search "
-                        "did not cover those files" % (rkey, sweep.get("sweepId"), ", ".join(str(m) for m in missing)))
-            ungraded = sum(s.get("ungraded") for s in sweeps
-                           if isinstance(s, dict) and isinstance(s.get("ungraded"), int)
-                           and not isinstance(s.get("ungraded"), bool))
-            if ungraded:
-                degraded_out.append(
-                    "sweep-hit-ungraded (round %s): %d sweep hit(s) left open without a verifier grade"
-                    % (rkey, ungraded))
-        bik =declared.get("breakItKept")
-        if bik:
-            # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
-            not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]
-            if not_kept:
-                degraded_out.append(
-                    "break-it-test-not-kept (round %s): %d fixed break-it test(s) not held in the "
-                    "final change (%s) — certification withheld"
-                    % (rkey, len(not_kept),
-                       ", ".join("%s: %s" % (r.get("path"), r.get("outcome")) for r in not_kept)))
-        ovg = declared.get("orderVendorProvenanceGaps")
-        if ovg:
-            seats = []
-            for row in ovg:
-                if not isinstance(row, dict):
-                    continue
-                seat = row.get("seat")
-                if not (isinstance(seat, str) and seat):
-                    continue
-                label = seat
-                phase_name = row.get("phase")
-                if isinstance(phase_name, str) and phase_name:
-                    label = "%s@%s" % (label, phase_name)
-                if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
-                    label = "%s (vendor defaulted — engine preferences unreadable)" % label
-                seats.append(label)
-            if seats:
-                degraded_out.append(
-                    "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
-                    "vendor" % (rkey, ", ".join(seats)))
-        prov_by_phase = normalize_adapter_provenance(declared.get("adapterProvenance"))
-        for phase_name, prov in prov_by_phase.items():
-            if not isinstance(prov, dict):
+    return skipped_blockers
+
+
+def _round_seat_provenance_prose(rkey, declared, degraded_out):
+    # Returns whether the seatMapUnjudgeable line was emitted for this round.
+    emitted_seat_map_unjudgeable = False
+    for row in (declared.get("fellOpen") or []):
+        degraded_out.append(
+            "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
+            "that seat's cross-vendor mix degraded" % (
+                rkey, row.get("seat"), row.get("configured"), row.get("reason"), row.get("ran")))
+    miss = declared.get("fellOpenProvenanceMissing")
+    if miss:
+        degraded_out.append(
+            "reviewer-fell-open-provenance-unavailable (round %s): cross-vendor seat(s) %s ran "
+            "without a trusted ranManifest entry — fall-open provenance unverified" % (
+                rkey, ", ".join(miss)))
+    smu = declared.get("seatMapUnavailable")
+    if smu:
+        degraded_out.append(
+            "reviewer-fell-open-seatmap-unavailable (round %s): live panel vendor(s) %s "
+            "but no seat map submitted — fall-open provenance unverified for the panel" % (
+                rkey, ", ".join(smu)))
+    smuj = declared.get("seatMapUnjudgeable")
+    if smuj:
+        emitted_seat_map_unjudgeable = True
+        degraded_out.append(
+            "seat-map-unjudgeable (round %s): a seat map was submitted and is readable, but "
+            "its violation basis is incomplete (%s) — \"no breach\" is unproven rather than clean"
+            % (rkey, ", ".join(smuj)))
+    vac = declared.get("vacuousSeats")
+    if vac:
+        degraded_out.append(
+            "vacuous-seat (round %s): seat(s) %s returned no findings and no verifiable "
+            "investigation record — classed as never-ran" % (rkey, ", ".join(vac)))
+    eng_art = declared.get("engagedArtifactSeats")
+    if eng_art:
+        degraded_out.append(
+            "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
+            "could not carry — they do not count toward certification; salvaged artifacts "
+            "are available for independent verification" % (rkey, ", ".join(eng_art)))
+    roi = declared.get("recordOrphansIgnored")
+    if roi:
+        degraded_out.append(
+            "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
+            "%s still at this slot — records ignored (session already on hand-submit path)"
+            % (rkey, ", ".join(roi)))
+    pcu = declared.get("priorCommentsUnavailable")
+    if pcu:
+        degraded_out.append(
+            "prior-comments-unavailable (round %s): orchestrator did not supply "
+            "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
+            "that prior comments were considered is not supported for this round"
+            % rkey)
+    return emitted_seat_map_unjudgeable
+
+
+def _round_focus_notes_prose(rkey, declared, degraded_out):
+    fnn = declared.get("focusNotesNotCarried")
+    if isinstance(fnn, list) and fnn:
+        fnn_phases, fnn_seats = [], []
+        for row in fnn:
+            if not isinstance(row, dict):
                 continue
-            if prov.get("dispatchManifestUnavailable"):
+            row_phase, row_seats = row.get("phase"), row.get("seats")
+            if not (isinstance(row_phase, str) and row_phase):
+                continue
+            if not (isinstance(row_seats, list) and all(isinstance(s, str) for s in row_seats)):
+                continue
+            fnn_phases.append(row_phase)
+            fnn_seats.extend(row_seats)
+        if fnn_phases:
+            degraded_out.append(
+                "focus-notes-not-carried (round %s): the %s order(s) cannot carry the session's "
+                "focus notes — seat(s) %s did not see them"
+                % (rkey, ", ".join(fnn_phases), ", ".join(fnn_seats)))
+
+
+def _round_judgment_verify_prose(rkey, declared, degraded_out):
+    jd = declared.get("judgmentDispositions")
+    if isinstance(jd, list) and jd:
+        fail_closed = [e for e in jd if isinstance(e, dict) and e.get("failClosed")]
+        if fail_closed:
+            degraded_out.append(
+                "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
+                "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
+                % (rkey, len(fail_closed)))
+    # Nothing writes this channel now; it reads only an older session's stored disclosure.
+    ggc = declared.get("gateGuidanceRowCarried")
+    if ggc:
+        degraded_out.append(
+            "gate-guidance-row-carried (round %s): %d fix-batch row(s) carried the guidance "
+            "key while the fold recorded none for them — row-carried text is never rendered "
+            "as owner guidance" % (rkey, len(ggc)))
+    vvia = declared.get("verifyVia")
+    # axis: the receipt discloses a CI stand-in for the local verify — see bite-proof record wo_b_2072_ci_verify
+    if vvia and vvia.get("via") == "ci-exact-head":
+        degraded_out.append(
+            "verify-via-ci (round %s): CI workflow %s run %s on %s (%s) stood in for the local "
+            "verify command: %s" % (rkey, vvia.get("workflow"), vvia.get("runId"),
+                                    str(vvia.get("headSha"))[:7], vvia.get("conclusion"),
+                                    vvia.get("reason")))
+
+
+def _round_break_it_runs_prose(rkey, declared, degraded_out):
+    bir = declared.get("breakItRuns")
+    if bir:
+        not_run = [r for r in bir if r.get("outcome") == "not-run"]
+        if not_run:
+            degraded_out.append(
+                "break-it-test-not-run (round %s): %d break-it test(s) could not be run (%s) "
+                "— the finding was kept without a recorded failing run"
+                % (rkey, len(not_run),
+                   ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+    bim = declared.get("breakItMalformed")
+    if isinstance(bim, list):
+        # axis: the receipt discloses each break-it test dropped as malformed seat output
+        malformed = [r for r in bim if isinstance(r, dict)]
+        if malformed:
+            degraded_out.append(
+                "break-it-test-malformed (round %s): %d break-it test(s) a seat returned did not load "
+                "and were dropped from their findings, which stand without them (%s)"
+                % (rkey, len(malformed),
+                   ", ".join("%s %s: %s" % (r.get("seat"), r.get("path"), r.get("error"))
+                             for r in malformed)))
+
+
+def _round_verifier_synthesis_prose(rkey, declared, degraded_out):
+    vprov = declared.get("verifierProvenance")
+    if vprov:
+        ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]
+        if ignored:
+            degraded_out.append(
+                "verifier-verdicts-ignored (round %s): verdicts not folded — %s"
+                % (rkey, "; ".join(
+                    "expected %s, ran %s%s" % (
+                        r.get("expected"), r.get("ran"),
+                        " (%s)" % r.get("reason") if r.get("reason") else "")
+                    for r in ignored)))
+    syn = declared.get("synthesisUnseatable")
+    if syn:
+        degraded_out.append(
+            "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
+            "proven cell — findings were not grouped (nothing dropped)" % rkey)
+    stu = declared.get("secondTestUnseatable")
+    if stu:
+        degraded_out.append(
+            "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
+            "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
+            % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
+
+
+def _round_sweeps_prose(rkey, declared, degraded_out):
+    sweeps = declared.get("sweeps")
+    if sweeps:
+        # axis: a sweep that did not run, a part no searcher answered and a hit left ungraded are each a degradation of the repository search, never a pass that hides them
+        for sweep in sweeps:
+            if not isinstance(sweep, dict):
+                continue
+            if sweep.get("notRun"):
                 degraded_out.append(
-                    "adapter-provenance (round %s, %s): dispatch manifest unavailable — trusted "
-                    "ranManifest/collectionManifest omitted" % (rkey, phase_name))
-            mismatch = prov.get("vendorEchoMismatch")
-            if isinstance(mismatch, list) and mismatch:
-                parts = ["%s echo=%r trusted=%r" % (row.get("seat"), row.get("echo"),
-                                                     row.get("recorded", row.get("manifest")))
-                         for row in mismatch if isinstance(row, dict)]
+                    "sweep-not-run (round %s): %s for \"%s\" — %s; no search ran and nothing stood in"
+                    % (rkey, sweep.get("sweepId"), sweep.get("title"), sweep.get("notRun")))
+            missing = sweep.get("missing")
+            if isinstance(missing, list) and missing:
                 degraded_out.append(
-                    "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
-                    % (rkey, phase_name, "; ".join(parts)))
+                    "sweep-incomplete (round %s): %s — searcher part(s) %s returned nothing; the search "
+                    "did not cover those files" % (rkey, sweep.get("sweepId"), ", ".join(str(m) for m in missing)))
+        ungraded = sum(s.get("ungraded") for s in sweeps
+                       if isinstance(s, dict) and isinstance(s.get("ungraded"), int)
+                       and not isinstance(s.get("ungraded"), bool))
+        if ungraded:
+            degraded_out.append(
+                "sweep-hit-ungraded (round %s): %d sweep hit(s) left open without a verifier grade"
+                % (rkey, ungraded))
+
+
+def _round_break_it_kept_prose(rkey, declared, degraded_out):
+    bik =declared.get("breakItKept")
+    if bik:
+        # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
+        not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]
+        if not_kept:
+            degraded_out.append(
+                "break-it-test-not-kept (round %s): %d fixed break-it test(s) not held in the "
+                "final change (%s) — certification withheld"
+                % (rkey, len(not_kept),
+                   ", ".join("%s: %s" % (r.get("path"), r.get("outcome")) for r in not_kept)))
+
+
+def _round_order_vendor_gaps_prose(rkey, declared, degraded_out):
+    ovg = declared.get("orderVendorProvenanceGaps")
+    if ovg:
+        seats = []
+        for row in ovg:
+            if not isinstance(row, dict):
+                continue
+            seat = row.get("seat")
+            if not (isinstance(seat, str) and seat):
+                continue
+            label = seat
+            phase_name = row.get("phase")
+            if isinstance(phase_name, str) and phase_name:
+                label = "%s@%s" % (label, phase_name)
+            if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
+                label = "%s (vendor defaulted — engine preferences unreadable)" % label
+            seats.append(label)
+        if seats:
+            degraded_out.append(
+                "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
+                "vendor" % (rkey, ", ".join(seats)))
+
+
+def _round_adapter_provenance_prose(rkey, declared, degraded_out):
+    prov_by_phase = normalize_adapter_provenance(declared.get("adapterProvenance"))
+    for phase_name, prov in prov_by_phase.items():
+        if not isinstance(prov, dict):
+            continue
+        if prov.get("dispatchManifestUnavailable"):
+            degraded_out.append(
+                "adapter-provenance (round %s, %s): dispatch manifest unavailable — trusted "
+                "ranManifest/collectionManifest omitted" % (rkey, phase_name))
+        mismatch = prov.get("vendorEchoMismatch")
+        if isinstance(mismatch, list) and mismatch:
+            parts = ["%s echo=%r trusted=%r" % (row.get("seat"), row.get("echo"),
+                                                 row.get("recorded", row.get("manifest")))
+                     for row in mismatch if isinstance(row, dict)]
+            degraded_out.append(
+                "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
+                % (rkey, phase_name, "; ".join(parts)))
+
+
+def _run_tail_prose(state, journal, emitted_seat_map_unjudgeable, degraded_out):
     _run_unj = seat_map_receipts.unjudgeable_run_level_disclosure(
         state,
         seat_judgment_family(state),
-        per_round_emitted=_emitted_seat_map_unjudgeable,
+        per_round_emitted=emitted_seat_map_unjudgeable,
         no_seat_map_submitted=not seat_map_receipts.any_seats(state),
     )
     if _run_unj and seat_map_unjudgeable(state):
@@ -850,6 +881,28 @@ def build_degraded_prose(state, form, journal=None):
             "the host model, fallen open to it, or landed by hand — are declared live, never "
             "probed; their engagement rests on the seat's own record"
             % ", ".join(native_seats))
+
+
+def build_degraded_prose(state, form, journal=None):
+    cfg = state.get("config") or {}
+    degraded_out = []
+    _run_level_prose(state, cfg, degraded_out)
+    skipped_blockers = _skipped_blockers_prose(state, degraded_out)
+    _emitted_seat_map_unjudgeable = False
+    for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
+        rrec = state["rounds"][rkey]
+        declared = receipt_round_disclosures(rrec, form, state)
+        if _round_seat_provenance_prose(rkey, declared, degraded_out):
+            _emitted_seat_map_unjudgeable = True
+        _round_focus_notes_prose(rkey, declared, degraded_out)
+        _round_judgment_verify_prose(rkey, declared, degraded_out)
+        _round_break_it_runs_prose(rkey, declared, degraded_out)
+        _round_verifier_synthesis_prose(rkey, declared, degraded_out)
+        _round_sweeps_prose(rkey, declared, degraded_out)
+        _round_break_it_kept_prose(rkey, declared, degraded_out)
+        _round_order_vendor_gaps_prose(rkey, declared, degraded_out)
+        _round_adapter_provenance_prose(rkey, declared, degraded_out)
+    _run_tail_prose(state, journal, _emitted_seat_map_unjudgeable, degraded_out)
     return degraded_out, skipped_blockers
 
 

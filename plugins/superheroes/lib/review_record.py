@@ -923,13 +923,27 @@ def _fix_group_fault(g):
     return ".repairedAlone" if "repairedAlone" in g and g["repairedAlone"] is not True else None
 
 
+def _chk(ok, key):
+    if not ok:
+        raise Refusal("review-account-invalid", key)
+
+
+def _ne(v):
+    return isinstance(v, str) and bool(v)
+
+
+def _sn(v):
+    return v is None or isinstance(v, str)
+
+
+def _lst(a, k):
+    return a.get(k, []) if isinstance(a.get(k, []), list) else _chk(False, k)
+
+
 def _validate(a):
-    def chk(ok, key):
-        if not ok:
-            raise Refusal("review-account-invalid", key)
-    ne = lambda v: isinstance(v, str) and bool(v)  # noqa: E731
-    sn = lambda v: v is None or isinstance(v, str)  # noqa: E731
-    lst = lambda k: a.get(k, []) if isinstance(a.get(k, []), list) else chk(False, k)  # noqa: E731
+    chk = _chk
+    ne = _ne
+    sn = _sn
     chk(isinstance(a, dict), "account")
     chk("findings" in a, "findings")  # an omitted findings member is unknown coverage, never an empty review
     chk(a.get("schema") == ACCOUNT_SCHEMA, "schema")
@@ -946,6 +960,27 @@ def _validate(a):
     chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note"}
                         and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
                         and sn(unc.get("reason")) and sn(unc.get("note"))), "uncertified")
+    _validate_reviewers(a, ab)
+    _validate_carried_review(a)
+    makers = _validate_makers(a)
+    _validate_findings(a)
+    _validate_plain_lists(a)
+    _validate_carried_checks(a)
+    _validate_owner_rulings(a)
+    rounds = _validate_rounds(a)
+    _validate_optional_blocks(a)
+    _validate_session_cost(a)
+    _validate_run_lists(a)
+    return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
+            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
+            "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
+            "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
+
+
+def _validate_reviewers(a, ab):
+    chk = _chk
+    ne = _ne
+    sn = _sn
     # an abandoned session may have run no seat, so only its record may list no reviewer
     chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
@@ -970,6 +1005,10 @@ def _validate(a):
                                     and isinstance(r["noResult"], str) and r["noResult"] in NO_RESULT_REASONS),
             f"reviewers[{i}].noResult")
         chk("carriedFrom" not in r or _full_sha(r["carriedFrom"]), f"reviewers[{i}].carriedFrom")
+
+
+def _validate_carried_review(a):
+    chk = _chk
     carried_review = a.get("carriedReview")
     if "carriedReview" in a:
         chk(isinstance(carried_review, dict) and set(carried_review) == {"lastReviewed", "why"}
@@ -982,11 +1021,26 @@ def _validate(a):
     # axis: a carried row and the account's carriedReview name each other and the same commit, never one without the other — see bite-proof record c1l11d_wo_a_carried_review
     chk(bool(from_shas) == ("carriedReview" in a)
         and (not from_shas or from_shas == {carried_review["lastReviewed"]}), "carriedReview (and reviewers[].carriedFrom)")
+
+
+def _validate_makers(a):
+    chk = _chk
+    ne = _ne
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
         chk(isinstance(m, dict) and ne(m.get("family")), f"makers[{i}]")
         chk(_step_ok(m.get("fromStep")), f"makers[{i}].fromStep")
+    return makers
+
+
+def _validate_findings(a):
+    chk = _chk
+    ne = _ne
+    sn = _sn
+
+    def lst(k):
+        return _lst(a, k)
     for i, f in enumerate(lst("findings")):
         chk(isinstance(f, dict) and ne(f.get("id")), f"findings[{i}].id")
         chk(f.get("outcome") is None or f["outcome"] in rfs.OUTCOMES,
@@ -1028,6 +1082,14 @@ def _validate(a):
             fault = _fix_group_fault(f["fixGroup"])
             # axis: a fix group names its id and two or more members, never a lone or unnamed one — see bite-proof record c1l11c_wo1_fix_groups
             chk(fault is None, f"findings[{i}].fixGroup{fault}")
+
+
+def _validate_plain_lists(a):
+    chk = _chk
+    ne = _ne
+
+    def lst(k):
+        return _lst(a, k)
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)
     for i, g in enumerate(lst("goAheads")):
@@ -1042,6 +1104,14 @@ def _validate(a):
         chk(isinstance(x.get("round"), int) and not isinstance(x["round"], bool) and x["round"] >= 1, f"{where}.round")
         fault = command_refusals.refusals_fault([{k: v for k, v in x.items() if k != "round"}])
         chk(fault is None, f"{where} ({fault})")
+
+
+def _validate_carried_checks(a):
+    chk = _chk
+    ne = _ne
+
+    def lst(k):
+        return _lst(a, k)
     named = []
     for i, c in enumerate(lst("carriedChecks")):
         where = f"carriedChecks[{i}]"
@@ -1054,6 +1124,14 @@ def _validate(a):
         chk(len(hit) == 1, f"{where}.key names {'no finding' if not hit else 'more than one finding'}")
         chk(hit.isdisjoint(named), f"{where}.key names a finding another entry names")
         named += hit
+
+
+def _validate_owner_rulings(a):
+    chk = _chk
+    ne = _ne
+
+    def lst(k):
+        return _lst(a, k)
     ruled = []
     for i, r in enumerate(lst("ownerRulings")):
         where = f"ownerRulings[{i}]"
@@ -1065,6 +1143,11 @@ def _validate(a):
         chk(len(hit) == 1, f"{where}.key names {'no finding' if not hit else 'more than one finding'}")
         chk(hit.isdisjoint(ruled), f"{where}.key names a finding another entry names")
         ruled += hit
+
+
+def _validate_rounds(a):
+    chk = _chk
+    ne = _ne
     chk(a.get("sheetAnswers") is None or isinstance(a["sheetAnswers"], dict), "sheetAnswers")
     chk(a.get("baseRef") is None or ne(a["baseRef"]), "baseRef")
     rounds = a.get("rounds", {"count": 0, "cap": None, "stoppedAtCap": False})
@@ -1088,6 +1171,11 @@ def _validate(a):
             and isinstance(bounded["auditedRounds"], list)
             and all(isinstance(n, int) and not isinstance(n, bool) and n in bounded["rounds"] for n in bounded["auditedRounds"])
             and all(x < y for x, y in zip(bounded["auditedRounds"], bounded["auditedRounds"][1:])), "rounds.boundedPass")
+    return rounds
+
+
+def _validate_optional_blocks(a):
+    chk = _chk
     if "rerunChecks" in a:
         fault = _items_fault(a["rerunChecks"], _rerun_fault)
         # axis: a re-run check holds the first failure and the one re-run, two runs, each with a coherent status — see bite-proof record c1l1_wo_a_record_seam
@@ -1114,6 +1202,10 @@ def _validate(a):
         fault = _proven_copies_fault(a["provenCopies"])
         # axis: a proven copy names its file, its source and a 64-hex checksum the vet can check, each file once — see bite-proof record c1l5b_wo_d_proven_copies
         chk(fault is None, f"provenCopies{fault}")
+
+
+def _validate_session_cost(a):
+    chk = _chk
     if "sessionCost" in a:
         c, num = a["sessionCost"], lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0  # noqa: E731
         cnt = lambda v: _is_int(v) and v >= 0  # noqa: E731
@@ -1133,6 +1225,11 @@ def _validate(a):
                                            for k, v in seats.items()), "sessionCost.bySeat")
         chk(sum(v["tokens"] for v in seats.values()) == c["tokens"] and sum(v["runs"] for v in seats.values()) == c["runs"]
             and round(sum((v["minutes"] for v in seats.values()), 0.0), 1) == c["minutes"], "sessionCost.bySeat")
+
+
+def _validate_run_lists(a):
+    chk = _chk
+    ne = _ne
     if "silenceWatchdogEnds" in a:
         ends = a["silenceWatchdogEnds"]
         # axis: a watchdog end names its seat, a 1-based attempt and finite non-negative silent seconds, exactly those keys — see bite-proof record i2375_c_watchdog_ends
@@ -1149,10 +1246,6 @@ def _validate(a):
             and bool(e["nonce"].strip())
             # axis: the case is one of UNBOUND_RUN_CASES, never another word — see bite-proof record i2516_unbound_runs
             and e["case"] in UNBOUND_RUN_CASES for e in unbound), "unboundRuns")
-    return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
-            "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
-            "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
-            "makers": makers or [], "rounds": dict(rounds, capKind=rounds.get("capKind", CAP_KINDS[0]))}
 
 
 # --- code facts ---
