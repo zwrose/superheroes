@@ -111,6 +111,8 @@ token below. Micro work never reaches this check.
 | `anchor-kind-unrecognized` | The Anchor header declares exactly one token that is not an anchor kind |
 | `anchor-kind-multiple` | The Anchor header declares two or more kind tokens |
 | `body-unreadable` | The body file could not be read (path typo, permission error, or invalid encoding) |
+| `blocker-open` | The issue has an open native blocker (a `blocked_by` dependency edge); the result names each one |
+| `blockers-unreadable` | The native blocker edges could not be read in full, or `--issue`/`--repo` was malformed or given alone; never read as no blockers |
 
 Header-form refusals are reported before emptiness — when both a malformed header and an empty
 Anchor hold, the reported token is the header-form refusal.
@@ -125,10 +127,17 @@ Anchor hold, the reported token is the header-form refusal.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
+python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path> --issue <n> --repo <owner/name>
 ```
 
 reading the JSON result from stdout.
+
+Marking an existing issue build-ready always passes `--issue` and `--repo`, so the check reads the
+issue's native `blocked_by` edges (the dependency edges GitHub records, where the owner records
+holds) rather than the body's prose about edges. A result whose `blockers.checked` is false is a
+body-only result and does not clear a marking; the body-only form (no `--issue`, no `--repo`) is for
+a body whose issue does not exist yet (the filing dry-run). `check-blockers --issue <n> --repo
+<owner/name>` is the edge read alone.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.
@@ -396,8 +405,9 @@ Four things make it a retrofit rather than a rewrite:
 - **The check is green afterward, read from the JSON.** Run the build-ready check ([The build-ready
   block](#the-build-ready-block)) against the edited body and read `ok: true` with `reason: null`
   **out of the result**. Do not read the exit status: the check is advisory and **always exits
-  zero**, and its refusal set covers the Anchor only — it reports an empty What or DoD without
-  refusing. A body that passes the check with an empty DoD has moved the stop to vet, not cleared
+  zero**, and its body refusals cover the Anchor only (it still reports an empty What or DoD without
+  refusing); the retrofit check on the existing issue passes `--issue` and `--repo`, so an open
+  native blocker refuses too. A body that passes the check with an empty DoD has moved the stop to vet, not cleared
   it.
 
 **When the original filing yields no gradable DoD.** This is common on old issues, and it is not the
