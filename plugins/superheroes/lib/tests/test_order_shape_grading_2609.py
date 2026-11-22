@@ -28,6 +28,10 @@ Guarded elements (the test function proving each):
   D4  a wrong `expectedResultKind` or `nothingToGroup` on the opened run   test_d_opened_run_journals_the_row_pin_and_flag
   E   the sweep reply's gate   test_e_host_reply_rows_are_graded_by_payload_fault
   F   a minimal answer the payload contract refuses   test_f_minimal_answers_pass_the_payload_contract
+  G1  a forbidden-empty row with no fold handler, or a handler naming no real decision kind   test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold
+  G2  an empty answer to the emitted ids the fold does not record silent   test_g_empty_answer_to_the_emitted_ids_folds_silent
+  G3  a minimal answer to the emitted ids the fold records silent, or not named `no-block`   test_g_minimal_answer_to_the_emitted_ids_is_not_silent
+  G4  the second-test delivery text inviting an empty list, or seams / scoped finder changed   test_g_second_test_delivery_never_invites_an_empty_list_and_seams_and_scoped_do_not_change
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/order_shape_grading_2609.md
 """
@@ -49,6 +53,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 from bite_support import _stamp_ended_from_native_result  # noqa: E402
+import decision_kinds  # noqa: E402
 import payload_contracts as PC  # noqa: E402
 import repeat_marks as RM  # noqa: E402
 import round_driver as RD  # noqa: E402
@@ -625,3 +630,110 @@ def test_f_minimal_answers_pass_the_payload_contract(row):
     # axis: the answer a row's order asks for is one `payload_fault` accepts at record time (runner-only keys stripped)
     minimal = FIXTURES[row["id"]]["minimal"]
     assert _fault(row, minimal) is None, _fault(row, minimal)
+
+
+# ---------------------------------------------------------------------------------------------
+# G. a row whose empty answer the order forbids but the runner grades ok is handled by the fold
+# ---------------------------------------------------------------------------------------------
+# The set is derived from the table (the runner grades the empty answer ok, the order asks for one answer per item),
+# never typed: a future row of that kind with no handler fails G1. Each such row is run through the real `_advance`
+# (the ids the order emits) and the real `_fold` (the silence it records).
+
+_NO_BLOCK = "I could not write a test that reaches it"
+FOLD_ROWS = [row for row in SEAT_ROWS
+             if row.get("emptyAnswerValid") is True and row.get("orderAllowsEmpty") is False]
+
+
+def _emitted_ids(payload):
+    """The item ids an order's payload gives its seat: the verifiers' cluster findings, or the held findings."""
+    if "clusters" in payload:
+        return [f["id"] for cluster in payload["clusters"] for f in cluster["findings"]]
+    return [f["id"] for f in payload["findings"]]
+
+
+def _minimal_for_emitted(row_id, payload):
+    """The row's minimal answer rewritten to the ids the order emitted: one verdict per id (verifiers), or each
+    finding returned with its staged id, its other fields as the payload gave them, and no block in `suggestion`."""
+    minimal = copy.deepcopy(FIXTURES[row_id]["minimal"])
+    if "clusters" in payload:
+        template = minimal["verdicts"][0]
+        minimal["verdicts"] = [dict(template, id=rid) for rid in _emitted_ids(payload)]
+    else:
+        minimal["findings"] = [dict(entry, suggestion=_NO_BLOCK) for entry in copy.deepcopy(payload["findings"])]
+    return minimal
+
+
+def _fold_emitted(row_id, which):
+    """Emit the row's order with the real `_advance`, then fold the `which` answer (rewritten to the emitted ids for
+    "minimal") on the state `_advance` left. -> (state, emitted ids, state as emitted)"""
+    state, config = copy.deepcopy(CENSUS_STATES[row_id])
+    out = RD._advance(state, config)
+    ids = _emitted_ids(out["payload"])
+    assert ids, "the order emitted no item ids, so the fold has no item to be silent about: %s" % (out["payload"],)
+    emitted = copy.deepcopy(state)
+    answer = _minimal_for_emitted(row_id, out["payload"]) if which == "minimal" \
+        else copy.deepcopy(FIXTURES[row_id]["empty"])
+    RD._fold(state, config, out["phase"], answer)
+    return state, ids, emitted
+
+
+def test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold():
+    # axis: a forbidden-empty row with no handler, a handler naming a decision kind that does not exist, and a handler on any other row all fail (G1)
+    assert FOLD_ROWS, "the table has no row whose empty answer the runner grades ok and the order forbids"
+    for row in ROWS:
+        if row in FOLD_ROWS:
+            assert row.get("emptyHandledBy") == RO.HANDLED_BY_FOLD, row["id"]
+            assert row.get("emptyFoldDecision") in decision_kinds.DECISION_KINDS, row["id"]
+        else:
+            assert "emptyHandledBy" not in row and "emptyFoldDecision" not in row, row["id"]
+
+
+@pytest.mark.parametrize("row", FOLD_ROWS, ids=_row_id)
+def test_g_empty_answer_to_the_emitted_ids_folds_silent(row):
+    # axis: the empty answer to the ids the real `_advance` emitted is recorded silent by the real `_fold`, and the fold goes on as it does for the minimal answer (G2)
+    state, ids, _emitted = _fold_emitted(row["id"], "empty")
+    assert state["rounds"]["1"].get("silentSeats") == [{"phase": row["id"], "grain": "answer", "items": len(ids)}]
+    recorded = [d for d in state["decisions"] if d["kind"] == row["emptyFoldDecision"]]
+    assert len(recorded) == 1, state["decisions"]
+    assert "%d item(s)" % len(ids) in recorded[0]["detail"], recorded[0]
+    minimal_state, _ids, _before = _fold_emitted(row["id"], "minimal")
+    assert state["step"] == minimal_state["step"], (state["step"], minimal_state["step"])
+
+
+@pytest.mark.parametrize("row", FOLD_ROWS, ids=_row_id)
+def test_g_minimal_answer_to_the_emitted_ids_is_not_silent(row):
+    # axis: the minimal answer (every emitted id, no new test) is not silent; the held findings are named `no-block` (G3)
+    state, ids, emitted = _fold_emitted(row["id"], "minimal")
+    assert "silentSeats" not in state["rounds"]["1"], state["rounds"]["1"]["silentSeats"]
+    assert not [d for d in state["decisions"] if d["kind"] == row["emptyFoldDecision"]]
+    if row["id"] == "second-test":
+        assert state["rounds"]["1"]["secondTest"]["noTest"] == [
+            {"findingKey": RD._finding_identity_key(held["finding"]), "reason": "no-block"}
+            for held in emitted["_secondTestHeld"]]
+    elif row["id"] == "second-test-correction":
+        assert state["rounds"]["1"]["testCorrection"] == [
+            {"findingKey": item["findingKey"], "outcome": "none", "reason": "no-block"}
+            for item in emitted[RD.TEST_CORRECTION_PENDING_FIELD]["items"]]
+    else:
+        assert row["id"] == "verifiers", "no assertion on the fold of a new forbidden-empty row: %s" % row["id"]
+        assert state["rounds"]["1"]["verify"].get("unverified") in (None, []), state["rounds"]["1"]["verify"]
+
+
+_FILE_DELIVERY_HEAD = "Deliver per the base rubric's panel output-format section. Write your findings payload to %s — "
+_OLD_DELIVERY_TAIL = "write an empty findings list rather than skipping the file when you have nothing to flag."
+_SECOND_TEST_DELIVERY_TAIL = (
+    "return each finding you were given exactly once, with its staged id. For a finding you write no new test for, "
+    "return it with its staged id and its other fields as received and no block in suggestion; never return an empty "
+    "findings list.")
+
+
+def _file_delivery(phase):
+    return RO._channel_derived_placeholders(phase, {"landing_path": "/landing/x.payload.json",
+                                                    "placeholders": {}})["OUTPUT_CHANNEL_BLOCK"]
+
+
+def test_g_second_test_delivery_never_invites_an_empty_list_and_seams_and_scoped_do_not_change():
+    # axis: the second-test file-channel text tells the seat to return every finding it was given and never an empty list; seams and the scoped finder keep the empty-list sentence (G4)
+    assert _file_delivery(RP.P_SECOND_TEST) == (_FILE_DELIVERY_HEAD % "/landing/x.payload.json") + _SECOND_TEST_DELIVERY_TAIL
+    for phase in (RP.P_SEAMS, RP.P_SCOPED):
+        assert _file_delivery(phase) == (_FILE_DELIVERY_HEAD % "/landing/x.payload.json") + _OLD_DELIVERY_TAIL, phase

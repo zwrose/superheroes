@@ -175,3 +175,95 @@ show it). It was reverted by the inverse edit, and the second `git diff --stat` 
 ```
 (plus this record, untracked). `round_driver.py` and `receipt_disclosures.py` carry no diff against `4cb4c22b3`. The suite was
 re-run green after that repair: `59 passed in 58.19s`.
+
+## WO2
+
+Detector: section G of `plugins/superheroes/lib/tests/test_order_shape_grading_2609.py` (G1 `test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold`, G2 `test_g_empty_answer_to_the_emitted_ids_folds_silent` over the three rows the table derives, G3 `test_g_minimal_answer_to_the_emitted_ids_is_not_silent`, G4 `test_g_second_test_delivery_never_invites_an_empty_list_and_seams_and_scoped_do_not_change`), plus the golden `dispatch-second-test.txt` read by `test_round_orders.py::test_golden_render_matches_fixture`.
+Invariant: every order shape whose empty answer the runner grades ok although the order asks for one answer per item (`emptyAnswerValid` True, `orderAllowsEmpty` False; derived from the table, today `verifiers`, `second-test`, `second-test-correction`) declares the fold as its handler with a real decision kind, and the real `_advance` + real `_fold` record its empty answer to the emitted ids as silent while the minimal answer is not.
+
+Guarded-element set (declared in the order): E7, E8, E9; then the two earlier-record reverts R1 (#2475) and R2 (#2527). No element is grouped; none is unproven. Each neutralization is one targeted edit with the Edit tool at its production site, shown red on the one node (or `-k` selection) named, restored by the inverse edit (never `git checkout`, `git restore`, `git reset` or `git stash`) and shown green on the same selection. Captures are complete runner output except that E8's per-test tracebacks are shown once for the first row and the other two keep their headline line and `AssertionError` line (elided about 1 KiB). Nothing here is a secret, token, private URL or PII; no redaction needed; the worktree's absolute path appears in the R1/R2 tracebacks as printed.
+
+### E7: the `empty_handled_by` of a forbidden-empty row (`round_orders.py`, the `second-test` row)
+
+Axis: a row of the forbidden-empty kind with no fold handler fails G1 (and a handler is read off the table, never a typed list).
+
+Neutralization: on the `second-test` row, `empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="second-test-silent"),` -> `empty_fold_decision="second-test-silent"),`
+
+Command: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold -q`
+
+Raw red (exit status 1; the traceback's `where` lines elided, about 0.5 KiB):
+```
+F                                                                        [100%]
+______ test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold _______
+>               assert row.get("emptyHandledBy") == RO.HANDLED_BY_FOLD, row["id"]
+E               AssertionError: second-test
+E               assert None == 'fold'
+FAILED plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold
+1 failed in 3.25s
+```
+
+Restore: the inverse edit. Restore receipt (restored line quoted back): `           empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="second-test-silent"),`
+
+Raw green (exit status 0): `1 passed in 1.81s`
+
+### E8: the fold's silence helper (`round_driver.py`, `_record_silent_seat`)
+
+Axis: the empty answer to the emitted ids is recorded silent (one `silentSeats` row, one decision of the row's `emptyFoldDecision`) by the real `_fold`, for all three rows.
+
+Neutralization: a `return False` line added as the first statement of `_record_silent_seat`'s body (after the docstring, before `if seats is not None:`), so it records nothing.
+
+Command: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_order_shape_grading_2609.py -k test_g_empty_answer_to_the_emitted_ids_folds_silent -q -n auto`
+
+Raw red (exit status 1; the `where` lines of each traceback elided):
+```
+FFF                                                                      [100%]
+_ test_g_empty_answer_to_the_emitted_ids_folds_silent[second-test-correction] __
+>       assert state["rounds"]["1"].get("silentSeats") == [{"phase": row["id"], "grain": "answer", "items": len(ids)}]
+E       AssertionError: assert None == [{'phase': 'second-test-correction', 'grain': 'answer', 'items': 1}]
+_______ test_g_empty_answer_to_the_emitted_ids_folds_silent[second-test] _______
+E       AssertionError: assert None == [{'phase': 'second-test', 'grain': 'answer', 'items': 1}]
+________ test_g_empty_answer_to_the_emitted_ids_folds_silent[verifiers] ________
+E       AssertionError: assert None == [{'phase': 'verifiers', 'grain': 'answer', 'items': 1}]
+FAILED plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_empty_answer_to_the_emitted_ids_folds_silent[second-test-correction]
+FAILED plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_empty_answer_to_the_emitted_ids_folds_silent[second-test]
+FAILED plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_empty_answer_to_the_emitted_ids_folds_silent[verifiers]
+3 failed in 5.55s
+```
+(each: the round carries the fold's other rows, `testCorrection` / `secondTest` / `verify`, and no `silentSeats`)
+
+Restore: the inverse edit (the `return False` line removed). Restore receipt (the lines as they stand): `    goes on exactly as it would, the items are recorded as unanswered, and nothing is re-asked."""` followed by `    if seats is not None:`
+
+Raw green (exit status 0): `3 passed in 5.04s`
+
+### E9: the second-test delivery text (`round_orders.py`, `_channel_derived_placeholders`)
+
+Axis: the second-test file-channel text tells the seat to return every finding it was given and never an empty list; the shared sentence is the one that invited the silence.
+
+Neutralization (the shared sentence restored, in two edits at the one site): `elif phase == round_phases.P_SECOND_TEST:` -> `elif False and phase == round_phases.P_SECOND_TEST:`, and `elif phase in (round_phases.P_SEAMS, round_phases.P_SCOPED):` -> `elif phase in (round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):`
+
+Command: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_second_test_delivery_never_invites_an_empty_list_and_seams_and_scoped_do_not_change -q`
+
+Raw red (exit status 1):
+```
+F                                                                        [100%]
+>       assert _file_delivery(RP.P_SECOND_TEST) == (_FILE_DELIVERY_HEAD % "/landing/x.payload.json") + _SECOND_TEST_DELIVERY_TAIL
+E       AssertionError: assert 'Deliver per ...hing to flag.' == 'Deliver per ...indings list.'
+E         - ad.json — return each finding you were given exactly once, with its staged id. For a finding you write no new test for, return it with its staged id and its other fields as received and no block in suggestion; never return an empty findings list.
+E         + ad.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+FAILED plugins/superheroes/lib/tests/test_order_shape_grading_2609.py::test_g_second_test_delivery_never_invites_an_empty_list_and_seams_and_scoped_do_not_change
+1 failed in 1.57s
+```
+
+Restore: the two inverse edits. Restore receipt (the lines as they stand): `    elif phase == round_phases.P_SECOND_TEST:` and `    elif phase in (round_phases.P_SEAMS, round_phases.P_SCOPED):`
+
+Raw green (exit status 0): `1 passed in 1.52s`
+
+### R1 and R2: the two reverts recorded in `order_shape_grading_2609.md`, re-run exactly as that record describes them
+
+Both neutralize `plugins/superheroes/lib/engine_dispatch.py` (`_finish_review_grade_from_parse`), the same edits, the same detector selection (`test_order_shape_grading_2609.py::test_d_minimal_answer_grades_ok`, flags `-q -p no:cacheprovider --tb=short`, with this order's `-X pycache_prefix=/private/tmp/superheroes-pyc`). Axis for both: the grade of the minimal answer still goes through the real grader after section G was added to the file.
+
+R1 (#2475), neutralization `and kind != engine_adapter.review_payload_key("grouping")):` -> `and True):`. Raw red (exit status 1; the `where` lines elided): the two cases that record names, `synthesis-survivors-earlier-pr-body-staged` and `synthesis-survivors-pr-body-staged`, each `AssertionError: {'forfeit': True, 'reason': 'vacuous', ...}` and `assert None is True`; `2 failed, 22 passed in 2.27s`. Restore: the inverse edit; restored line quoted back: `            and kind != engine_adapter.review_payload_key("grouping")):`. Raw green (exit status 0): `24 passed in 2.24s`.
+
+R2 (#2527), neutralization `if (opened.get("nothingToGroup") is True and kind == "grouping" and has_payload` -> `if (False and opened.get("nothingToGroup") is True and kind == "grouping" and has_payload`. Raw red (exit status 1; the `where` lines elided): the four cases that record names, `synthesis-repeat-only` and `synthesis-repeat-none` in both modes, each `AssertionError: {'forfeit': True, 'reason': 'vacuous', ...}` and `assert None is True`; `4 failed, 20 passed in 2.54s`. Restore: the inverse edit; restored line quoted back: `    if (opened.get("nothingToGroup") is True and kind == "grouping" and has_payload`. Raw green (exit status 0): `24 passed in 2.27s`.
+
+After the last restore `git status --short` listed only this order's files (`round_orders.py`, the golden `dispatch-second-test.txt`, `test_order_shape_grading_2609.py`, `test_round_driver.py`, `verification-pass.md`, and this record once written); `round_driver.py` and `engine_dispatch.py` carry no diff.
