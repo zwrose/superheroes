@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -802,3 +803,30 @@ def test_a_warm_external_bytecode_cache_leaves_the_record_unread_and_the_check_f
     result = _judge(local, _cloud_report(cloud, startParts=None))
     assert result["action"] == "failed" and "start" in result["failedParts"]
     assert UNREAD_SENTENCE in result["message"]
+
+
+def test_a_sourceless_bytecode_module_is_credited_as_its_source_part_and_fails_the_check(tmp_path):
+    # break-it: a lib/<name>.pyc loaded with no lib/<name>.py beside it was recorded under the .pyc
+    # name, which the expected set does not list, so its bytes were never compared.
+    copy = tmp_path / "copy"
+    shutil.copytree(PLUGIN, str(copy), ignore=shutil.ignore_patterns("__pycache__", "tests"))
+    source = copy / "lib" / "host_model.py"
+    source.write_text(source.read_text() + "\n# an older copy\n")
+    compiled = subprocess.run([sys.executable, "-c",
+                               "import py_compile, sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)",
+                               str(source), str(copy / "lib" / "host_model.pyc")],
+                              capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stderr
+    source.unlink()
+    link = tmp_path / "plugin-link"
+    os.symlink(str(copy), str(link))
+    env_file, done, _ = _run_hook(tmp_path, remote=True, link=link)
+    assert done.returncode == 0, done.stderr
+    record = _exported(env_file)
+    assert "lib/host_model.py" in record["parts"] and "lib/host_model.pyc" not in record["parts"]
+    assert record["unattributed"] == []
+    started = CC._start_parts(_env(record))
+    assert started["lib/host_model.py"][0]["sha256"] is None
+    match, issue, differing = CC._start_match({"startParts": started})
+    assert match is False and issue == "older"
+    assert [part for part, _copy in differing] == ["lib/host_model.py"]

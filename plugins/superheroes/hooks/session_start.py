@@ -67,6 +67,10 @@ def _plugin_part(path, link_root, roots, current):
         return None
     if len(pieces) >= 2 and pieces[-2] == _PYC_DIR and pieces[-1].endswith(".pyc"):
         pieces = pieces[:-2] + [pieces[-1].split(".")[0] + ".py"]
+    elif pieces[-1].endswith(".pyc"):
+        # a bytecode file beside its source, or with no source at all, is credited as the source
+        # part it stands for, so a sourceless module is judged against that part and never skipped
+        pieces = pieces[:-1] + [pieces[-1].split(".")[0] + ".py"]
     return "/".join(pieces), root
 
 
