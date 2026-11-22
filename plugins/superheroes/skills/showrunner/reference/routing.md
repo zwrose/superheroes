@@ -4,6 +4,7 @@
 - [The lane call — the question that governs](#the-lane-call--the-question-that-governs)
 - [Parallel lanes that extend a shared set](#parallel-lanes-that-extend-a-shared-set)
 - [Two outcomes that look like discovery](#two-outcomes-that-look-like-discovery)
+- [Native dependency edges](#native-dependency-edges)
 - [Scope exclusions and parity surfaces](#scope-exclusions-and-parity-surfaces)
 - [The premises of an order bind you](#the-premises-of-an-order-bind-you)
 
@@ -72,6 +73,19 @@ test decides it, not how small the follow-up looks.
 At routing, everything durable belongs in the issue — scope and owner decisions, process
 constraints (test right-sizing, E2E policy), and launch context (local export paths,
 known-broken links, environment quirks).
+
+## Native dependency edges
+
+An issue's native dependency edges (`blocked_by`, and `blocking`) are where holds live. An issue
+body's prose about edges ("Edges:", "blocked by #n") drifts, so the advisor never reads launchability
+from the body. When marking an issue build-ready, sizing it, or recommending it (as next, as
+launchable, in a wave plan), the advisor reads its native `blocked_by` edges, through
+`issue_contract.py check-build-ready --issue --repo` or `check-blockers`. This holds for the
+sub-issues of an epic and for each layer of a stack too, each read on its own issue.
+
+Any open blocker is named in the recommendation (its reference and title), and the issue is not
+called launchable while it is open. A read that fails is not "no blockers": the advisor says the
+edges could not be read and does not call the issue launchable.
 
 ## Scope exclusions and parity surfaces
 
