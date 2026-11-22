@@ -50,3 +50,4 @@ def test_flip_refuses_a_backup_occupied_after_preview(
     assert result.get("reason", "").startswith("plan-changed")
     assert mr.read_registry(w.cwd, w.root)["storageMode"] == mr.IN_REPO
     assert source.read_bytes() == source_bytes
+
