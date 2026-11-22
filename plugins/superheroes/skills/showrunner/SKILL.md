@@ -567,9 +567,11 @@ above).
    **The floor.** There is no mechanical merge floor.
    **A PR that conflicts with its base goes back to its builder.** When an open PR, a single PR or
    a layer of a stack, conflicts with its base, or bringing it current meets a conflict, send it
-   back to its builder, who makes the merge commit, runs the returning review on the merge and
-   hands back. The advisor never commits a conflict resolution itself, and no subagent commits one
-   under its recipe. How it goes back on each kind of lane, and why:
+   back to its builder, who makes the merge commit, pushes it and hands back. The vet judges the
+   builder's conflict fix first; a scoped returning review of the merge runs only when the vet calls
+   the fix material, or when the head-coverage check answers `needs-review` for another reason. The
+   advisor never commits a conflict resolution itself, and no subagent commits one under its
+   recipe. How it goes back on each kind of lane, and why:
    [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A PR that
    conflicts with its base goes back to its builder.
    **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties

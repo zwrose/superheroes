@@ -256,8 +256,10 @@ branch cannot win. A post-handback commit that **authors content** — an adviso
 fold — keeps the union-fix **micro floor** in
 `skills/showrunner/reference/merge-train.md`: one reviewer outside every maker's family on the final head, whose reading the
 review record shows. A conflict resolution is never the advisor's: the PR goes back to its builder,
-who runs the returning review on the merge (`skills/showrunner/reference/merge-train.md` § A PR that
-conflicts with its base goes back to its builder).
+who makes the merge commit and hands back. The vet judges the conflict fix first, and a scoped
+returning review of the merge runs only when the vet calls the fix material or the head-coverage
+check answers `needs-review` for another reason (`skills/showrunner/reference/merge-train.md` § A PR
+that conflicts with its base goes back to its builder).
 
 ## The driver mandate — the review record
 

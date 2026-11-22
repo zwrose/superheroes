@@ -2051,7 +2051,7 @@
     // one of them cannot draw the sheet.
     const PR_WORD_KEYS = [
       "nothingToAccept", "historyCap", "whatChangedHeading", "reviewedBy", "familyUnknown", "notIndependentMark",
-      "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed",
+      "caughtHeading", "roundsLine", "ciLine", "laneLine", "describesCommit", "changedHeading", "changed", "conflictFixed",
       "heldHeading", "held", "walkHeading", "walkStopPr", "acceptingHeading", "craftHeading", "decidedHeading", "listedHeading", "reviewHeading",
       "prsHeading", "verdictHeading", "mergeLabel", "mergeStackLabel", "notYetLabel", "verdictCaption",
       "acceptedCount", "nothingToAcceptCount", "acceptingUnchecked", "acceptingUncheckedCount", "acceptingCanon", "acceptingCanonCount", "mergeLocked", "unlocks", "resaveLegacy", "resaveNoRevision", "sendBack",
@@ -2222,6 +2222,13 @@
       const box = prSection("section", "pr-changed", "sh-box");
       box.appendChild(textElement("h2", "", prWords.changedHeading));
       box.appendChild(textElement("p", "", fill(prWords.changed, { previous: shortCommit(previousCommit) })));
+      return box;
+    }
+
+    // The one line a carried sheet shows of its carry: a code conflict was fixed when the base was brought in, and the vet judged it immaterial.
+    function buildConflictFixed(why) {
+      const box = prSection("section", "pr-conflict-fixed", "sh-box");
+      box.appendChild(textElement("p", "", fill(prWords.conflictFixed, { why: why })));
       return box;
     }
 
@@ -2494,6 +2501,8 @@
       const parts = [buildWhatChanged(prSheet)];
       // axis: a carried sheet draws no note of the carry (no carried box, no changed box); only an uncarried sheet with previousCommit draws the changed box — see bite-proof record i2496_wo_c_sheet_head (E-nonote)
       if (prSheet.carriedForward === undefined && prSheet.previousCommit !== undefined) parts.push(buildChanged(prSheet.previousCommit));
+      // axis: a carried sheet built with carriedForward.conflictFix draws exactly one line saying the conflict fix was judged immaterial; without it, nothing — see bite-proof record i2600_sheet_conflict_fix (E-cf-line-page)
+      if (prSheet.carriedForward !== undefined && prSheet.carriedForward.conflictFix !== undefined) parts.push(buildConflictFixed(prSheet.carriedForward.conflictFix));
       if (prSheet.walk !== undefined) parts.push(buildWalk(prSheet.walk));
       const accepting = textElement("h2", "", prWords.acceptingHeading);
       accepting.id = "pr-accepting";
