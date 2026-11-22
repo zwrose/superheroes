@@ -12,6 +12,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import leftover_settings as ls  # noqa: E402
+import transition_notes  # noqa: E402
 
 
 def _read(*parts):
@@ -27,5 +28,5 @@ def test_fix_path_section_5_carries_the_sentence_in_its_opening_and_its_retire_g
 
 
 def test_upgrade_note_carries_the_sentence():
-    # axis: the 2594 upgrade note carries the notice's sentence word for word
-    assert ls.KEPT_TEST_PILOT_PROFILE_SENTENCE in _read("transition-notes", "2594.md")
+    # axis: the upgrade text carries the notice's sentence word for word, read through the reader that sees the pending 2594 note before release assembly and TRANSITION.md after it
+    assert ls.KEPT_TEST_PILOT_PROFILE_SENTENCE in transition_notes.transition_text(_PLUGIN)
