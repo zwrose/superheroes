@@ -498,9 +498,7 @@ def execute(migration, *, root=None):
         roots = getattr(migration, "plan_roots", (None, None))
         # axis: the flip acts only on the plan the owner saw: re-planned under the lock, any difference refuses and changes nothing
         if _plan_key(enumerate_flip(cwd, migration.target, root=root, review_root=roots[0],
-                                    test_pilot_root=roots[1])) != _plan_key(migration) or any(
-                # axis: the plan's set-aside folder is not yet made when planned, so one there now appeared after the preview
-                f.get("role") == ROLE_SET_ASIDE and os.path.lexists(os.path.dirname(f["dst"])) for f in migration.files):
+                                    test_pilot_root=roots[1])) != _plan_key(migration):
             return {"status": "blocked", "reason": "plan-changed: the preview is out of date; run the move again"}
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
