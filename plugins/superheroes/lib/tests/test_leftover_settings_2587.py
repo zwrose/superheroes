@@ -952,6 +952,15 @@ def test_notice_wording_truncation_and_home(monkeypatch, tmp_path):
     assert kept_lines[1] == ("- /x/profile.md (test-pilot reads this one; retiring it switches "
                              "test-pilot to its newer settings file)")
     assert kept_lines[2] == "- /x/test-pilot.md"
+    # axis: a kept test-pilot profile listed: the notice says to retire it before the next test-pilot run, just above how to retire
+    assert kept_lines[3] == ("A kept test-pilot profile leaves this list once test-pilot saves a block "
+                             "beside it, so retire it before the next test-pilot run.")
+    assert kept_lines[4].startswith("To retire them, run /superheroes:configure and say yes at")
+    # axis: no kept test-pilot profile listed (none at all, or only the newer test-pilot file): the sentence is absent
+    newer_only = {"mode": mr.GLOBAL, "digest": "x", "files": [
+        {"path": "/x/test-pilot.md", "family": "test-pilot", "reads": "r"}]}
+    for result in (one, newer_only):
+        assert "A kept test-pilot profile" not in ls.notice(result)
     assert text.splitlines()[-1].startswith("To retire them, run /superheroes:configure and say yes at")
     many = {"mode": mr.GLOBAL, "digest": "x", "files": [
         {"path": "/x/%02d.md" % i, "family": "core", "reads": "r"} for i in range(12)]}
@@ -960,6 +969,16 @@ def test_notice_wording_truncation_and_home(monkeypatch, tmp_path):
     assert lines[1:11] == ["- /x/%02d.md" % i for i in range(10)]
     assert lines[11] == "- and 2 more (configure lists them all)"
     assert ls.notice({"mode": None, "files": [], "digest": "x"}) == ""
+
+
+def test_kept_test_pilot_sentence_is_word_for_word_in_the_docs():
+    # axis: configure's fix path section 5 (its opening and its retire gate) and the 2594 upgrade note carry the notice's sentence word for word
+    plugin = os.path.dirname(_LIB)
+    fix = open(os.path.join(plugin, "skills", "configure", "reference", "fix.md"), encoding="utf-8").read()
+    section5 = fix.split("## 5 — Retire leftover settings copies", 1)[1]
+    assert section5.count(ls.KEPT_TEST_PILOT_PROFILE_SENTENCE) == 2
+    note = open(os.path.join(plugin, "transition-notes", "2594.md"), encoding="utf-8").read()
+    assert ls.KEPT_TEST_PILOT_PROFILE_SENTENCE in note
 
 
 def test_cli_list_retire_restore_and_usage(w, monkeypatch, capsys):
