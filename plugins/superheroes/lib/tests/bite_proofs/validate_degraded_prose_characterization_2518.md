@@ -1,10 +1,12 @@
 # Bite-proof record — characterization of `review_record._validate` and `receipt_disclosures.build_degraded_prose` (#2518, order 2518-A)
 
+**Order 2518-A2:** the golden was regenerated with hashed `_validate` returns (`{"returnSha256": ...}`; refusals and every prose outcome keep their encoding), and E1 and E2 (both read by `test_validate_matches_golden`, which reads the changed golden) were re-run red and green against it; their captures below are those re-runs (command: `scripts/pinned-python -B -X pycache_prefix=/tmp/pyc-2518a2 -m pytest '<node id>' -q -n 0 -p no:cacheprovider`). E4-E6 read only prose outcomes, whose encoding is unchanged, so they were not re-run: their captures below are the order 2518-A ones, and their traceback line number (`:640`) is the test file's line before 2518-A2 added the helper and docstring. Neither E1 nor E2 mutates a returning scenario, so neither red exercises the hash comparison itself; that comparison is covered by the id-set, hash-equality and prose-equality cross-check of old against new golden run at 2518-A2 (not committed), reported in the order's return.
+
 Detector file: `plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py` (with its golden `plugins/superheroes/lib/tests/fixtures/validate_degraded_prose_golden_2518.json`, written by the module's own `--write-golden` on the unedited base code), unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/review_record.py` for E1-E2, `plugins/superheroes/lib/receipt_disclosures.py` for E4-E6), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/pyc-2518a -m pytest '<exact node id>' -q -n 0 -p no:cacheprovider`, one test node each, output captured whole; the red runs exited 1 and the green runs exited 0. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The guarded elements E1-E6 are the ones the order declared; none is grouped. E3 is unavailable (below). Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted. The lines inside each capture that end in a cut are the test's own report (it prints at most 20 scenarios, each side cut to 300 characters); nothing was elided by hand. After all restores `git diff --stat -- plugins/superheroes/lib/review_record.py plugins/superheroes/lib/receipt_disclosures.py` printed nothing.
 
 The detectors the declared elements prove are `test_validate_matches_golden` and `test_prose_matches_golden`; they carry a `# bite-proof:` line. The other three tests of the module (`test_rich_accounts_are_valid`, `test_golden_covers_the_scenario_set`, `test_scenario_set_reaches_every_outcome_kind`) carry an `# axis:` line and say they are not among E1-E6: no neutralization was run for them, so their protection is unproven by this record.
 
-Golden receipt (written before any neutralization): `git diff --stat` of both production files printed nothing after both `--write-golden` runs; the two goldens (the second written with `--out` to a scratch path) were compared with `diff` and the diff printed nothing, so they are byte-identical. Golden size 2705469 bytes; 3336 `validate` scenarios and 195 `prose` scenarios.
+Golden receipt (written before any neutralization): `git diff --stat` of both production files printed nothing after both `--write-golden` runs; the two goldens (the second written with `--out` to a scratch path) were compared with `diff` and the diff printed nothing, so they are byte-identical. Golden size 2705469 bytes at order 2518-A (full `_validate` returns); 457581 bytes after order 2518-A2 (hashed `_validate` returns, regenerated on unchanged production code, two runs byte-identical); 3336 `validate` scenarios and 195 `prose` scenarios, unchanged.
 
 ## E1. A single-check message of `_validate` (`review_record.py` line 939)
 
@@ -87,10 +89,10 @@ E             now:    {'refusal': ['review-account-invalid', 'session']}
 E             golden: {'refusal': ['review-account-invalid', 'sessionId']}
 E       assert not ['carried|sessionId|-1', 'carried|sessionId|0', 'carried|sessionId|None', 'carried|sessionId|True', 'carried|sessionId|[]', 'carried|sessionId|del', ...]
 
-/home/user/wt-2518-a/plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py:633: AssertionError
+/home/user/wt-2518-a/plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py:651: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py::test_validate_matches_golden
-1 failed in 1.57s
+1 failed in 1.60s
 ```
 
 - **Restore:** inverse edit (`"session")` back to `"sessionId")` on that line).
@@ -107,7 +109,7 @@ FAILED plugins/superheroes/lib/tests/test_validate_degraded_prose_characterizati
 
 ```
 .                                                                        [100%]
-1 passed in 1.70s
+1 passed in 1.65s
 ```
 
 ## E2. The order of two adjacent checks of `_validate` (`review_record.py` lines 934-935), combined faults
@@ -141,10 +143,10 @@ E             now:    {'refusal': ['review-account-invalid', 'schema']}
 E             golden: {'refusal': ['review-account-invalid', 'findings']}
 E       assert not ['carried|pair|G00+G01', 'full|pair|G00+G01', 'root|empty_dict']
 
-/home/user/wt-2518-a/plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py:633: AssertionError
+/home/user/wt-2518-a/plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py:651: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_validate_degraded_prose_characterization_2518.py::test_validate_matches_golden
-1 failed in 1.67s
+1 failed in 1.73s
 ```
 
 - **Restore:** inverse edit (the two lines back in their original order, comment kept on the `findings` line).
@@ -159,12 +161,12 @@ FAILED plugins/superheroes/lib/tests/test_validate_degraded_prose_characterizati
 
 ```
 .                                                                        [100%]
-1 passed in 1.60s
+1 passed in 1.78s
 ```
 
 ## E3. A pinned non-refusal exception of `_validate` — unavailable
 
-The A1 golden holds no `raise` outcome: all 3336 `validate` scenarios are a `return` (600) or a `refusal` (2736), none raises, so there is no raising expression to neutralize and no E3 run was made. Because of that, `test_scenario_set_reaches_every_outcome_kind` requires `return` and `refusal` only for A1, and it computes "A1 holds `raise`" from the scenario run (it asserts the golden holds a `raise` exactly when the generated A1 set produces one), so a later change that makes `_validate` raise on some scenario fails that test. Nothing is claimed proven for A1 exceptions.
+The A1 golden holds no `raise` outcome: all 3336 `validate` scenarios are a `return` (600; stored as `returnSha256` since order 2518-A2) or a `refusal` (2736), none raises, so there is no raising expression to neutralize and no E3 run was made. Because of that, `test_scenario_set_reaches_every_outcome_kind` requires `return` and `refusal` only for A1, and it computes "A1 holds `raise`" from the scenario run (it asserts the golden holds a `raise` exactly when the generated A1 set produces one), so a later change that makes `_validate` raise on some scenario fails that test. Nothing is claimed proven for A1 exceptions.
 
 ## E4. A prose line's text (`receipt_disclosures.py` line 666)
 

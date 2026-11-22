@@ -11,6 +11,15 @@ invariant: for every input in the scenario set this module builds, `review_recor
   - the same refusal (`Refusal.reason` and `Refusal.detail`), or
   - the same non-refusal exception (type name and `str()`).
 
+How the golden stores an outcome (one helper, `_encode_return`): a `_validate` return is stored as
+`{"returnSha256": <sha256 hex of the canonical JSON string above>}`, not as the string itself. The reason is size:
+a `_validate` return is the whole normalised account, repeated in full for each of the 600 returning scenarios, and
+stored in full it made the golden 2.7 MB. A hash still fails on any byte change: the test compares the hash of the
+canonical JSON it computes now with the stored hash, and two distinct strings do not share a sha256. What a hash
+gives up is only readability of the returned account, which no reviewer could read at that size. A `_validate`
+refusal stays `{"refusal": [...]}`, and every `build_degraded_prose` outcome (return and raise) stays in full text,
+because the prose is the part a reader can read.
+
 The test calls only the two entry points `review_record._validate(a)` and
 `receipt_disclosures.build_degraded_prose(state, form, journal=None)`. It never names, imports or
 inspects any other function of either module, so the split may add private stage functions freely.
@@ -33,6 +42,7 @@ Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/validate_degraded_p
 """
 import copy
 import functools
+import hashlib
 import json
 import os
 import re
@@ -59,7 +69,15 @@ BASE = "c" * 40
 
 # --- the one outcome encoder, used for both functions ---------------------------------------------
 
-def _outcome(call, as_list=False):
+def _encode_return(text, hashed):
+    """The one place that chooses how a returned value is stored: the canonical JSON `text` in full (prose), or its
+    sha256 hex under `returnSha256` (a `_validate` return; see the module docstring for why)."""
+    if hashed:
+        return {"returnSha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+    return {"return": text}
+
+
+def _outcome(call, as_list=False, hash_return=False):
     try:
         value = call()
         if as_list:
@@ -68,7 +86,7 @@ def _outcome(call, as_list=False):
         return {"refusal": [exc.reason, exc.detail]}
     except Exception as exc:  # noqa: BLE001 — a non-refusal exception is itself the pinned outcome
         return {"raise": [type(exc).__name__, str(exc)]}
-    return {"return": json.dumps(value, sort_keys=True, default=repr)}
+    return _encode_return(json.dumps(value, sort_keys=True, default=repr), hash_return)
 
 
 # --- A1: the rich valid accounts -------------------------------------------------------------------
@@ -579,7 +597,7 @@ PROSE_SCENARIOS = _build_prose_scenarios()
 # --- running -----------------------------------------------------------------------------------------
 
 def _run_validate(account):
-    return _outcome(lambda: review_record._validate(copy.deepcopy(account)))
+    return _outcome(lambda: review_record._validate(copy.deepcopy(account)), hash_return=True)
 
 
 def _run_prose(scenario):
@@ -678,7 +696,9 @@ def test_scenario_set_reaches_every_outcome_kind():
     kinds = {name: {kind for outcome in golden[name].values() for kind in outcome} for name in ("validate", "prose")}
     generated_kinds = {name: {kind for outcome in _generated()[name].values() for kind in outcome}
                        for name in ("validate", "prose")}
-    assert {"return", "refusal"} <= kinds["validate"]
+    # a `_validate` return is stored as `returnSha256`, never as a full `return`
+    assert {"returnSha256", "refusal"} <= kinds["validate"]
+    assert "return" not in kinds["validate"]
     # a `raise` is in the A1 golden exactly when the generated A1 set produces one
     assert ("raise" in kinds["validate"]) == ("raise" in generated_kinds["validate"])
     details = {outcome["refusal"][1] for outcome in golden["validate"].values() if "refusal" in outcome}
