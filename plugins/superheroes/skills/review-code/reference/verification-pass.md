@@ -165,12 +165,16 @@ A held finding never goes missing: when no reviewer outside the makers' families
 no order is emitted, the round records `secondTestUnseatable`, and the held findings go straight
 to the second pass with no new test. A held finding the seat returns no test for goes to the
 second pass with its first test only, listed under the round's `secondTest.noTest`. A seat that
-returns none of the findings it was given (an empty list, or only ids it was not given) is
-recorded as silent: the round's `silentSeats` gains a row, the decisions a `second-test-silent`
-line, and the review record's degradations name it; the findings go to the second pass as above
-and nothing is asked again. The verifiers' answer is judged the same way (`verifiers-silent`; per
-cluster when the verdicts were assembled from each cluster's own seat), and so is a test
-correction (`break-it-correction-silent`).
+returns none of the findings it was given (an empty list, or only ids it was not given) is asked
+once more: the first such answer in a round is not folded, the driver decides
+`second-test-asked-again` (`break-it-correction-asked-again` for a test correction) and sends the
+same order again with one added line naming the items that were not answered. That one re-ask is
+round state, so a resumed session never re-arms it. A second such answer in the same round is
+recorded as silent: the round's `silentSeats` gains a row carrying `askedAgain: true`, the
+decisions a `second-test-silent` line, and the review record's degradations name it; the findings
+go to the second pass as above. The verifiers' answer is judged the same way (`verifiers-silent`;
+per cluster when the verdicts were assembled from each cluster's own seat) but is not asked again,
+and a test correction's second silence is `break-it-correction-silent`.
 
 Sweep hits on touched lines (see `dispatch-sweep` in [the round driver](round-driver.md#actions-and-payloads))
 are graded in one more verifier pass before synthesis, and a hit left without a grade stays open and is never fixed.
