@@ -361,6 +361,10 @@ def _branch_keys(body, resolve_helper):
             elif isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Attribute) and _is_payload(node.func.value):
                     raise UnreadableCensus("payload.%s(...), line %d" % (node.func.attr, node.lineno))
+                # a call handed `payload` itself can add keys the census never sees (a helper that mutates it)
+                if any(_is_payload(arg) or (isinstance(arg, ast.Starred) and _is_payload(arg.value))
+                       for arg in node.args) or any(_is_payload(kw.value) for kw in node.keywords):
+                    raise UnreadableCensus("a call that receives payload, line %d" % node.lineno)
     return keys
 
 
@@ -427,6 +431,8 @@ def _advance(state, config):
     pytest.param('payload = {"a": 1}\n        payload.update(extra)', id="update-call"),
     pytest.param('payload = {"a": 1}\n        payload[key] = 2', id="computed-subscript"),
     pytest.param('payload = build()', id="unresolved-helper"),
+    pytest.param('payload = {"a": 1}\n        extend(payload)', id="call-receives-payload"),
+    pytest.param('payload = {"a": 1}\n        extend(target=payload)', id="call-receives-payload-by-name"),
 ])
 def test_c_unreadable_constructs_fail_loudly(write):
     # axis: a branch the census cannot read raises with the construct named; it is never skipped (C2)
