@@ -34,7 +34,8 @@ def test_source_edit_does_not_discard_the_destination_snapshot(
 
     def edit_after_carry(src, dst):
         real_copy(src, dst)
-        if os.fspath(src) == str(source) and os.fspath(dst) == str(destination):
+        # only the first carry copy saves; the pre-commit re-copy that follows is not counted
+        if os.fspath(src) == str(source) and os.fspath(dst) == str(destination) and not deliveries:
             assert destination.read_bytes() == source_before
             source.write_bytes(latest_source)
             deliveries.append(str(source))

@@ -42,7 +42,8 @@ def test_flip_preserves_destination_append_during_resynchronization(
         if len(copies) == 1:
             record_id, expected_path = "source-late", source
         elif len(copies) == 2:
-            record_id, expected_path = "destination-late", destination
+            # the second save lands after the pre-commit re-copy, while the source is still the one read
+            record_id, expected_path = "source-after-recopy", source
         else:
             return
         current = review_store.resolve(
@@ -57,8 +58,7 @@ def test_flip_preserves_destination_append_during_resynchronization(
         acknowledged.add(entry["id"])
 
     # Pinned interleaving: append to the active source after its first copy, then
-    # to the active destination after the retry publishes and before its digest
-    # is sampled. Writes during byte transfer and other process schedules are not sampled.
+    # again after the pre-commit re-copy publishes and before its digest is sampled. Writes during byte transfer and other process schedules are not sampled.
     monkeypatch.setattr(mm, "_copy_bytes", append_after_copy)
     result = mm.execute(migration, root=w.root)
     assert "source-late" in acknowledged

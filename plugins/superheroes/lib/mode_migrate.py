@@ -492,6 +492,9 @@ def execute(migration, *, root=None):
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             return {"status": "busy"}
+        # axis: a move never starts over an interrupted one: any journal left at the store refuses and changes nothing
+        if os.path.lexists(_journal_path(store_dir)):
+            return {"status": "blocked", "reason": "recover-first"}
         roots = getattr(migration, "plan_roots", (None, None))
         # axis: the flip acts only on the plan the owner saw: re-planned under the lock, any difference refuses and changes nothing
         if _plan_key(enumerate_flip(cwd, migration.target, root=root, review_root=roots[0],
@@ -535,6 +538,9 @@ def execute(migration, *, root=None):
             store_core.atomic_write(jpath, json.dumps(journal, indent=2))
             _copy_bytes(f["src"], f["dst"])
             f["done"] = True
+        # axis: a file other sessions write is settled once, just before the commit; after it the destination is the one read and is never copied over
+        for f in (f for f in journal["files"] if f.get("shared")):
+            _settled(f)
         journal["phase"] = "committing"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
@@ -548,7 +554,7 @@ def execute(migration, *, root=None):
         undeleted = []
         for f in journal["files"]:
             # axis: a file other sessions write (decisions, test-pilot profiles) is copied and never deleted: it stays, named as a leftover
-            if not f.get("keep") and _settled(f) and not f.get("shared"):
+            if not f.get("keep") and not f.get("shared") and _settled(f):
                 _remove(f["src"])
             if not f.get("keep") and os.path.lexists(f["src"]):
                 undeleted.append(f["src"])
@@ -602,7 +608,7 @@ def _finish_flip(files, store_dir):
             f["copied"] = _sha(f["src"])
             _copy_bytes(f["src"], f["dst"])
         # axis: a kept or shared source stays, a destination that is not a regular file is no copy, and a source whose bytes are not at its copy stays
-        if not f.get("keep") and os.path.isfile(f["dst"]) and _settled(f) and not f.get("shared"):
+        if not f.get("keep") and os.path.isfile(f["dst"]) and not f.get("shared") and _settled(f):
             os.remove(f["src"])
     return _keep_snapshots(files, store_dir)
 
