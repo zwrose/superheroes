@@ -29,7 +29,8 @@ def test_flip_preserves_the_decisions_read_through_a_legacy_symlink(
     assert before["path"] == str(legacy)
     assert Path(before["path"]).read_bytes() == original
 
-    assert mm.execute(w.plan(mr.IN_REPO), root=w.root) == {"status": "done"}
+    # axis: the carried (linked) decisions copy stays where it is, named as a leftover (owner ruling 690 b)
+    assert mm.execute(w.plan(mr.IN_REPO), root=w.root) == {"status": "done-with-leftovers", "undeleted": [str(legacy)]}
     after = review_store.resolve(
         w.cwd, "decisions", legacy_root=w.rr, registry_root=w.root
     )

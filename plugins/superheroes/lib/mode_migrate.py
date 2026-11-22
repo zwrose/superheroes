@@ -500,7 +500,8 @@ def execute(migration, *, root=None):
         jpath = _journal_path(store_dir)
         journal = {"kind": "flip", "target": migration.target, "phase": "copying",
                    "files": [{"src": f["src"], "dst": f["dst"], "done": False, "keep": bool(f.get("keep")),
-                              "asideTp": f.get("role") == ROLE_SET_ASIDE and f.get("family") == "test-pilot",
+                              # axis: other sessions write only the decisions copy read now (the carried one) and test-pilot profiles; a set-aside decisions copy is read by no one and still moves, so it never shadows the carry
+                              "shared": f.get("family") == "test-pilot" or (f.get("family") == "decisions" and f.get("role") == ROLE_CARRY),
                               "preexisting": os.path.lexists(f["dst"])}
                              for f in migration.files]}
         # axis: a destination the copy will overwrite is snapshotted first, so an abort or a back-out puts its bytes back
@@ -524,9 +525,14 @@ def execute(migration, *, root=None):
                  "entries": [{"from": f["src"], "to": f["dst"], "family": f.get("family")}
                              for f in aside]}, indent=2))
         for f in journal["files"]:
-            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original
+            if f.get("snapshot") and _sha(f["dst"]) != _sha(f["snapshot"]):
+                # axis: a destination saved after its snapshot is snapshotted again just before its copy
+                _copy_bytes(f["dst"], f["snapshot"])
+            # axis: a moved or set-aside file keeps every byte, so an archived copy restores the original;
+            # its copied hash is the source's just before the copy, so a write landing on the copy is never adopted as the flip's own
+            f["copied"] = _sha(f["src"])
             _copy_bytes(f["src"], f["dst"])
-            f["done"], f["copied"] = True, _sha(f["dst"])
+            f["done"] = True
         journal["phase"] = "committing"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         if not _commit_registry(cwd, migration.target, migration.remote_key, root):
@@ -538,10 +544,9 @@ def execute(migration, *, root=None):
         journal["phase"] = "deleting"
         store_core.atomic_write(jpath, json.dumps(journal, indent=2))
         undeleted = []
-        keep_tp = _tp_kept(journal["files"])
         for f in journal["files"]:
-            # axis: when any set-aside test-pilot profile gained blocks or manifests since the plan, every one of them stays, named as undeleted
-            if not f.get("keep") and not (f.get("asideTp") and keep_tp) and _settled(f):
+            # axis: a file other sessions write (decisions, test-pilot profiles) is copied and never deleted: it stays, named as a leftover
+            if not f.get("keep") and _settled(f) and not f.get("shared"):
                 _remove(f["src"])
             if not f.get("keep") and os.path.lexists(f["src"]):
                 undeleted.append(f["src"])
@@ -573,15 +578,9 @@ def _settled(f, tries=3):
         now, dst = _sha(f["src"]), _sha(f["dst"])
         if now == dst or dst != f.get("copied"):
             return now is not None and now == dst
+        f["copied"] = now
         _copy_bytes(f["src"], f["dst"])
-        f["copied"] = _sha(f["dst"])
     return False
-
-
-def _tp_kept(files):
-    import leftover_settings
-    return any(f.get("asideTp") and os.path.lexists(f["src"]) and leftover_settings._tp_artifacts_beside(f["src"])
-               for f in files)
 
 
 def _keep_snapshots(files, store_dir):
@@ -596,16 +595,15 @@ def _keep_snapshots(files, store_dir):
 
 
 def _finish_flip(files, store_dir):
-    keep_tp = _tp_kept(files)
     for f in files:
         if not os.path.exists(f["src"]):
             continue                      # source already gone — nothing to finish
         if not os.path.lexists(f["dst"]):
             # axis: recovery copies byte for byte as the flip does, then drops the source
+            f["copied"] = _sha(f["src"])
             _copy_bytes(f["src"], f["dst"])
-            f["copied"] = _sha(f["dst"])
-        # axis: a kept source (or every set-aside test-pilot profile, once one gained artifacts) stays, a destination that is not a regular file is no copy, and a source whose bytes are not at its copy stays
-        if not (f.get("keep") or (f.get("asideTp") and keep_tp)) and os.path.isfile(f["dst"]) and _settled(f):
+        # axis: a kept or shared source stays, a destination that is not a regular file is no copy, and a source whose bytes are not at its copy stays
+        if not f.get("keep") and os.path.isfile(f["dst"]) and _settled(f) and not f.get("shared"):
             os.remove(f["src"])
     return _keep_snapshots(files, store_dir)
 
@@ -626,7 +624,8 @@ def _backout_flip(files):
                     shutil.rmtree(stage_dir, ignore_errors=True)
                 continue
             snap = f.get("snapshot")
-            if snap and os.path.isfile(snap):
+            # axis: a back-out restores the snapshot only over this flip's own copy, so a destination saved since is kept
+            if snap and os.path.isfile(snap) and _sha(f["dst"]) == _sha(f["src"]):
                 _copy_bytes(snap, f["dst"])
             continue
         _remove(f["dst"])  # sources untouched

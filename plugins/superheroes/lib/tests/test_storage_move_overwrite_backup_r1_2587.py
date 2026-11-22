@@ -15,7 +15,7 @@ def test_a_destination_written_after_a_separate_preview_keeps_its_bytes_in_the_b
     _put(w.d_in("core.md"), _CORE)
     _put(w.d_in("review-crew.md"), "## Focus hints\n- current\n")
     source_bytes = b'{"sourceDecision": true}\n'
-    _put(w.inrepo(_DEC), source_bytes.decode("utf-8"))
+    source = _put(w.inrepo(_DEC), source_bytes.decode("utf-8"))
     destination = Path(w.d_gl(_DEC))
     shown = mm.preview(w.plan(mr.GLOBAL))      # the preview command's own run
     assert str(destination) not in shown["overwrites"]
@@ -23,7 +23,7 @@ def test_a_destination_written_after_a_separate_preview_keeps_its_bytes_in_the_b
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(late_bytes)
     result = mm.execute(w.plan(mr.GLOBAL), root=w.root)   # the execute command re-plans afresh
-    assert result["status"] == "done"
+    assert result["status"] == "done-with-leftovers" and result["undeleted"] == [source]
     assert destination.read_bytes() == source_bytes
     named = {o["path"]: o["backup"] for o in result.get("overwritten", [])}
     assert str(destination) in named, "the overwritten destination is not named in the result"
