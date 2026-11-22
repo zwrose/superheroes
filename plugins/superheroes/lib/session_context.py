@@ -214,6 +214,19 @@ def checkpoint_file_record(session_id, cwd=None):
             "otherwise the skill writes it)" % path)
 
 
+# ----------------------------------------------------------------- leftover settings copies
+def leftover_settings_notice(cwd):
+    """The shared notice naming this project's leftover settings copies; '' when there are none.
+    READ-ONLY. A probe error → '' with a stderr breadcrumb only (never `_note_failure`), so a broken
+    probe adds no in-block diagnostics line and a clean bootstrap stays byte-identical to before."""
+    try:
+        import leftover_settings
+        return leftover_settings.notice(leftover_settings.find(cwd))
+    except Exception as exc:
+        _breadcrumb("Leftover settings copies", type(exc).__name__)
+        return ""
+
+
 # ----------------------------------------------------------------- cache hygiene nudge
 _NUDGE_MAX_CHARS = 400
 _NUDGE_TAIL = (
@@ -310,8 +323,8 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=N
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
     Priority order: charter recovery (compact only: the charter's, else a generic recovery) →
-    resolved roots → checkpoint file (valid session id only) → plugin cache hygiene nudge →
-    covenant (calibrated projects only).
+    resolved roots → checkpoint file (valid session id only) → leftover settings copies (only when
+    the project has any) → plugin cache hygiene nudge → covenant (calibrated projects only).
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -336,6 +349,7 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=N
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
             _Rec("Checkpoint file", checkpoint_file_record(session_id, cwd), _ckpt),
+            _Rec("Leftover settings copies", leftover_settings_notice(cwd), "/superheroes:configure"),
             _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), _cache_parent_hint(plugin_root)),
             _Rec("Covenant", covenant(cwd, plugin_root),
                  _covenant_doc(plugin_root)),

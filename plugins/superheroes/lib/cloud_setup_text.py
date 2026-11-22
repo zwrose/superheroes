@@ -69,6 +69,7 @@ START_HOOK_READS = (
     "lib/core_md.py",
     "lib/git_origin.py",
     "lib/host_model.py",
+    "lib/leftover_settings.py",
     "lib/mode_registry.py",
     "lib/review_store.py",
     "lib/session_context.py",

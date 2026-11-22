@@ -39,6 +39,8 @@ dismissible reminder on every run** (whether or not it was dismissed before); th
 it or dismiss it again for that run. Rendering is read-only — it never confirms a provisional
 calibration.
 
+The view shows a **Leftover settings copies** block when any exist, and the fix path's § 5 retires them.
+
 The view also shows the **Spec reviewer seat** block, and lists configuration item 14 right after
 item 10. The Core block shows **Risk and trust**: "What we defend against" (the threat model) and
 "Risk areas", one line per area with its name, why, undo, and covers. It reads "(none set)" when
@@ -813,6 +815,12 @@ Follow-up: `/superheroes:configure`.
   being a definition document. A flip into the repo newly publishes all of it to collaborators —
   say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
+- **What else the preview lists:** `setAside` (superseded copies the flip moves into a dated backup
+  folder, undoable with `leftover_settings.py restore`), `leftInPlace` (copies the flip does not
+  move, with the reason) and `overwrites` (target files the flip replaces). Retire leftover copies
+  (fix § 5) before a flip so no settings copy on the target side is overwritten; a definition
+  document that exists on both sides is still listed under `overwrites`, so read that list before
+  confirming.
 - **In-flight work:** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the

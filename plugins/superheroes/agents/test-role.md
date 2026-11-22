@@ -109,6 +109,7 @@ Collect findings under these named smells; **every finding cites its smell by na
 - A synchronous assertion immediately after an awaited interaction when that interaction triggers debounced or fetch-gated work. Wrap it in the project's async-assertion helper.
 - A component test file with no per-test render cleanup, or shared module-scope mocks with no reset/restore between tests. State leaks forward.
 - Wall-clock sleeps, unseeded randomness, or shared external state that decide whether the test passes.
+- A test of a seeded, hashed, rotating or shuffled chooser that checks one seed. It can pass against the unfixed code by luck, so ask for a sweep over a range of seeds with the seed in the failure message, and for a run showing the new test fails against the old module.
 
 **Brittle, duplicate, and wording-pin tests.**
 
