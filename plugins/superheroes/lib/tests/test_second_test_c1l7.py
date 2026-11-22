@@ -594,6 +594,10 @@ def _round_two_after(tmp_path, results):
     r = Round(tmp_path, second_result=results)
     n = r.to_second_test()
     r.submit(n, r.second_result(n["payload"]))
+    if r.state()["step"] == RD.P_SECOND_TEST:
+        # the first silent answer is asked again (#2618): the same order comes back, and the seat answers it again
+        again = r.to_second_test()
+        r.submit(again, r.second_result(again["payload"]))
     return r.state(), r
 
 
