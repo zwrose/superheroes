@@ -296,6 +296,8 @@ def _check_inherited_item_same_words(read_text=None):
 
 
 def test_inherited_bite_proof_item_same_words_in_home_and_workhorse():
+    """Bites on: the inherited bite-proof item reading differently (any word) between
+    launch-doctrine § Recovery and the workhorse intake, or either holder losing the item."""
     _check_inherited_item_same_words()
 
 
@@ -308,6 +310,8 @@ _BUILD_RECORD_TALLY_CLAUSES = (
 
 
 def test_build_record_shape_names_where_the_inherited_tally_goes():
+    """Bites on: the build-record shape losing the tally's placement, its three outcome
+    labels, or the empty-record line."""
     rel, section = _BUILD_RECORD
     text = _file_section(rel, section)
     for clause in _BUILD_RECORD_TALLY_CLAUSES:
@@ -315,6 +319,8 @@ def test_build_record_shape_names_where_the_inherited_tally_goes():
 
 
 def test_negative_inherited_bite_proof_item_drift_raises():
+    """Bites on: the same-words check accepting a weakened workhorse item (a detector that
+    cannot fail)."""
     workhorse = "skills/workhorse/SKILL.md"
 
     def read_text(rel):
