@@ -555,3 +555,279 @@ def test_vocabulary_constants():
         ic.SLOT_STATUS_FILLED,
         ic.SLOT_STATUS_UNKNOWN,
     })
+
+
+# --- 8. Native blocker edges (#2619): the build-ready check reads blocked_by --
+
+
+PAGE1 = "repos/acme/widgets/issues/7/dependencies/blocked_by?per_page=100&page=1"
+PAGE2 = "repos/acme/widgets/issues/7/dependencies/blocked_by?per_page=100&page=2"
+
+
+class _Proc:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+class _FakeRun:
+    """A subprocess.run-shaped fake: argv[2] (the endpoint) -> (returncode, stdout); unknown -> (1, "")."""
+
+    def __init__(self, responses=None, raises=None):
+        self.responses = responses or {}
+        self.raises = raises
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        if self.raises is not None:
+            raise self.raises
+        code, out = self.responses.get(argv[2], (1, ""))
+        return _Proc(code, out)
+
+
+def _row(number, state, repo="acme/widgets", title="t"):
+    return {
+        "number": number,
+        "state": state,
+        "title": title,
+        "html_url": f"https://github.com/{repo}/issues/{number}",
+        "repository_url": f"https://api.github.com/repos/{repo}",
+    }
+
+
+def _page1(rows):
+    return _FakeRun({PAGE1: (0, json.dumps(rows))})
+
+
+def _good_body_file(tmp_path):
+    p = tmp_path / "body.md"
+    p.write_text(_minimal_body("Anchor (ruling):", "owner ruling 2026-01-01"), encoding="utf-8")
+    return str(p)
+
+
+def _build_ready(tmp_path, capsys, fake, extra=None):
+    argv = ["check-build-ready", "--body-file", _good_body_file(tmp_path)]
+    argv += ["--issue", "7", "--repo", "acme/widgets"] if extra is None else extra
+    rc = ic.main(argv, run=fake)
+    assert rc == 0
+    return json.loads(capsys.readouterr().out.strip())
+
+
+def _check_blockers(capsys, fake, argv=None):
+    argv = ["check-blockers", "--issue", "7", "--repo", "acme/widgets"] if argv is None else argv
+    rc = ic.main(argv, run=fake)
+    assert rc == 0
+    return json.loads(capsys.readouterr().out.strip())
+
+
+def test_check_build_ready_refuses_open_native_blocker(tmp_path, capsys):
+    fake = _page1([_row(12, "open", title="the blocker")])
+    out = _build_ready(tmp_path, capsys, fake)
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["checked"] is True
+    assert out["blockers"]["open"][0]["ref"] == "acme/widgets#12"
+    assert out["blockers"]["open"][0]["title"] == "the blocker"
+    assert out["blockers"]["open"][0]["url"] == "https://github.com/acme/widgets/issues/12"
+    assert fake.calls == [["gh", "api", PAGE1]]
+
+
+def test_closed_native_blocker_passes(tmp_path, capsys):
+    out = _build_ready(tmp_path, capsys, _page1([_row(12, "closed")]))
+    assert out["ok"] is True
+    assert out["reason"] is None
+    assert out["blockers"]["checked"] is True
+    assert out["blockers"]["open"] == []
+
+
+def test_no_native_blockers_passes(tmp_path, capsys):
+    out = _build_ready(tmp_path, capsys, _page1([]))
+    assert out["ok"] is True
+    assert out["reason"] is None
+    assert out["blockers"] == {"checked": True, "open": [], "detail": None}
+
+
+def test_mixed_open_and_closed_lists_only_open(tmp_path, capsys):
+    out = _build_ready(tmp_path, capsys, _page1([_row(3, "closed"), _row(12, "open"), _row(4, "closed")]))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert [b["ref"] for b in out["blockers"]["open"]] == ["acme/widgets#12"]
+
+
+def test_cross_repo_open_blocker_names_its_own_repo(tmp_path, capsys):
+    out = _build_ready(tmp_path, capsys, _page1([_row(5, "open", repo="other/lib")]))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["open"][0]["ref"] == "other/lib#5"
+
+
+def _assert_unreadable(out):
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BLOCKERS_UNREADABLE
+    assert out["blockers"]["checked"] is False
+    assert out["blockers"]["open"] == []
+    assert out["blockers"]["detail"]
+
+
+def test_edge_read_failure_is_unreadable_not_no_blockers(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _FakeRun({PAGE1: (1, "")})))
+
+
+def test_non_json_page_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _FakeRun({PAGE1: (0, "not json")})))
+
+
+def test_object_page_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _FakeRun({PAGE1: (0, json.dumps({"message": "x"}))})))
+
+
+def test_unknown_state_beside_valid_closed_row_is_unreadable(tmp_path, capsys):
+    out = _build_ready(tmp_path, capsys, _page1([_row(3, "closed"), _row(4, "merged")]))
+    _assert_unreadable(out)
+    assert "#4" in out["blockers"]["detail"]
+    assert "merged" in out["blockers"]["detail"]
+
+
+def test_non_string_state_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([_row(4, 1)])))
+
+
+def test_missing_state_is_unreadable(tmp_path, capsys):
+    row = _row(4, "open")
+    del row["state"]
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([row])))
+
+
+def test_non_dict_row_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([_row(3, "closed"), "closed"])))
+
+
+def test_missing_repository_url_on_open_row_is_unreadable(tmp_path, capsys):
+    row = _row(4, "open")
+    del row["repository_url"]
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([row])))
+
+
+def test_repository_url_without_repos_segment_is_unreadable(tmp_path, capsys):
+    row = _row(4, "open")
+    row["repository_url"] = "https://api.github.com/acme/widgets"
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([row])))
+
+
+def test_non_int_number_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _page1([_row("4", "open")])))
+
+
+def test_runner_timeout_is_unreadable(tmp_path, capsys):
+    import subprocess
+
+    fake = _FakeRun(raises=subprocess.TimeoutExpired(["gh"], 30))
+    _assert_unreadable(_build_ready(tmp_path, capsys, fake))
+
+
+def test_runner_oserror_is_unreadable(tmp_path, capsys):
+    _assert_unreadable(_build_ready(tmp_path, capsys, _FakeRun(raises=OSError("no gh"))))
+
+
+def test_pagination_reads_page_two_and_finds_the_open_blocker(tmp_path, capsys):
+    full = [_row(n, "closed") for n in range(100, 200)]
+    fake = _FakeRun({PAGE1: (0, json.dumps(full)), PAGE2: (0, json.dumps([_row(12, "open")]))})
+    out = _build_ready(tmp_path, capsys, fake)
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert [b["ref"] for b in out["blockers"]["open"]] == ["acme/widgets#12"]
+    assert [c[2] for c in fake.calls] == [PAGE1, PAGE2]
+
+
+def test_pagination_page_two_failure_is_unreadable(tmp_path, capsys):
+    full = [_row(n, "closed") for n in range(100, 200)]
+    fake = _FakeRun({PAGE1: (0, json.dumps(full)), PAGE2: (1, "")})
+    _assert_unreadable(_build_ready(tmp_path, capsys, fake))
+
+
+def test_body_refusal_keeps_its_reason_but_blockers_still_read(tmp_path, capsys):
+    p = tmp_path / "body.md"
+    p.write_text("What: scope\nDoD:\n- outcome\n", encoding="utf-8")
+    fake = _page1([_row(12, "open")])
+    rc = ic.main(
+        ["check-build-ready", "--body-file", str(p), "--issue", "7", "--repo", "acme/widgets"], run=fake
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert out["blockers"]["open"]
+
+
+def test_bad_or_lonely_edge_arguments_refuse_and_call_nothing(tmp_path, capsys):
+    cases = [
+        ["--issue", "7"],
+        ["--repo", "acme/widgets"],
+        ["--issue", "abc", "--repo", "acme/widgets"],
+        ["--issue", "0", "--repo", "acme/widgets"],
+        ["--issue", "-3", "--repo", "acme/widgets"],
+        ["--issue", "7", "--repo", "notarepo"],
+    ]
+    for extra in cases:
+        fake = _page1([])
+        out = _build_ready(tmp_path, capsys, fake, extra=extra)
+        _assert_unreadable(out)
+        assert fake.calls == [], extra
+
+
+def test_body_only_call_reads_no_edges(tmp_path, capsys):
+    fake = _page1([_row(12, "open")])
+    out = _build_ready(tmp_path, capsys, fake, extra=[])
+    assert out["ok"] is True
+    assert out["reason"] is None
+    assert out["blockers"] == {"checked": False, "open": [], "detail": None}
+    assert fake.calls == []
+
+
+def test_unreadable_body_file_keeps_body_unreadable_with_blockers_unchecked(tmp_path, capsys):
+    fake = _page1([])
+    rc = ic.main(
+        ["check-build-ready", "--body-file", str(tmp_path / "missing.md"),
+         "--issue", "7", "--repo", "acme/widgets"],
+        run=fake,
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
+    assert out["blockers"]["checked"] is False
+
+
+def test_check_blockers_verb_open(capsys):
+    out = _check_blockers(capsys, _page1([_row(12, "open")]))
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["open"][0]["ref"] == "acme/widgets#12"
+    assert out["advisory"] is True
+
+
+def test_check_blockers_verb_closed(capsys):
+    out = _check_blockers(capsys, _page1([_row(12, "closed")]))
+    assert out["ok"] is True
+    assert out["reason"] is None
+    assert out["blockers"]["checked"] is True
+
+
+def test_check_blockers_verb_read_failure(capsys):
+    out = _check_blockers(capsys, _FakeRun({PAGE1: (1, "")}))
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BLOCKERS_UNREADABLE
+    assert out["blockers"]["checked"] is False
+
+
+def test_check_blockers_verb_missing_or_bad_args(capsys):
+    for argv in (
+        ["check-blockers"],
+        ["check-blockers", "--issue", "7"],
+        ["check-blockers", "--repo", "acme/widgets"],
+        ["check-blockers", "--issue", "abc", "--repo", "acme/widgets"],
+        ["check-blockers", "--issue", "7", "--repo", "notarepo"],
+    ):
+        fake = _page1([])
+        out = _check_blockers(capsys, fake, argv=argv)
+        assert out["ok"] is False
+        assert out["reason"] == ic.REFUSAL_BLOCKERS_UNREADABLE
+        assert out["blockers"]["detail"]
+        assert fake.calls == [], argv

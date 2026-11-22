@@ -4,6 +4,9 @@
 Deterministic, stdlib-only, advisory decider for whether an issue body may be marked
 build-ready: the Anchor slot must be present, filled, and declare exactly one anchor
 kind in its slot header. What and DoD slots are reported but never blocking at this step.
+When an issue is named (`--issue` and `--repo`) the check also reads the issue's native
+`blocked_by` dependency edges in full: an open blocker refuses (`blocker-open`) and a read that
+fails or is malformed refuses (`blockers-unreadable`), never read as no blockers.
 
 This module is **advisory** — it always exits 0; the JSON result is the product, and a
 non-zero exit would let a caller treat a refusal as a crash. The Showrunner charter's
@@ -18,8 +21,10 @@ of scope — declared kind only; the citation body is never classified.
 import argparse
 import json
 import re
+import subprocess
 import sys
 
+import gh_pages
 import md_fence
 
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
@@ -46,6 +51,8 @@ REFUSAL_ANCHOR_KIND_MISSING = "anchor-kind-missing"
 REFUSAL_ANCHOR_KIND_UNRECOGNIZED = "anchor-kind-unrecognized"
 REFUSAL_ANCHOR_KIND_MULTIPLE = "anchor-kind-multiple"
 REFUSAL_BODY_UNREADABLE = "body-unreadable"
+REFUSAL_BLOCKER_OPEN = "blocker-open"
+REFUSAL_BLOCKERS_UNREADABLE = "blockers-unreadable"
 REFUSALS = frozenset({
     REFUSAL_ANCHOR_SLOT_MISSING,
     REFUSAL_ANCHOR_SLOT_EMPTY,
@@ -53,7 +60,15 @@ REFUSALS = frozenset({
     REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
     REFUSAL_ANCHOR_KIND_MULTIPLE,
     REFUSAL_BODY_UNREADABLE,
+    REFUSAL_BLOCKER_OPEN,
+    REFUSAL_BLOCKERS_UNREADABLE,
 })
+
+# Seconds one `gh api` call for the blocker edges may run before the read fails closed.
+GH_TIMEOUT_SECONDS = 30
+_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_ISSUE_PATTERN = re.compile(r"^[0-9]+$")
+_BLOCKER_STATES = ("open", "closed")
 
 SLOT_STATUS_MISSING = "missing"
 SLOT_STATUS_EMPTY = "empty"
@@ -254,15 +269,122 @@ def check_build_ready(body):
     )
 
 
-def _result(ok, reason, anchor_kind, declared_kinds, slots):
+def _blockers_dict(checked, open_rows, detail):
+    return {"checked": checked, "open": open_rows, "detail": detail}
+
+
+def _result(ok, reason, anchor_kind, declared_kinds, slots, blockers=None):
     return {
         "ok": ok,
         "reason": reason,
         "anchorKind": anchor_kind,
         "declaredKinds": declared_kinds,
         "slots": slots,
+        "blockers": blockers if blockers is not None else _blockers_dict(False, [], None),
         "advisory": True,
     }
+
+
+# --- native blocker edges: ONE reader (read_blockers), called by both CLI verbs ---
+
+
+def _blocker_ref(row):
+    """`owner/name#number` for a blocker row, or None when the row cannot name itself."""
+    number = row.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None
+    url = row.get("repository_url")
+    if not isinstance(url, str) or "/repos/" not in url:
+        return None
+    name = url.split("/repos/", 1)[1]
+    if not _REPO_PATTERN.match(name):
+        return None
+    return "%s#%d" % (name, number)
+
+
+def _row_label(row):
+    number = row.get("number") if isinstance(row, dict) else None
+    if isinstance(number, int) and not isinstance(number, bool):
+        return "row #%d" % number
+    return "a row"
+
+
+def read_blockers(issue, repo, run):
+    """Read every native `blocked_by` edge of `repo`#`issue`; never read a failure as "no blockers".
+
+    `run` is a `subprocess.run`-shaped callable. Returns {"checked", "open", "detail"}:
+    checked True only when every page was read and every row is a well-formed open or closed issue."""
+    path = "repos/%s/issues/%d/dependencies/blocked_by" % (repo, issue)
+
+    def fetch(endpoint):
+        try:
+            proc = run(
+                ["gh", "api", endpoint],
+                capture_output=True,
+                text=True,
+                timeout=GH_TIMEOUT_SECONDS,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        if proc.returncode != 0 or not isinstance(proc.stdout, str):
+            return None
+        return proc.stdout
+
+    rows = gh_pages.read(fetch, path)
+    # axis: a blocker-edge read that fails, times out, or returns a non-list page is unreadable, never an empty list.
+    if rows is None:
+        return _blockers_dict(
+            False, [], "the blocked_by edges of %s#%d could not be read in full" % (repo, issue)
+        )
+    open_rows = []
+    for row in rows:
+        # axis: a row that is not an object fails the whole read — it cannot be called closed.
+        if not isinstance(row, dict):
+            return _blockers_dict(False, [], "a blocked_by row is not an object (state unknown)")
+        state = row.get("state")
+        # axis: a state that is not exactly "open" or "closed" fails the whole read, even beside valid rows.
+        if not isinstance(state, str) or state not in _BLOCKER_STATES:
+            return _blockers_dict(
+                False, [], "%s has state %r, not open or closed" % (_row_label(row), state)
+            )
+        ref = _blocker_ref(row)
+        # axis: a row with no int number or no /repos/ owner/name in repository_url cannot be named — fails the read.
+        if ref is None:
+            return _blockers_dict(
+                False, [], "%s has no usable number or repository_url" % _row_label(row)
+            )
+        if state == "open":
+            title = row.get("title")
+            html_url = row.get("html_url")
+            open_rows.append({
+                "ref": ref,
+                "title": title if isinstance(title, str) else "",
+                "url": html_url if isinstance(html_url, str) else "",
+            })
+    return _blockers_dict(True, open_rows, None)
+
+
+def _apply_blockers(result, blockers):
+    """Fold a blockers read into a result: body refusal keeps its reason, else unreadable, else open."""
+    result["blockers"] = blockers
+    # axis: a body refusal already holds the one reason token (body first) — blockers never overwrite it.
+    if not result["ok"]:
+        return result
+    # axis: an unread or malformed edge list refuses — never read as no blockers.
+    if not blockers["checked"]:
+        result["ok"] = False
+        result["reason"] = REFUSAL_BLOCKERS_UNREADABLE
+    # axis: any open native blocker refuses the marking.
+    elif blockers["open"]:
+        result["ok"] = False
+        result["reason"] = REFUSAL_BLOCKER_OPEN
+    return result
+
+
+def check_build_ready_with_blockers(body, issue, repo, run):
+    """Body check plus the issue's native blocker edges; ok only when both clear."""
+    result = check_build_ready(body)
+    return _apply_blockers(result, read_blockers(issue, repo, run))
 
 
 def _fail_closed_unreadable_body():
@@ -289,21 +411,71 @@ def _emit(result):
     sys.stdout.write(json.dumps(result) + "\n")
 
 
-def main(argv=None):
+def _parse_edge_args(issue, repo):
+    """(issue_int, repo, detail): detail is None when both are given and well formed."""
+    # axis: --issue and --repo go together — exactly one given is a refusal and no gh call is made.
+    if (issue is None) != (repo is None):
+        return None, None, "--issue and --repo go together; only one was given"
+    # axis: --issue must be a positive integer, validated here (never an argparse exit).
+    if issue is None or not _ISSUE_PATTERN.match(issue) or int(issue) < 1:
+        return None, None, "--issue must be a positive integer, got %r" % (issue,)
+    # axis: --repo must be owner/name — checked before it reaches a gh endpoint.
+    if repo is None or not _REPO_PATTERN.match(repo):
+        return None, None, "--repo must be OWNER/NAME, got %r" % (repo,)
+    return int(issue), repo, None
+
+
+def _blockers_refusal(detail):
+    return _blockers_dict(False, [], detail)
+
+
+def main(argv=None, run=None):
+    run = subprocess.run if run is None else run
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser(
         "check-build-ready",
-        help="read an issue body and report build-ready anchor shape",
+        help="read an issue body and report build-ready anchor shape; with --issue and --repo, "
+        "also read its native blocker edges",
     )
     c.add_argument("--body-file", required=True, help="path to the issue body text")
+    c.add_argument("--issue", default=None, help="issue number whose native blocked_by edges to read")
+    c.add_argument("--repo", default=None, help="OWNER/NAME of the issue")
+    b = sub.add_parser(
+        "check-blockers",
+        help="read an issue's native blocked_by edges alone",
+    )
+    b.add_argument("--issue", default=None, help="issue number")
+    b.add_argument("--repo", default=None, help="OWNER/NAME of the issue")
     args = p.parse_args(argv)
+
+    if args.cmd == "check-blockers":
+        number, repo, detail = _parse_edge_args(args.issue, args.repo)
+        if detail is not None:
+            blockers = _blockers_refusal(detail)
+        else:
+            blockers = read_blockers(number, repo, run)
+        # axis: check-blockers is ok only on a full read with no open blocker; unreadable and open are distinct reasons.
+        if not blockers["checked"]:
+            ok, reason = False, REFUSAL_BLOCKERS_UNREADABLE
+        elif blockers["open"]:
+            ok, reason = False, REFUSAL_BLOCKER_OPEN
+        else:
+            ok, reason = True, None
+        _emit({"ok": ok, "reason": reason, "blockers": blockers, "advisory": True})
+        return 0
 
     body = _read_body_file(args.body_file)
     if body is None:
         result = _fail_closed_unreadable_body()
-    else:
+    elif args.issue is None and args.repo is None:
         result = check_build_ready(body)
+    else:
+        number, repo, detail = _parse_edge_args(args.issue, args.repo)
+        if detail is not None:
+            result = _apply_blockers(check_build_ready(body), _blockers_refusal(detail))
+        else:
+            result = check_build_ready_with_blockers(body, number, repo, run)
     _emit(result)
     # Exit 0 always: the JSON result is the product; a non-zero exit would let a caller
     # treat a refusal as a crash. The advisor reads ok/reason, not the exit code.
