@@ -703,7 +703,7 @@ def test_the_record_is_not_written_without_a_recorder_an_env_file_or_a_session_i
 
 # --- the real hook, in a subprocess ---------------------------------------------------------
 
-def _run_hook(tmp_path, remote):
+def _run_hook(tmp_path, remote, extra_env=None, link=None):
     """Run the real hook through a symlink to this plugin; (env file, completed process, link)."""
     home = tmp_path / "home"
     codex = tmp_path / "codex"
@@ -719,8 +719,10 @@ def _run_hook(tmp_path, remote):
                CLAUDE_ENV_FILE=str(env_file), PYTHONDONTWRITEBYTECODE="1")
     if remote:
         env["CLAUDE_CODE_REMOTE"] = "true"
-    link = tmp_path / "plugin-link"
-    os.symlink(PLUGIN, str(link))
+    env.update(extra_env or {})
+    if link is None:
+        link = tmp_path / "plugin-link"
+        os.symlink(PLUGIN, str(link))
     payload = {"source": "startup", "cwd": str(repo), "session_id": SESSION,
                "transcript_path": str(tmp_path / "transcript.jsonl")}
     done = subprocess.run([sys.executable, "-B", str(link / "hooks" / "session_start.py")],
@@ -738,6 +740,7 @@ def test_the_real_hook_records_its_start_parts_and_the_check_reads_them_back(tmp
     assert HOOK_PART in record["parts"] and "lib/host_model.py" in record["parts"]
     assert set(record["parts"]) <= set(cloud_setup_text.START_HOOK_READS)
     assert all(idx == [0] for idx in record["parts"].values())
+    assert record["unattributed"] == []
 
     started = CC._start_parts(_env(record))
     assert started is not None and HOOK_PART in started
@@ -752,3 +755,50 @@ def test_a_local_run_writes_no_start_copy_export(tmp_path):
     assert done.returncode == 0, done.stderr
     assert cloud_pass.START_COPY_ENV not in env_file.read_text()
     assert "SUPERHEROES_HOST_MODEL" in env_file.read_text()
+
+
+# --- a start module whose code came from a cache the recorder cannot see -----------------------
+
+class _Module:
+    def __init__(self, path):
+        self.__file__ = path
+
+
+def test_unattributed_names_a_loaded_plugin_module_no_open_credits(hook, tmp_path):
+    link = tmp_path / "link"
+    (tmp_path / "copy" / "lib").mkdir(parents=True)
+    os.symlink(str(tmp_path / "copy"), str(link))
+    state = {"roots": [os.path.realpath(str(link))], "parts": {"lib/seen.py": {0}}, "stopped": True}
+    modules = [_Module(str(link / "lib" / "seen.py")), _Module(str(link / "lib" / "cached.py")),
+               _Module(str(link / "hooks" / "session_start.py")), _Module("/usr/lib/python3/os.py"),
+               _Module(None), object()]
+    assert hook._unattributed(modules, str(link), state) == ["lib/cached.py"]
+
+
+def test_a_record_naming_an_unattributed_module_gives_none(tmp_path):
+    assert CC._start_parts(_env(_record(tmp_path, unattributed=[]))) is not None
+    assert CC._start_parts(_env(_record(tmp_path, unattributed=["lib/x.py"]))) is None
+    assert CC._start_parts(_env(_record(tmp_path, unattributed="lib/x.py"))) is None
+    assert CC._start_parts(_env(_record(tmp_path, unattributed=[5]))) is None
+
+
+def test_a_warm_external_bytecode_cache_leaves_the_record_unread_and_the_check_fails(tmp_path):
+    # break-it: modules loaded from a PYTHONPYCACHEPREFIX cache open no source under the plugin,
+    # so without the loaded-module census the record would pass on a subset of the start code.
+    prefix = tmp_path / "pycache"
+    link = tmp_path / "plugin-link"
+    os.symlink(PLUGIN, str(link))
+    warm = subprocess.run([sys.executable, "-X", "pycache_prefix=" + str(prefix), "-m", "compileall",
+                           "-q", str(link / "lib" / "host_model.py")], capture_output=True, text=True)
+    assert warm.returncode == 0, warm.stderr
+    env_file, done, _ = _run_hook(tmp_path, remote=True, link=link,
+                                  extra_env={"PYTHONPYCACHEPREFIX": str(prefix)})
+    assert done.returncode == 0, done.stderr
+    record = _exported(env_file)
+    assert "lib/host_model.py" not in record["parts"]
+    assert "lib/host_model.py" in record["unattributed"]
+    assert CC._start_parts(_env(record)) is None
+    local, cloud = _pair(tmp_path / "world")
+    result = _judge(local, _cloud_report(cloud, startParts=None))
+    assert result["action"] == "failed" and "start" in result["failedParts"]
+    assert UNREAD_SENTENCE in result["message"]

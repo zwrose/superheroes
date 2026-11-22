@@ -129,6 +129,26 @@ _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SOURCES = {"startup", "resume", "clear", "compact"}
 
 
+def _unattributed(modules, link_root, state):
+    """The plugin parts of loaded `modules` that no recorded open credits to a copy: a module whose
+    code came from a place the recorder does not see (bytecode under `sys.pycache_prefix`, or any
+    other cache) ran without its source being opened. Sorted; the hook's own part is left out, since
+    its own comparison credits it. Never raises; a module it cannot read is skipped."""
+    found = set()
+    current = os.path.realpath(link_root)
+    for module in modules:
+        try:
+            path = getattr(module, "__file__", None)
+            if not isinstance(path, str):
+                continue
+            got = _plugin_part(path, link_root, state["roots"], current)
+            if got is not None and got[0] != _OWN_PART and got[0] not in state["parts"]:
+                found.add(got[0])
+        except Exception:
+            continue
+    return sorted(found)
+
+
 def _write_start_copy(session_id):
     """Append the start copy record to `CLAUDE_ENV_FILE`. Best-effort, never raises. It acts only
     when the recorder is installed, the env file is set and the session id is a non-empty string.
@@ -149,7 +169,8 @@ def _write_start_copy(session_id):
             state["parts"].pop(_OWN_PART, None)
         record = {"schema": cloud_pass.START_COPY_SCHEMA, "session": session_id,
                   "roots": list(state["roots"]),
-                  "parts": {part: sorted(indexes) for part, indexes in state["parts"].items()}}
+                  "parts": {part: sorted(indexes) for part, indexes in state["parts"].items()},
+                  "unattributed": _unattributed(list(sys.modules.values()), _LINK_ROOT, state)}
         line = json.dumps(record, sort_keys=True, separators=(",", ":"))
         with open(env_file, "a", encoding="utf-8") as fh:
             fh.write("export %s=%s\n" % (cloud_pass.START_COPY_ENV, shlex.quote(line)))

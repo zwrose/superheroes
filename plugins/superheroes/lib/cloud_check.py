@@ -470,6 +470,12 @@ def _start_record(env):
         return None
     if not (isinstance(parts, dict) and len(parts) <= _START_PARTS_MAX):
         return None
+    # axis: a start module that ran without its source being opened (its code came from a cache the
+    # recorder cannot see) leaves the record incomplete, so it is not read; a malformed list is not either
+    unattributed = record.get("unattributed", [])
+    if not (isinstance(unattributed, list) and all(isinstance(u, str) for u in unattributed)) \
+            or unattributed:
+        return None
     for part, indexes in parts.items():
         if not (isinstance(part, str) and part and not part.startswith("/") and "#" not in part
                 and ".." not in part.split("/")):
