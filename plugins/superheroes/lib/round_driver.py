@@ -441,7 +441,7 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance", "synthesisUnseatable",
-                                     "secondTestUnseatable", "sweeps")
+                                     "secondTestUnseatable", "sweeps", "silentSeats")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -4583,6 +4583,49 @@ def _recorded_verifier_vendor(state, session_dir):
     return _recorded_phase_vendor(state, session_dir, P_VERIFIERS)
 
 
+SILENT_SEATS_FIELD = "silentSeats"
+
+
+def _record_silent_seat(state, phase, kind, item_ids, answered_ids, seats=None, ordered=None):
+    """The one home of the rule "the order named items and the answer names none". ``item_ids`` are the ids the
+    order gave, ``answered_ids`` the ids the answer carries. With no ``seats`` the whole answer is judged (one
+    ``answer``-grain row, silent when the order named items and no answered id is among them); with ``seats``
+    (the verifier seats the assembly found silent, ``ordered`` the ids they were ordered) one ``seat``-grain row
+    is recorded when the list is non-empty. Records the row and the decision and changes nothing else: the fold
+    goes on exactly as it would, the items are recorded as unanswered, and nothing is re-asked."""
+    if seats is not None:
+        if not seats:
+            return False
+        row = {"phase": phase, "grain": "seat", "items": ordered, "seats": sorted(seats)}
+        who = "verifier seat(s) %s answered none of the %d item(s) they were ordered" % (
+            ", ".join(sorted(seats)), ordered)
+    else:
+        named = set(item_ids)
+        if not item_ids or any(rid in named for rid in answered_ids):
+            return False
+        row = {"phase": phase, "grain": "answer", "items": len(item_ids)}
+        who = "the %s seat answered none of its %d item(s)" % (phase, len(item_ids))
+    _record_round_append(state, SILENT_SEATS_FIELD, row)
+    _decision(state, kind, "%s; they are recorded as unanswered and nothing was re-asked" % who)
+    return True
+
+
+def _record_silent_verifiers(state, artifact, raw_verdicts):
+    """The verifier fold's silence check, judged on the verdicts exactly as received (``raw_verdicts``, before any
+    provenance filtering). The assembly's per-seat finding (`verifierSilentClusters`, `advance` only) is taken as
+    the seat grain and the whole-answer check is then not run; every other artifact is judged as one answer."""
+    silent = artifact.get("verifierSilentClusters")
+    if isinstance(silent, list):
+        ordered = artifact.get("verifierSilentItems")
+        ordered = ordered if isinstance(ordered, int) and not isinstance(ordered, bool) else 0
+        _record_silent_seat(state, "verifiers", "verifiers-silent", (), (),
+                            seats=[k for k in silent if isinstance(k, str)], ordered=ordered)
+        return
+    staged_ids = [s.get("id") for s in verification.stage_ids(state.get("_toVerify") or [])]
+    _record_silent_seat(state, "verifiers", "verifiers-silent", staged_ids,
+                        [v.get("id") for v in raw_verdicts if isinstance(v, dict)])
+
+
 def _fold_verifiers(state, config, artifact, session_dir=None):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
@@ -4591,6 +4634,9 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # folds exactly like silence (every staged finding stays unverified), as an unseatable
         # audit target does.
         verdicts = []
+    else:
+        # axis: a seat that answered none of its items is recorded silent, judged on the verdicts as received (a vendor-ignored answer named its items) and never for a seat that never ran — see bite-proof record silent_seat_fold_2617
+        _record_silent_verifiers(state, artifact, verdicts)
     # axis: the verdicts count only when the vendor that ran them is the driver's selected non-maker
     # vendor; a replaced (independent) selection with no vendor claim, or a different one, ran in an
     # unproven family and folds like silence.
@@ -4899,6 +4945,9 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             duplicated.add(rid)
         by_id[rid] = result
     held_ids = {row["finding"].get("id") for row in rows}
+    # axis: a second-test answer that names none of the held ids (a duplicated one is named) is recorded silent and folds as it would — see bite-proof record silent_seat_fold_2617
+    _record_silent_seat(state, "second-test", "second-test-silent",
+                        [row["finding"].get("id") for row in rows], list(by_id))
     unmatched = sorted(rid for rid in set(by_id) | duplicated if rid not in held_ids)
     repo_root, head = _break_it_scope(session_dir, state, config)
     copies, no_test, ran, malformed_tests = [], [], [], []
@@ -7675,6 +7724,9 @@ def _fold_test_correction(state, config, artifact):
         if rid in by_id:
             duplicated.add(rid)
         by_id[rid] = result
+    # axis: a correction answer that names none of its items is recorded silent and folds as it would — see bite-proof record silent_seat_fold_2617
+    _record_silent_seat(state, "second-test-correction", "break-it-correction-silent",
+                        [item["findingKey"] for item in pending["items"]], list(by_id))
     landed, none, transit, malformed_tests = [], [], [], []
     for item in pending["items"]:
         key = item["findingKey"]
@@ -13945,7 +13997,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 # provenance map is a courier claim, so it is dropped and the `verifierVendor`
                 # claim check decides.
                 artifact = {k: v for k, v in artifact.items()
-                            if k not in ("verifierSeatVendors", "verifierSeatProvenance")}
+                            if k not in ("verifierSeatVendors", "verifierSeatProvenance",
+                                         "verifierSilentClusters", "verifierSilentItems")}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
                       verified_head_resolution=resolution, fix_commits=prep.get("fix_commits"))

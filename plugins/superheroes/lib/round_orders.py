@@ -575,7 +575,16 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "Write your grouping payload to %s.\n"
             "every survivor id appears exactly once across all groups." % landing
         )
-    elif phase in (round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
+    elif phase == round_phases.P_SECOND_TEST:
+        # a second-test seat is given findings and returns each once: an empty list is the silence the fold records, never an answer
+        ph["OUTPUT_CHANNEL_BLOCK"] = (
+            "Deliver per the base rubric's panel output-format section. Write your findings "
+            "payload to %s — return each finding you were given exactly once, with its staged "
+            "id. For a finding you write no new test for, return it with its staged id and its "
+            "other fields as received and no block in suggestion; never return an empty "
+            "findings list." % landing
+        )
+    elif phase in (round_phases.P_SEAMS, round_phases.P_SCOPED):
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your findings "
             "payload to %s — write an empty findings list rather than skipping the file when "
@@ -815,16 +824,21 @@ ORDER_SHAPE_CHANNELS = (CHANNEL_RUNNER, CHANNEL_HOST_REPLY, CHANNEL_ORCHESTRATOR
 REFUSED_BY_RUNNER = "runner"
 REFUSED_BY_PAYLOAD_FAULT = "payload-fault"  # payload_contracts.payload_fault
 EMPTY_REFUSED_BY = (REFUSED_BY_RUNNER, REFUSED_BY_PAYLOAD_FAULT)
+# The fold refuses nothing: it records. A row the runner grades ok although the order asks for one answer per item
+# names the fold as its handler (so it is not in EMPTY_REFUSED_BY).
+HANDLED_BY_FOLD = "fold"
 
 
 def _shape(shape_id, phase, channel, payload_keys, *, result_kind=None, expected_result_kind=None,
            nothing_to_group=False, empty_answer_valid=None, empty_refused_by=None, order_allows_empty=None,
-           when=()):
+           empty_handled_by=None, empty_fold_decision=None, when=()):
     """One row. For a seat row, ``orderAllowsEmpty`` is what the order's template says of an empty answer and
     ``emptyAnswerValid`` is how the answer's gate grades the empty answer the order's seat would send (with its read
     list where the order asks for one); they differ only where no gate enforces the order (a known gap the row
-    declares). ``emptyRefusedBy`` is set only when ``emptyAnswerValid`` is False. ``when`` picks the row by value:
-    (key, "empty"|"nonempty") pairs."""
+    declares). ``emptyRefusedBy`` is set only when ``emptyAnswerValid`` is False. ``emptyHandledBy`` (``HANDLED_BY_FOLD``)
+    is set on a row whose empty answer the runner grades ok although the order asks for one answer per item: the fold
+    records that answer as silent, and ``emptyFoldDecision`` is the decision kind it records. ``when`` picks the row by
+    value: (key, "empty"|"nonempty") pairs."""
     row = {"id": shape_id, "phase": phase, "channel": channel, "resultKind": result_kind,
            "expectedResultKind": expected_result_kind, "nothingToGroup": nothing_to_group,
            "payloadKeys": frozenset(payload_keys), "when": tuple(when)}
@@ -833,6 +847,10 @@ def _shape(shape_id, phase, channel, payload_keys, *, result_kind=None, expected
         row["orderAllowsEmpty"] = empty_answer_valid if order_allows_empty is None else order_allows_empty
     if empty_refused_by is not None:
         row["emptyRefusedBy"] = empty_refused_by
+    if empty_handled_by is not None:
+        row["emptyHandledBy"] = empty_handled_by
+    if empty_fold_decision is not None:
+        row["emptyFoldDecision"] = empty_fold_decision
     return row
 
 
@@ -844,10 +862,10 @@ ORDER_SHAPES = (
     _shape("panel", round_phases.P_PANEL, CHANNEL_RUNNER, ("dimensions", "tier", "slices", "ceilings"),
            result_kind="findings", expected_result_kind="findings", empty_answer_valid=True),
     # dispatch-verifiers.md: "Return one object per input issue". No gate counts the verdicts: the runner grades an
-    # empty list that carries its read list ok (a known gap, declared rather than tested away).
+    # empty list that carries its read list ok. The gap is declared and the fold records the silent seat (`verifiers-silent`).
     _shape("verifiers", round_phases.P_VERIFIERS, CHANNEL_RUNNER, ("clusters",),
            result_kind="verdicts", expected_result_kind="verdicts", empty_answer_valid=True,
-           order_allows_empty=False),
+           order_allows_empty=False, empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="verifiers-silent"),
     # dispatch-synthesis.md: "Your groups must account for every staged survivor id"
     _shape("synthesis-survivors-earlier", round_phases.P_SYNTHESIS, CHANNEL_RUNNER, _SYNTHESIS_KEYS,
            result_kind="grouping", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER,
@@ -866,12 +884,15 @@ ORDER_SHAPES = (
     _shape("seams", round_phases.P_SEAMS, CHANNEL_RUNNER, ("fullDiff", "slices"),
            result_kind="findings", empty_answer_valid=True),
     # dispatch-second-test.md: "Return only the items you were given, each once". As for the verifiers, no gate
-    # counts the items: an empty list that carries its read list grades ok (the same declared gap).
+    # counts the items: an empty list that carries its read list grades ok (the same declared gap), and the fold
+    # records the silent seat (`second-test-silent`).
     _shape("second-test", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("findings",),
-           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
+           empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="second-test-silent"),
     # dispatch-second-test-correction.md: "Return only the items you were given, each once" (_correction_payload)
     _shape("second-test-correction", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("correction", "findings"),
-           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
+           empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="break-it-correction-silent"),
     # dispatch-audits.md: "Return exactly one audit result for this target"
     _shape("audits", round_phases.P_AUDITS, CHANNEL_RUNNER, ("targets",),
            result_kind="ruling", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),

@@ -2816,6 +2816,7 @@ _ALL_CHANNELS = {
     "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
     "secondTestUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude",
                               "held": ["f.py::bug@L1"]}],
+    "silentSeats": [{"phase": "second-test", "grain": "answer", "items": 1}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "sweeps": [{"sweepId": "S-1", "findingKey": "f.py::bug@L1", "title": "bug", "file": "f.py", "line": 1,
                 "parts": 1, "missing": [], "inside": 1, "outside": 0, "covered": 0, "dropped": 0,

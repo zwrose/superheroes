@@ -39,7 +39,7 @@ The fixer writes the content byte for byte and commits it, and the review keeps 
 - Judge only from the diff and the repo — never the PR description or author narrative.
 - **Never change the repository, and never claim a run you did not make.** The build session
   runs your test, exactly as you wrote it, in its own working copy.
-- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-second-test/second-test.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-second-test/second-test.a0.payload.json — return each finding you were given exactly once, with its staged id. For a finding you write no new test for, return it with its staged id and its other fields as received and no block in suggestion; never return an empty findings list.
 
 ## What you may run
 
