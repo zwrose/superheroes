@@ -150,6 +150,8 @@ _PARTS = (
     ("hook",
      "The dependency hook on the branch builds start from failed its check (`%s`): %s.", "%s"),
     ("calibration", "The cloud's calibration doesn't match this machine's.", _SAME_FIX),
+    # the sentence and fix of this row are filled in `_failed_message` from `_START_TEXT`
+    ("start", "The cloud session's start code was not checked.", _SAME_FIX),
     ("reviewer", "The reviewer did not answer, so the pass is missing or was pasted wrong.",
      cloud_setup.FIX_FRESH_PASS),
     ("identity",
@@ -161,6 +163,20 @@ _PARTS = (
      cloud_setup.FIX_RECORD),
 )
 _IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
+# The start part's sentence and fix for each way it fails. `{list}` is the differing parts, each
+# with the plugin copy it came from, and `{mine}` is this machine's plugin version.
+_START_TEXT = {
+    "older": ("The cloud session's start hook ran start code that differs from mine: {list}, and "
+              "mine is {mine}.", _SAME_FIX),
+    "unread": ("The cloud session did not report which plugin copy its start hook ran, so I could "
+               "not check its start code.", _SAME_FIX),
+    "mine-unreadable": ("I could not read my own plugin's start code, so I could not compare the "
+                        "cloud's start hook with it.",
+                        "tell me so I can look at this machine's plugin copy"),
+}
+# said after the result of a check on a report that carries no start parts (an older session's)
+_START_NOT_READ_BACK = ("The start parts were not read back: the cloud session's plugin is older "
+                        "than the one that reports them, so its start code was not checked.")
 # The warning a passing identity part carries when any of the four variables is not set; `{names}`
 # is the missing variables, joined in prose.
 _RESTART_SENTENCE = ("An identity that a setup command writes into git config does not survive a "
@@ -199,10 +215,12 @@ _PASSED = (
     "\n"
     "- The cloud's plugin is {version}, the same as mine.\n"
     "- Its calibration matches this machine's.\n"
+    "- Its start hook ran the same start code as mine.\n"
     "- The reviewer answered.\n"
     "- It has a git identity to commit with.\n"
     "\n"
 )
+_START_BULLET = "- Its start hook ran the same start code as mine.\n"
 _PASSED_OFF = "Cloud builds are ready for {project} and still switched off. " \
               "Say \"turn cloud builds on\" when you want them."
 _PASSED_ON = ("Cloud builds are ready for {project} and on, so builds run in the cloud again from "
@@ -395,11 +413,99 @@ def _plugin_commit():
     return commit if _COMMIT_RE.fullmatch(commit) else None
 
 
+_START_ROOTS_MAX = 8
+_START_PARTS_MAX = 500
+_START_HOOK_PART = "hooks/session_start.py"
+
+
+def _copy_version(root):
+    """The first line of `<root>/version.txt`, stripped, or None."""
+    try:
+        with open(os.path.join(root, "version.txt"), encoding="utf-8") as fh:
+            return fh.readline().strip() or None
+    except (OSError, UnicodeError):
+        return None
+
+
+def _copy_commit(root):
+    """The commit of the plugin copy at `root`: a 40-hex string, or None when it is not a git
+    checkout or git does not answer."""
+    try:
+        got = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    commit = got.stdout.strip() if got.returncode == 0 else ""
+    return commit if _COMMIT_RE.fullmatch(commit) else None
+
+
+def _part_sha(root, part):
+    """The hex SHA-256 of the bytes of plugin-relative `part` in the copy at `root`, or None."""
+    try:
+        with open(os.path.join(root, *part.split("/")), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _is_index(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _start_record(env):
+    """The start copy record the session's start hook exported, when it is whole and bound to this
+    session; else None. Returns (roots, {part: [root index, ...]})."""
+    raw = env.get(cloud_pass.START_COPY_ENV)
+    session = env.get("CLAUDE_CODE_SESSION_ID")
+    if not (isinstance(raw, str) and isinstance(session, str) and session):
+        return None
+    record = json.loads(raw)
+    # axis: only a record this session's own start hook wrote is read; a parent's inherited one is not
+    if not (isinstance(record, dict) and record.get("schema") == cloud_pass.START_COPY_SCHEMA
+            and isinstance(record.get("session"), str) and record["session"] == session):
+        return None
+    roots, parts = record.get("roots"), record.get("parts")
+    if not (isinstance(roots, list) and 1 <= len(roots) <= _START_ROOTS_MAX
+            and all(isinstance(r, str) and os.path.isabs(r) for r in roots)):
+        return None
+    if not (isinstance(parts, dict) and len(parts) <= _START_PARTS_MAX):
+        return None
+    for part, indexes in parts.items():
+        if not (isinstance(part, str) and part and not part.startswith("/") and "#" not in part
+                and ".." not in part.split("/")):
+            return None
+        if not (isinstance(indexes, list) and indexes
+                and all(_is_index(i) and 0 <= i < len(roots) for i in indexes)):
+            return None
+    return roots, parts
+
+
+def _start_parts(env):
+    """For each part the cloud session's start hook opened, the plugin copies it came from: a list
+    of {version, commit, sha256} (that copy's version, its commit and the SHA-256 of the part
+    there). None when the session left no usable record: none exported, one that is not whole, or
+    one written by another session."""
+    got = _start_record(env)
+    if got is None:
+        return None
+    roots, parts = got
+    facts = {}
+    for index in sorted({i for indexes in parts.values() for i in indexes}):
+        facts[index] = (_copy_version(roots[index]), _copy_commit(roots[index]))
+    out = {}
+    for part, indexes in parts.items():
+        out[part] = [{"version": facts[i][0], "commit": facts[i][1],
+                      "sha256": _part_sha(roots[i], part)} for i in dict.fromkeys(indexes)]
+    return out
+
+
 def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_fn=None):
     """What this cloud session holds, as the object the marked line carries. Never raises.
     `identity_fn(cwd)` is the test seam for the git identity check; it defaults to
     `launch_doctrine.git_identity`. `pluginCommit` is an optional field, not one a report must
-    carry to be read."""
+    carry to be read. So is `startParts` (not in `REPORT_FIELDS`, so an older report stays
+    readable): for each part the session's start hook opened, the plugin copies it came from, as
+    `{part: [{version, commit, sha256}, ...]}`, or None when the session left no usable record."""
     env = os.environ if env is None else env
     cwd = os.getcwd() if cwd is None else cwd
     environment = env.get(cloud_pass.ENVIRONMENT_ENV)
@@ -423,6 +529,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         "environment": environment,
         "pluginVersion": _or_none(cloud_setup_text._plugin_version),
         "pluginCommit": _or_none(_plugin_commit),
+        "startParts": _or_none(_start_parts, env),
         "placedStamp": _or_none(_placed_stamp, cwd, root),
         "stampFile": _or_none(_stamp_file, cwd, root),
         "repoStamp": _or_none(repo_calibration_stamp, cwd),
@@ -516,6 +623,47 @@ def _hook_gap(cwd, root, commit=None, adopted=None):
         return "commit-unreadable"  # axis: any other failure in the hook test is never read as a pass
 
 
+def _copies_ok(value):
+    """True when `value` is {part: non-empty list of {version, commit, sha256}} with each of the
+    three a string or None."""
+    return (isinstance(value, dict)
+            and all(isinstance(part, str) and isinstance(copies, list) and copies
+                    and all(isinstance(c, dict)
+                            and all(k in c and (c[k] is None or isinstance(c[k], str))
+                                    for k in ("version", "commit", "sha256"))
+                            for c in copies)
+                    for part, copies in value.items()))
+
+
+def _start_match(obj):
+    """(match, issue, differing) for the start part: whether every start part the cloud session's
+    start hook opened has the same bytes as this machine's copy of it. `match` is True, False or
+    None (None only for a report with no `startParts` key, an older session's, judged as before);
+    `issue` is "older", "unread", "mine-unreadable" or "not-read-back" (None on a match);
+    `differing` lists the (part, copy) pairs whose bytes differ. A comparison that cannot be made
+    is False, never True."""
+    if "startParts" not in obj:
+        return None, "not-read-back", []
+    value = obj["startParts"]
+    # axis: a null, malformed or hook-less record is unread and fails, never read as a match
+    if not _copies_ok(value) or _START_HOOK_PART not in value:
+        return False, "unread", []
+    try:
+        expected = cloud_setup_text.start_read_parts()
+    except Exception:
+        return False, "mine-unreadable", []
+    differing = []
+    for part in sorted(value):
+        if part not in expected:
+            continue
+        want = hashlib.sha256(expected[part]).hexdigest()
+        # axis: a part counts as the same only when its bytes are, and a copy that could not be read (None) is not
+        differing.extend((part, copy) for copy in value[part] if copy["sha256"] != want)
+    if differing:
+        return False, "older", differing
+    return True, None, []
+
+
 def _judge_parts(obj, environment, cwd, root, today):
     """(results, local placed stamp or None, the pin hook's reader result, the hook gap token or
     None)."""
@@ -557,6 +705,8 @@ def _judge_parts(obj, environment, cwd, root, today):
         "pinMatches": pin_ok,
         "dependencyHookMatches": gap is None,
         "calibrationMatches": computed and placed_ok and file_ok and repo_ok,
+        # axis: the start hook's parts must have run the bytes this machine's release has
+        "startPartsMatch": _start_match(obj)[0],
         "reviewerAnswered": reviewer,
         "environmentMatches": environment_ok,
         "identityPresent": identity_ok,
@@ -703,8 +853,29 @@ def _standing(cwd, who, root, marked):
     return _PAUSED_STANDING + " " + _EARLIER_MARKER_STANDS if remains else _NOT_PAUSED
 
 
+def _start_item(part, copy):
+    """One differing start part, with the plugin copy it came from."""
+    version = copy.get("version")
+    commit = copy.get("commit")
+    return "`%s` from plugin %s%s" % (
+        part, version if isinstance(version, str) else "an unknown version",
+        " at commit " + commit[:12] if isinstance(commit, str) and commit
+        else " at an unknown commit")
+
+
+def _start_text(issue, differing, local_version):
+    """(sentence, fix) of the start part's failure; an issue this table does not know reads as
+    unread."""
+    sentence, fix = _START_TEXT[issue if issue in _START_TEXT else "unread"]
+    items = [_start_item(part, copy) for part, copy in differing]
+    return sentence.format(
+        list=_prose_names(items) if items else "",
+        mine="unknown" if local_version is None else local_version), fix
+
+
 def _failed_message(parts, standing, cloud_version, local_version, identity=None,
-                    identity_reported=True, pin=None, cloud_commit=None, hook_gap=None):
+                    identity_reported=True, pin=None, cloud_commit=None, hook_gap=None,
+                    start_issue=None, start_differing=()):
     # a hook part with no known gap token still reads as the fail-closed one, never as a blank
     gap_sentence, gap_fix = cloud_dependency_hook.GAP_TEXT[
         hook_gap if hook_gap in cloud_dependency_hook.GAP_TEXT else "commit-unreadable"]
@@ -731,6 +902,9 @@ def _failed_message(parts, standing, cloud_version, local_version, identity=None
             sentences.append(sentence % (hook_gap if hook_gap in cloud_dependency_hook.GAP_TEXT
                                          else "commit-unreadable", gap_sentence))
             continue
+        if name == "start":
+            sentences.append(_start_text(start_issue, start_differing, local_version)[0])
+            continue
         sentences.append(sentence.format(
             **dict({"cloud": "not installed" if cloud_version is None else cloud_version,
                     "mine": "unknown" if local_version is None else local_version},
@@ -748,6 +922,8 @@ def _failed_message(parts, standing, cloud_version, local_version, identity=None
                     email="your email" if identity is None else "`%s`" % identity[1])
         if name == "hook":
             fix = fix % gap_fix
+        if name == "start":
+            fix = _start_text(start_issue, start_differing, local_version)[1]
         if name in parts and fix is not None and fix not in fixes:
             fixes.append(fix)
     return ("**The check failed on %s.** %s\n\n%s To fix it, %s and say \"check again\"."
@@ -766,7 +942,9 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
     the check as `record` with `recordWritten` true and stays). The cloud-builds setting is the
     owner's intent and is written only by the owner's switch: no result here writes it, so
     `settingSwitchedOff` is always False. The record is never touched by a failed or unread
-    result."""
+    result. The start part fails the check when any part the cloud session's start hook opened has
+    other bytes than this machine's copy of it, or when that cannot be compared; a report from an
+    older session with no `startParts` key is judged without it and says so."""
     name = _project(cwd, project_name)
     started = _utc_stamp(now)  # the judgment's start moment, taken once, whole seconds UTC
     today = cloud_setup_text._utc_date(now)
@@ -782,7 +960,8 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         failed, marked = _fail_closed(cwd, who, root, environment, ["unread"], now)
         return {"action": "unread", "results": dict.fromkeys(
                     ("versionMatches", "pinMatches", "dependencyHookMatches",
-                     "calibrationMatches", "reviewerAnswered", "environmentMatches",
+                     "calibrationMatches", "startPartsMatch", "reviewerAnswered",
+                     "environmentMatches",
                      "identityPresent")),
                 "dependencyHookGap": None,
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": False,
@@ -799,10 +978,14 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                                      ("pin", "pinMatches"),
                                      ("hook", "dependencyHookMatches"),
                                      ("calibration", "calibrationMatches"),
+                                     ("start", "startPartsMatch"),
                                      ("reviewer", "reviewerAnswered"),
                                      ("identity", "identityPresent"))
               if not results[key] and not (part == "version" and pin["state"] == "valid")
-              and not (part == "pin" and results[key] is None)]
+              and not (part == "pin" and results[key] is None)
+              # axis: an older report with no start parts is not failed on them; it says so instead
+              and not (part == "start" and results[key] is None)]
+    start_match, start_issue, start_differing = _start_match(obj)
     written = False
     if not failed:
         done = False
@@ -840,9 +1023,12 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                     failed, standing, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
                     cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
+                    start_issue=start_issue, start_differing=start_differing,
                     # axis: an identity the session never reported is not a missing one
                     **({"identity": _local_identity(cwd)}
                        if "identity" in failed and identity_reported else {}))
+                # axis: a failed check on an older report still says its start parts were not read back
+                + ("\n\n" + _START_NOT_READ_BACK if start_match is None else "")
                 + ("" if warning is None else "\n\n" + warning["message"])}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
@@ -850,7 +1036,10 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
             "failedParts": [], "recordWritten": True,
             "settingSwitchedOff": False, "markerWritten": False, "identityWarning": warning,
             # axis: a passing check whose identity is not wholly from the four variables says so
-            "message": (_PASSED.format(version=obj["pluginVersion"])
+            # axis: a pass says its start hook ran my start code only when the parts were read back and matched; an older report's pass says they were not read back
+            "message": ((_PASSED if start_match is True else _PASSED.replace(_START_BULLET, "")
+                         ).format(version=obj["pluginVersion"])
+                        + (_START_NOT_READ_BACK + "\n\n" if start_match is None else "")
                         + ("" if warning is None else warning["message"] + "\n\n") + ending)}
 
 

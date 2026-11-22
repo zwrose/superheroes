@@ -101,9 +101,19 @@ def _confirm(answered=True, lapses=FAR, reason=None):
                         "passLapses": lapses, "reason": reason}
 
 
+def _start_env(session="session-fixture"):
+    """The two variables of a cloud session whose start hook loaded every start part from this
+    machine's own plugin copy (#2612), so the start part of a judgment agrees."""
+    record = {"schema": cloud_pass.START_COPY_SCHEMA, "session": session,
+              "roots": [cloud_setup_text._plugin_root()],
+              "parts": {part: [0] for part in cloud_setup_text.START_HOOK_READS}}
+    return {cloud_pass.START_COPY_ENV: json.dumps(record), "CLAUDE_CODE_SESSION_ID": session}
+
+
 def _cloud_report(cloud, **over):
     # the session sets the four identity variables, so the identity part carries no warning
-    env = dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **dict.fromkeys(CC.IDENTITY_VARIABLES, "x"))
+    env = dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **dict.fromkeys(CC.IDENTITY_VARIABLES, "x"),
+               **_start_env())
     obj = CC.report(env=env, cwd=cloud.cwd, root=cloud.root,
                     nonce=NONCE, confirm_fn=_confirm(),
                     identity_fn=lambda cwd: {"author": True, "committer": True})
@@ -400,6 +410,7 @@ def test_report_line_round_trips_through_judge(tmp_path):
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "pinMatches": None,
                                  "dependencyHookMatches": True, "calibrationMatches": True,
+                                 "startPartsMatch": True,
                                  "reviewerAnswered": True, "environmentMatches": True,
                                  "identityPresent": True}
     assert result["recordWritten"] is True and result["settingSwitchedOff"] is False
@@ -429,7 +440,8 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
     # a session with no store and no calibration directory has nothing placed and nothing carried
     assert obj == {
         "schema": CC.REPORT_SCHEMA, "nonce": None, "environment": None,
-        "pluginVersion": None, "pluginCommit": None, "placedStamp": "none", "stampFile": None,
+        "pluginVersion": None, "pluginCommit": None, "startParts": None, "placedStamp": "none",
+        "stampFile": None,
         "repoStamp": "none", "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"},
         "identity": {"author": False, "committer": False}, "identitySource": {"variables": []}}
@@ -892,6 +904,7 @@ def test_judge_passed_message_is_the_approved_words(tmp_path):
         "**The check passed.**\n\n"
         "- The cloud's plugin is %s, the same as mine.\n"
         "- Its calibration matches this machine's.\n"
+        "- Its start hook ran the same start code as mine.\n"
         "- The reviewer answered.\n"
         "- It has a git identity to commit with.\n\n"
         "Cloud builds are ready for demo and still switched off. Say \"turn cloud builds on\" "
@@ -907,6 +920,7 @@ def test_judge_passed_message_when_already_on(tmp_path):
         "**The check passed.**\n\n"
         "- The cloud's plugin is %s, the same as mine.\n"
         "- Its calibration matches this machine's.\n"
+        "- Its start hook ran the same start code as mine.\n"
         "- The reviewer answered.\n"
         "- It has a git identity to commit with.\n\n"
         "Cloud builds are ready for demo and on, so builds run in the cloud again from the next "
@@ -1377,6 +1391,8 @@ def test_cli_report_prints_one_marked_line(tmp_path, monkeypatch, capsys):
 def test_cli_judge_exit_codes(tmp_path, monkeypatch, capsys):
     local, cloud = _pair(tmp_path)
     _cli_env(monkeypatch, tmp_path)
+    for name, value in _start_env().items():
+        monkeypatch.setenv(name, value)
     CC.main(["report", "--cwd", cloud.cwd, "--root", cloud.root, "--nonce", NONCE])
     line = capsys.readouterr().out
     base = ["judge", "--cwd", local.cwd, "--root", local.root, "--environment", ENV_ID,
@@ -1710,8 +1726,8 @@ def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
     assert json.loads(argv[argv.index("--settings") + 1]) == {
         "remote": {"defaultEnvironmentId": ENV_ID}}
     # 5. the cloud machine reports under the same nonce, and the judgment passes
-    obj = CC.report(env={cloud_pass.ENVIRONMENT_ENV: ENV_ID}, cwd=cloud.cwd, root=cloud.root,
-                    nonce=started["nonce"], confirm_fn=_confirm())
+    obj = CC.report(env=dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **_start_env()), cwd=cloud.cwd,
+                    root=cloud.root, nonce=started["nonce"], confirm_fn=_confirm())
     judged = _judge(local, obj, nonce=started["nonce"])
     assert judged["action"] == "passed" and judged["recordWritten"] is True
     record = cloud_setup.read(local.cwd, ACCOUNT, local.root)["record"]
@@ -1807,6 +1823,7 @@ def test_judge_passes_a_pin_project_when_the_commit_and_version_match(tmp_path):
     assert result["action"] == "passed" and result["failedParts"] == []
     assert result["results"] == {"versionMatches": True, "pinMatches": True,
                                  "dependencyHookMatches": True, "calibrationMatches": True,
+                                 "startPartsMatch": True,
                                  "reviewerAnswered": True, "environmentMatches": True,
                                  "identityPresent": True}
     assert result["recordWritten"] is True

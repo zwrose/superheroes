@@ -17,7 +17,7 @@ if _LIB not in sys.path:
 
 import cloud_check as CC  # noqa: E402
 import cloud_pass  # noqa: E402
-from test_cloud_check import ENV_ID, NONCE, _confirm, _judge, _pair  # noqa: E402
+from test_cloud_check import ENV_ID, NONCE, _confirm, _judge, _pair, _start_env  # noqa: E402
 
 FOUR = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
 HEADING = "**A warning about the git identity.**"
@@ -26,7 +26,7 @@ BOTH = {"author": True, "committer": True}
 
 
 def _report(cloud, variables=(), identity=BOTH, values=None, **over):
-    env = {cloud_pass.ENVIRONMENT_ENV: ENV_ID}
+    env = dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **_start_env())
     for name in variables:
         env[name] = (values or {}).get(name, "set")
     obj = CC.report(env=env, cwd=cloud.cwd, root=cloud.root, nonce=NONCE, confirm_fn=_confirm(),
