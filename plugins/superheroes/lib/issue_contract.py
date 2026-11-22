@@ -364,20 +364,27 @@ def read_blockers(issue, repo, run):
     return _blockers_dict(True, open_rows, None)
 
 
+def _blockers_verdict(blockers):
+    """(ok, reason) for a blockers read: unreadable, else open, else ok. The one home of this decision."""
+    # axis: an unread or malformed edge list refuses — never read as no blockers.
+    if not blockers["checked"]:
+        return False, REFUSAL_BLOCKERS_UNREADABLE
+    # axis: any open native blocker refuses the marking.
+    if blockers["open"]:
+        return False, REFUSAL_BLOCKER_OPEN
+    return True, None
+
+
 def _apply_blockers(result, blockers):
-    """Fold a blockers read into a result: body refusal keeps its reason, else unreadable, else open."""
+    """Fold a blockers read into a result: body refusal keeps its reason, else the blockers verdict."""
     result["blockers"] = blockers
     # axis: a body refusal already holds the one reason token (body first) — blockers never overwrite it.
     if not result["ok"]:
         return result
-    # axis: an unread or malformed edge list refuses — never read as no blockers.
-    if not blockers["checked"]:
+    ok, reason = _blockers_verdict(blockers)
+    if not ok:
         result["ok"] = False
-        result["reason"] = REFUSAL_BLOCKERS_UNREADABLE
-    # axis: any open native blocker refuses the marking.
-    elif blockers["open"]:
-        result["ok"] = False
-        result["reason"] = REFUSAL_BLOCKER_OPEN
+        result["reason"] = reason
     return result
 
 
@@ -421,7 +428,7 @@ def _parse_edge_args(issue, repo):
         return None, None, "--issue must be a positive integer, got %r" % (issue,)
     # axis: --repo must be owner/name — checked before it reaches a gh endpoint.
     if repo is None or not _REPO_PATTERN.match(repo):
-        return None, None, "--repo must be OWNER/NAME, got %r" % (repo,)
+        return None, None, "--repo must be owner/name, got %r" % (repo,)
     return int(issue), repo, None
 
 
@@ -440,13 +447,13 @@ def main(argv=None, run=None):
     )
     c.add_argument("--body-file", required=True, help="path to the issue body text")
     c.add_argument("--issue", default=None, help="issue number whose native blocked_by edges to read")
-    c.add_argument("--repo", default=None, help="OWNER/NAME of the issue")
+    c.add_argument("--repo", default=None, help="owner/name of the issue")
     b = sub.add_parser(
         "check-blockers",
         help="read an issue's native blocked_by edges alone",
     )
     b.add_argument("--issue", default=None, help="issue number")
-    b.add_argument("--repo", default=None, help="OWNER/NAME of the issue")
+    b.add_argument("--repo", default=None, help="owner/name of the issue")
     args = p.parse_args(argv)
 
     if args.cmd == "check-blockers":
@@ -455,13 +462,7 @@ def main(argv=None, run=None):
             blockers = _blockers_refusal(detail)
         else:
             blockers = read_blockers(number, repo, run)
-        # axis: check-blockers is ok only on a full read with no open blocker; unreadable and open are distinct reasons.
-        if not blockers["checked"]:
-            ok, reason = False, REFUSAL_BLOCKERS_UNREADABLE
-        elif blockers["open"]:
-            ok, reason = False, REFUSAL_BLOCKER_OPEN
-        else:
-            ok, reason = True, None
+        ok, reason = _blockers_verdict(blockers)
         _emit({"ok": ok, "reason": reason, "blockers": blockers, "advisory": True})
         return 0
 

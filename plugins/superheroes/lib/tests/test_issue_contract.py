@@ -432,6 +432,7 @@ def test_realistic_whole_body_fixture():
             ic.SLOT_WHAT: ic.SLOT_STATUS_FILLED,
             ic.SLOT_DOD: ic.SLOT_STATUS_FILLED,
         },
+        "blockers": {"checked": False, "open": [], "detail": None},
         "advisory": True,
     }
 
@@ -548,6 +549,8 @@ def test_vocabulary_constants():
         ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
         ic.REFUSAL_ANCHOR_KIND_MULTIPLE,
         ic.REFUSAL_BODY_UNREADABLE,
+        ic.REFUSAL_BLOCKER_OPEN,
+        ic.REFUSAL_BLOCKERS_UNREADABLE,
     })
     assert ic.SLOT_STATUSES == frozenset({
         ic.SLOT_STATUS_MISSING,
