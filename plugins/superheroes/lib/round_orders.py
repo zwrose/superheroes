@@ -818,14 +818,19 @@ EMPTY_REFUSED_BY = (REFUSED_BY_RUNNER, REFUSED_BY_PAYLOAD_FAULT)
 
 
 def _shape(shape_id, phase, channel, payload_keys, *, result_kind=None, expected_result_kind=None,
-           nothing_to_group=False, empty_answer_valid=None, empty_refused_by=None, when=()):
-    """One row. ``emptyAnswerValid`` is what the order's template says of an empty answer, set for a seat row;
-    ``emptyRefusedBy`` only when it is False. ``when`` picks the row by value: (key, "empty"|"nonempty") pairs."""
+           nothing_to_group=False, empty_answer_valid=None, empty_refused_by=None, order_allows_empty=None,
+           when=()):
+    """One row. For a seat row, ``orderAllowsEmpty`` is what the order's template says of an empty answer and
+    ``emptyAnswerValid`` is how the answer's gate grades the empty answer the order's seat would send (with its read
+    list where the order asks for one); they differ only where no gate enforces the order (a known gap the row
+    declares). ``emptyRefusedBy`` is set only when ``emptyAnswerValid`` is False. ``when`` picks the row by value:
+    (key, "empty"|"nonempty") pairs."""
     row = {"id": shape_id, "phase": phase, "channel": channel, "resultKind": result_kind,
            "expectedResultKind": expected_result_kind, "nothingToGroup": nothing_to_group,
            "payloadKeys": frozenset(payload_keys), "when": tuple(when)}
     if empty_answer_valid is not None:
         row["emptyAnswerValid"] = empty_answer_valid
+        row["orderAllowsEmpty"] = empty_answer_valid if order_allows_empty is None else order_allows_empty
     if empty_refused_by is not None:
         row["emptyRefusedBy"] = empty_refused_by
     return row
@@ -838,10 +843,11 @@ ORDER_SHAPES = (
     # dispatch-panel.md delivery: "a review with nothing to flag emits findings: []" plus `investigated` always
     _shape("panel", round_phases.P_PANEL, CHANNEL_RUNNER, ("dimensions", "tier", "slices", "ceilings"),
            result_kind="findings", expected_result_kind="findings", empty_answer_valid=True),
-    # dispatch-verifiers.md: "Return one object per input issue"
+    # dispatch-verifiers.md: "Return one object per input issue". No gate counts the verdicts: the runner grades an
+    # empty list that carries its read list ok (a known gap, declared rather than tested away).
     _shape("verifiers", round_phases.P_VERIFIERS, CHANNEL_RUNNER, ("clusters",),
-           result_kind="verdicts", expected_result_kind="verdicts", empty_answer_valid=False,
-           empty_refused_by=REFUSED_BY_RUNNER),
+           result_kind="verdicts", expected_result_kind="verdicts", empty_answer_valid=True,
+           order_allows_empty=False),
     # dispatch-synthesis.md: "Your groups must account for every staged survivor id"
     _shape("synthesis-survivors-earlier", round_phases.P_SYNTHESIS, CHANNEL_RUNNER, _SYNTHESIS_KEYS,
            result_kind="grouping", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER,
@@ -859,12 +865,13 @@ ORDER_SHAPES = (
     # dispatch-seams-check.md delivery (round_orders._channel_derived_placeholders): an empty findings list when nothing to flag
     _shape("seams", round_phases.P_SEAMS, CHANNEL_RUNNER, ("fullDiff", "slices"),
            result_kind="findings", empty_answer_valid=True),
-    # dispatch-second-test.md: "Return only the items you were given, each once"
+    # dispatch-second-test.md: "Return only the items you were given, each once". As for the verifiers, no gate
+    # counts the items: an empty list that carries its read list grades ok (the same declared gap).
     _shape("second-test", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("findings",),
-           result_kind="findings", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
     # dispatch-second-test-correction.md: "Return only the items you were given, each once" (_correction_payload)
     _shape("second-test-correction", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("correction", "findings"),
-           result_kind="findings", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False),
     # dispatch-audits.md: "Return exactly one audit result for this target"
     _shape("audits", round_phases.P_AUDITS, CHANNEL_RUNNER, ("targets",),
            result_kind="ruling", empty_answer_valid=False, empty_refused_by=REFUSED_BY_RUNNER),

@@ -104,9 +104,10 @@ def _finding_answers():
 
 
 def _held_item_answers():
-    # the order asks for each given item once; the empty answer returns none and carries no read list
+    # the order asks for each given item once; the empty answer returns none but keeps the read list, so its
+    # grade is the empty collection's own, never the investigation floor's (the vacuous answer is that case)
     return {"minimal": {"findings": [dict(FINDING)], "investigated": list(INV)},
-            "empty": {"findings": []},
+            "empty": {"findings": [], "investigated": list(INV)},
             "vacuous": {"findings": []}}
 
 
@@ -123,7 +124,7 @@ FIXTURES = {
     "verifiers": {
         "minimal": {"verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
                     "investigated": list(INV)},
-        "empty": {"verdicts": []},
+        "empty": {"verdicts": [], "investigated": list(INV)},
         "vacuous": {"verdicts": []},
     },
     "synthesis-survivors-earlier": _survivor_synthesis_answers(),
@@ -245,6 +246,9 @@ def test_a_rows_are_well_formed():
             assert "emptyAnswerValid" not in row and "emptyRefusedBy" not in row, shape_id
             continue
         assert isinstance(row["emptyAnswerValid"], bool), shape_id
+        assert isinstance(row["orderAllowsEmpty"], bool), shape_id
+        # a gate that refuses what the order allows is a defect, never a declaration
+        assert row["emptyAnswerValid"] or not row["orderAllowsEmpty"], shape_id
         if row["emptyAnswerValid"]:
             assert "emptyRefusedBy" not in row, shape_id
         else:
