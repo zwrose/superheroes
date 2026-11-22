@@ -36,6 +36,7 @@ _RECOVERY_HEADING = "## Recovery — taking over a build that stopped"
 
 _SUBSECTION_HEADINGS = [
     "### Adopt; do not resume across instances or accounts",
+    "### Re-run inherited bite-proofs on the new head",
     "### Sweep for unpushed work before adopting",
     "### Pin the transcript; never re-discover it",
     "### Read liveness from the right signals",
@@ -48,6 +49,12 @@ _HOME_CLAUSES = {
         "the pushed branch at a named sha",
         "adoption is the only path",
         "claim inherited from the dead session is unverified until re-run",
+    ],
+    "### Re-run inherited bite-proofs on the new head": [
+        "Re-run every inherited bite-proof on this head.",
+        "a stack layer built on a sibling's head",
+        "(reproduced / could-not-bite / stale receipt) in the build record",
+        "fixes in-lane whatever no",
     ],
     "### Sweep for unpushed work before adopting": [
         "never pushed",
@@ -88,12 +95,13 @@ _HOLDER_CLAUSES = {
         "rubric/launch-doctrine.md` § Recovery",
         "sweep for work the dead build never pushed",
         "unverified until you re-run it yourself",
+        "Re-run every inherited bite-proof on this head.",
     ],
 }
 
 _EXPECTED_HOLDER_CLAUSE_COUNTS = {
     "skills/showrunner/SKILL.md": 4,
-    "skills/workhorse/SKILL.md": 3,
+    "skills/workhorse/SKILL.md": 4,
 }
 
 _FENCE_GUARDED_FILES = (
@@ -244,6 +252,85 @@ def test_copy_holder_table_names_exactly_two_charters():
     assert actual == expected, (
         f"copy-holder table drift — expected {sorted(expected)!r}, got {sorted(actual)!r}"
     )
+
+
+# The section reader returns whitespace-normalized text with ``*`` stripped, so the item is
+# sliced from its numbered lead to its closing words on that normalized text.
+_INHERITED_ITEM_LEAD = "1. Re-run every inherited bite-proof on this head."
+_INHERITED_ITEM_END = "longer bites."
+_INHERITED_ITEM_HOLDERS = {
+    _HOME: "### Re-run inherited bite-proofs on the new head",
+    "skills/workhorse/SKILL.md": "## 1. Intake — read the route and get the go-ahead",
+}
+
+
+def _numbered_item(rel, section, read_text=None):
+    """Return the normalized inherited-bite-proof item in a section, lead through end words.
+
+    Fails closed when the lead is absent or appears more than once, or the end words never
+    follow it.
+    """
+    text = _file_section(rel, section, read_text)
+    count = text.count(_INHERITED_ITEM_LEAD)
+    if count != 1:
+        raise AssertionError(
+            f"{rel} (section {section}): expected one item starting "
+            f"{_INHERITED_ITEM_LEAD!r}, found {count}"
+        )
+    start = text.index(_INHERITED_ITEM_LEAD)
+    end = text.find(_INHERITED_ITEM_END, start)
+    if end < 0:
+        raise AssertionError(
+            f"{rel} (section {section}): item never reaches {_INHERITED_ITEM_END!r}"
+        )
+    return text[start:end + len(_INHERITED_ITEM_END)]
+
+
+def _check_inherited_item_same_words(read_text=None):
+    items = {
+        rel: _numbered_item(rel, section, read_text)
+        for rel, section in _INHERITED_ITEM_HOLDERS.items()
+    }
+    if len(set(items.values())) != 1:
+        raise AssertionError(f"inherited bite-proof item drifted between holders: {items!r}")
+
+
+def test_inherited_bite_proof_item_same_words_in_home_and_workhorse():
+    """Bites on: the inherited bite-proof item reading differently (any word) between
+    launch-doctrine § Recovery and the workhorse intake, or either holder losing the item."""
+    _check_inherited_item_same_words()
+
+
+_BUILD_RECORD = ("skills/workhorse/reference/handback.md", "## The build record")
+_BUILD_RECORD_TALLY_CLAUSES = (
+    "the inherited bite-proof tally, directly after the bite-proof records",
+    "(reproduced, could-not-bite, or stale receipt)",
+    "Inherited bite-proofs: none",
+)
+
+
+def test_build_record_shape_names_where_the_inherited_tally_goes():
+    """Bites on: the build-record shape losing the tally's placement, its three outcome
+    labels, or the empty-record line."""
+    rel, section = _BUILD_RECORD
+    text = _file_section(rel, section)
+    for clause in _BUILD_RECORD_TALLY_CLAUSES:
+        assert clause in text, f"{rel} (section {section}) lost tally clause {clause!r}"
+
+
+def test_negative_inherited_bite_proof_item_drift_raises():
+    """Bites on: the same-words check accepting a weakened workhorse item (a detector that
+    cannot fail)."""
+    workhorse = "skills/workhorse/SKILL.md"
+
+    def read_text(rel):
+        text = _read_plugin(rel)
+        if rel == workhorse:
+            return text.replace("fixes in-lane whatever no", "may fix whatever no", 1)
+        return text
+
+    with pytest.raises(AssertionError, match="drifted between holders"):
+        _check_inherited_item_same_words(read_text)
 
 
 def test_no_fence_lines():

@@ -243,6 +243,20 @@ loses the lane's stack membership.
 asserting tests passed, a PR body asserting a panel ran, or a comment asserting a gate was probed
 are **inputs, not receipts** — adopt the artifacts, re-earn the claims.
 
+### Re-run inherited bite-proofs on the new head
+
+A bite-proof record shows a detector bit on the head where it was made. A later commit can stop it
+biting without any test going red, so a build that starts from another lane's work inherits proofs
+it did not make and cannot trust. In one field case a later work order silently invalidated two of
+fourteen inherited proofs, and the resumed builder caught both only because it re-ran all fourteen.
+The workhorse charter's intake carries this item in the same words:
+
+1. **Re-run every inherited bite-proof on this head.** A build whose worktree starts at a head
+   another lane produced (a resumption after a death, an adoption, or a stack layer built on a
+   sibling's head) re-runs every bite-proof record the branch carries on this head, posts the tally
+   (reproduced / could-not-bite / stale receipt) in the build record, and fixes in-lane whatever no
+   longer bites.
+
 ### Arm the watcher on the launching seat's ledger
 
 A takeover seat that arms `wave_watch` over a batch it did not launch carries the launching seat's
