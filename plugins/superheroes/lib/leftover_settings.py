@@ -281,10 +281,15 @@ def notice(result):
     count = len(files)
     side = "in-repo" if result.get("mode") == mode_registry.IN_REPO else "out-of-repo"
     noun = "copy" if count == 1 else "copies"
-    lines = ["This project's storage setting is %s, and %d old settings %s sit where it does not "
-             "read first, so a later read could pick one up by mistake:" % (side, count, noun)]
+    # axis: an old test-pilot profile kept in place is still the one test-pilot reads until it is retired, and the notice says so
+    tp = [e["path"] for e in files if e["family"] == "test-pilot" and os.path.basename(e["path"]) != _TEST_PILOT]
+    lines = ["This project's storage setting is %s, and %d old settings %s sit where it does not keep them; %s:" % (
+        side, count, noun, "test-pilot still reads the old profile marked below until it is retired, and any other "
+        "is not read first, so a later read could pick it up by mistake" if tp else
+        "none is read first, so a later read could pick one up by mistake")]
     for entry in files[:MAX_NOTICE_PATHS]:
-        lines.append("- " + _home_short(entry["path"]))
+        lines.append("- " + _home_short(entry["path"]) + (" (test-pilot reads this one; retiring it switches "
+                     "test-pilot to its newer settings file)" if entry["path"] in tp else ""))
     if count > MAX_NOTICE_PATHS:
         lines.append("- and %d more (configure lists them all)" % (count - MAX_NOTICE_PATHS))
     lines.append("To retire them, run /superheroes:configure and say yes at \"Retire leftover "

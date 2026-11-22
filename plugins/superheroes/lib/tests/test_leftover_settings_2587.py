@@ -941,8 +941,17 @@ def test_notice_wording_truncation_and_home(monkeypatch, tmp_path):
     text = ls.notice(one)
     assert text.splitlines()[0] == (
         "This project's storage setting is in-repo, and 1 old settings copy sit where it does not "
-        "read first, so a later read could pick one up by mistake:")
+        "keep them; none is read first, so a later read could pick one up by mistake:")
     assert text.splitlines()[1] == "- ~/.claude/a.md"
+    # axis: an old test-pilot profile kept in place is named as the one test-pilot still reads until it is retired
+    kept = {"mode": mr.GLOBAL, "digest": "x", "files": [
+        {"path": "/x/profile.md", "family": "test-pilot", "reads": "r"},
+        {"path": "/x/test-pilot.md", "family": "test-pilot", "reads": "r"}]}
+    kept_lines = ls.notice(kept).splitlines()
+    assert "test-pilot still reads the old profile marked below until it is retired" in kept_lines[0]
+    assert kept_lines[1] == ("- /x/profile.md (test-pilot reads this one; retiring it switches "
+                             "test-pilot to its newer settings file)")
+    assert kept_lines[2] == "- /x/test-pilot.md"
     assert text.splitlines()[-1].startswith("To retire them, run /superheroes:configure and say yes at")
     many = {"mode": mr.GLOBAL, "digest": "x", "files": [
         {"path": "/x/%02d.md" % i, "family": "core", "reads": "r"} for i in range(12)]}
