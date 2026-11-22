@@ -1050,7 +1050,8 @@ def check_caught_up(run, repo, payload):
             "the PR head %s is %d commit(s) behind its lower branch %s; catch the layer up: merge %s"
             " into the layer with a local --no-ff merge and push it, run the calibrated verify on"
             " the merged head, review the catch-up with a returning review-code session"
-            " (rubric/native-stacks.md, How a stack stays current), then run handback again"
+            " (rubric/native-stacks.md, How a stack stays current; a catch-up that fixes a code conflict on a layer"
+            " already handed back goes to the vet first), then run handback again"
             % (head_sha[:12], behind, base_ref, base_ref))
     return None
 
