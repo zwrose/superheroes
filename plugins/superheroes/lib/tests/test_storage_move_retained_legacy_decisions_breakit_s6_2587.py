@@ -29,7 +29,10 @@ def test_target_layer_activation_preserves_decisions_despite_legacy_store_copy(
     assert before["path"] == source
     assert Path(before["path"]).read_bytes() == expected
 
-    assert mm.execute(w.plan(mr.GLOBAL), root=w.root) == {"status": "done"}
+    result = mm.execute(w.plan(mr.GLOBAL), root=w.root)
+    assert result["status"] == "done" and set(result) <= {"status", "overwritten"}
+    # axis: the global decisions copy the carry overwrote keeps its prior bytes in the backup folder
+    assert [Path(o["backup"]).read_bytes() for o in result["overwritten"]] == [b'{"previousGlobalDecision": true}\n']
     assert mr.read_registry(w.cwd, w.root)["storageMode"] == mr.GLOBAL
     after = review_store.resolve(
         w.cwd, "decisions", legacy_root=w.rr, registry_root=w.root
