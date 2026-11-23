@@ -607,6 +607,13 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
         ph = _channel_derived_placeholders(phase, context)
         if phase == round_phases.P_SECOND_TEST:
             ph = _test_role_derived_placeholders(ph)
+            asked_again = (context.get("payload") or {}).get("askedAgain") if isinstance(
+                context.get("payload"), dict) else None
+            # axis: a re-sent order names the ids the earlier answer left out, on the file and the stdout channel alike — see bite-proof record silent_seat_ask_again_2618
+            if isinstance(asked_again, list) and asked_again:
+                ph["OUTPUT_CHANNEL_BLOCK"] = ph.get("OUTPUT_CHANNEL_BLOCK", "") + (
+                    "\n- This order is sent once more: your earlier answer named none of these items: %s. "
+                    "Return each of them, by its id." % ", ".join(str(i) for i in asked_again))
         if phase == round_phases.P_SCOPED:
             # The scoped template carries the line at the end of the conventions line, so a session with no notes renders byte-identically.
             focus_line = focus_context_line(ph)
@@ -884,13 +891,26 @@ ORDER_SHAPES = (
     _shape("seams", round_phases.P_SEAMS, CHANNEL_RUNNER, ("fullDiff", "slices"),
            result_kind="findings", empty_answer_valid=True),
     # dispatch-second-test.md: "Return only the items you were given, each once". As for the verifiers, no gate
-    # counts the items: an empty list that carries its read list grades ok (the same declared gap), and the fold
-    # records the silent seat (`second-test-silent`).
+    # counts the items: an empty list that carries its read list grades ok (the same declared gap). The fold asks
+    # the seat once more for a first empty answer in a round (`second-test-asked-again`, the next row) and records
+    # a second one as the silent seat (`second-test-silent`).
     _shape("second-test", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("findings",),
            result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
+           empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="second-test-asked-again"),
+    # the same order sent once more after a silent first answer: the same payload and `askedAgain`, the ids not
+    # answered. A second empty answer folds silent, so the review always reaches a terminal.
+    # axis: the payload `_advance` emits for a re-sent order is a declared shape — see bite-proof record silent_seat_ask_again_2618
+    _shape("second-test-asked-again", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("findings", "askedAgain"),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
            empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="second-test-silent"),
-    # dispatch-second-test-correction.md: "Return only the items you were given, each once" (_correction_payload)
+    # dispatch-second-test-correction.md: "Return only the items you were given, each once" (_correction_payload).
+    # The fold asks once more for a first empty answer in a round (`break-it-correction-asked-again`).
     _shape("second-test-correction", round_phases.P_SECOND_TEST, CHANNEL_RUNNER, ("correction", "findings"),
+           result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
+           empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="break-it-correction-asked-again"),
+    # the correction order sent once more: a second empty answer folds silent (`break-it-correction-silent`)
+    _shape("second-test-correction-asked-again", round_phases.P_SECOND_TEST, CHANNEL_RUNNER,
+           ("correction", "findings", "askedAgain"),
            result_kind="findings", empty_answer_valid=True, order_allows_empty=False,
            empty_handled_by=HANDLED_BY_FOLD, empty_fold_decision="break-it-correction-silent"),
     # dispatch-audits.md: "Return exactly one audit result for this target"

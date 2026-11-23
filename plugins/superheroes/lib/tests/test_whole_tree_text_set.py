@@ -133,6 +133,9 @@ EXEMPT = {
     _P + "test_round_driver_order_channel.py": (
         _NO_MARKDOWN_DIR + "walks a round run directory under a temp session",
         ('for root, _dirs, files in os.walk(rdir):',)),
+    _P + "test_second_test_ask_again_2618.py": (
+        _NO_MARKDOWN_DIR + "globs the order files of a temp run directory",
+        ('orders = glob.glob(os.path.join(r.dir, "round-1", "orders", RD.P_SECOND_TEST, "*.md"))',)),
     _P + "test_second_test_c1l7.py": (
         _NO_MARKDOWN_DIR + "globs the order and sidecar files of a temp run directory",
         ('(order,) = glob.glob(os.path.join(r.dir, "round-1", "orders", RD.P_SECOND_TEST, "*.md"))',

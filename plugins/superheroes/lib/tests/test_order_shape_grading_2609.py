@@ -138,7 +138,9 @@ FIXTURES = {
     "synthesis-repeat-none": _repeat_only_synthesis_answers(),
     "seams": _finding_answers(),
     "second-test": _held_item_answers(),
+    "second-test-asked-again": _held_item_answers(),
     "second-test-correction": _held_item_answers(),
+    "second-test-correction-asked-again": _held_item_answers(),
     "audits": {"minimal": dict(RULING, investigated=list(INV)), "empty": {"id": "f1", "ruling": None},
                "vacuous": {"ruling": None}},
     "audits-verify": {"minimal": dict(RULING, investigated=list(INV)), "empty": {"id": "f1", "ruling": None},
@@ -194,6 +196,12 @@ CENSUS_STATES = {
     "seams": _state(RP.P_SEAMS, slicePlan={"sliced": True, "slices": [{"id": "s1", "parts": [{"file": "a.py"}]}]}),
     "second-test": _state(RP.P_SECOND_TEST, _secondTestHeld=[_HELD]),
     "second-test-correction": _state(RP.P_SECOND_TEST, **{RD.TEST_CORRECTION_PENDING_FIELD: _CORRECTION}),
+    # the order sent once more: the round's latch for the logical phase is spent and the ids not answered ride along
+    "second-test-asked-again": _state(RP.P_SECOND_TEST, _secondTestHeld=[_HELD], _askAgainUnanswered=["f1"],
+                                      rounds={"1": {"askedAgain": ["second-test"]}}),
+    "second-test-correction-asked-again": _state(
+        RP.P_SECOND_TEST, _askAgainUnanswered=["k1"], rounds={"1": {"askedAgain": ["second-test-correction"]}},
+        **{RD.TEST_CORRECTION_PENDING_FIELD: _CORRECTION}),
     "audits": _state(RP.P_AUDITS, _auditTargets=[{"id": "t1"}]),
     "audits-verify": _state(RP.P_AUDITS, {"verifyCommand": "run the checks"}, _auditTargets=[{"id": "t1"}],
                             _verifyThen=RD.VERIFY_THEN_POST_AUDITS),
@@ -688,14 +696,30 @@ def test_g_rows_whose_empty_answer_the_order_forbids_declare_the_fold():
             assert "emptyHandledBy" not in row and "emptyFoldDecision" not in row, row["id"]
 
 
+def _logical_phase(row):
+    """The logical phase a row's answer is judged under: an asked-again row is the same order as its base row."""
+    return row["id"].removesuffix("-asked-again")
+
+
 @pytest.mark.parametrize("row", FOLD_ROWS, ids=_row_id)
 def test_g_empty_answer_to_the_emitted_ids_folds_silent(row):
-    # axis: the empty answer to the ids the real `_advance` emitted is recorded silent by the real `_fold`, and the fold goes on as it does for the minimal answer (G2)
-    state, ids, _emitted = _fold_emitted(row["id"], "empty")
-    assert state["rounds"]["1"].get("silentSeats") == [{"phase": row["id"], "grain": "answer", "items": len(ids)}]
+    # axis: the empty answer to the ids the real `_advance` emitted records the row's `emptyFoldDecision` by the real `_fold`: a row whose decision is an asked-again kind keeps the step and the items, the others (the verifiers, and the asked-again rows) record the silent seat and the fold goes on as it does for the minimal answer (G2, #2618)
+    state, ids, emitted = _fold_emitted(row["id"], "empty")
     recorded = [d for d in state["decisions"] if d["kind"] == row["emptyFoldDecision"]]
     assert len(recorded) == 1, state["decisions"]
     assert "%d item(s)" % len(ids) in recorded[0]["detail"], recorded[0]
+    if row["emptyFoldDecision"].endswith("-asked-again"):
+        assert "silentSeats" not in state["rounds"]["1"], state["rounds"]["1"]["silentSeats"]
+        assert state["rounds"]["1"]["askedAgain"] == [_logical_phase(row)]
+        assert state["step"] == emitted["step"] == row["phase"]
+        assert state["_askAgainUnanswered"] == ids
+        for held in ("_secondTestHeld", RD.TEST_CORRECTION_PENDING_FIELD):
+            assert state.get(held) == emitted.get(held), held
+        return
+    expected = {"phase": _logical_phase(row), "grain": "answer", "items": len(ids)}
+    if _logical_phase(row) != row["id"]:
+        expected["askedAgain"] = True
+    assert state["rounds"]["1"].get("silentSeats") == [expected]
     minimal_state, _ids, _before = _fold_emitted(row["id"], "minimal")
     assert state["step"] == minimal_state["step"], (state["step"], minimal_state["step"])
 
@@ -706,16 +730,16 @@ def test_g_minimal_answer_to_the_emitted_ids_is_not_silent(row):
     state, ids, emitted = _fold_emitted(row["id"], "minimal")
     assert "silentSeats" not in state["rounds"]["1"], state["rounds"]["1"]["silentSeats"]
     assert not [d for d in state["decisions"] if d["kind"] == row["emptyFoldDecision"]]
-    if row["id"] == "second-test":
+    if _logical_phase(row) == "second-test":
         assert state["rounds"]["1"]["secondTest"]["noTest"] == [
             {"findingKey": RD._finding_identity_key(held["finding"]), "reason": "no-block"}
             for held in emitted["_secondTestHeld"]]
-    elif row["id"] == "second-test-correction":
+    elif _logical_phase(row) == "second-test-correction":
         assert state["rounds"]["1"]["testCorrection"] == [
             {"findingKey": item["findingKey"], "outcome": "none", "reason": "no-block"}
             for item in emitted[RD.TEST_CORRECTION_PENDING_FIELD]["items"]]
     else:
-        assert row["id"] == "verifiers", "no assertion on the fold of a new forbidden-empty row: %s" % row["id"]
+        assert _logical_phase(row) == "verifiers", "no assertion on the fold of a new forbidden-empty row: %s" % row["id"]
         assert state["rounds"]["1"]["verify"].get("unverified") in (None, []), state["rounds"]["1"]["verify"]
 
 

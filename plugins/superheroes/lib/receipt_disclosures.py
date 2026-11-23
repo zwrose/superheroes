@@ -794,9 +794,11 @@ def _round_verifier_synthesis_prose(rkey, declared, degraded_out):
             who = ("verifier seat(s) %s" % ", ".join(str(s) for s in seats)
                    if row.get("grain") == "seat" and isinstance(seats, list)
                    else "the %s seat" % row.get("phase"))
+            tail = ("after the seat was asked once more" if row.get("askedAgain") is True
+                    else "and nothing was re-asked")
             degraded_out.append(
                 "silent-seat (round %s): %s answered none of its %s item(s); they are recorded as unanswered "
-                "(unverified or no new test) and nothing was re-asked" % (rkey, who, row.get("items")))
+                "(unverified or no new test) %s" % (rkey, who, row.get("items"), tail))
 
 
 def _round_sweeps_prose(rkey, declared, degraded_out):
