@@ -28,7 +28,9 @@ release, whatever its type.
 
 ### Release day
 
-- **Land a pre-release doc pass before the release PR is clickable.** Assemble the upgrade notes
+- **Land a pre-release doc pass before the release PR is clickable.** The doc-pass PR is open and
+  reviewed before anyone asks the owner for the release word, and its sheet goes to the owner
+  together with the release ask. Assemble the upgrade notes
   into the version being cut: from the repository root, run
   `scripts/pinned-python -B plugins/superheroes/lib/transition_notes.py assemble --plugin-root plugins/superheroes --version <X.Y.Z>`.
   It moves every note file in `plugins/superheroes/transition-notes/` (all but its README) into
