@@ -64,10 +64,12 @@ def _of_kind(state, kind):
     return [d for d in state["decisions"] if d["kind"] == kind]
 
 
-def _assert_decision(state, kind, count):
+def _assert_decision(state, kind, count, asked_again=False):
+    # #2618: a second-test or correction seat is asked once more before it is recorded silent, so its row says so
     (decision,) = _of_kind(state, kind)
     assert ("%d item(s)" % count) in decision["detail"], decision
-    assert "unanswered" in decision["detail"] and "nothing was re-asked" in decision["detail"], decision
+    tail = "after the seat was asked once more" if asked_again else "nothing was re-asked"
+    assert "unanswered" in decision["detail"] and tail in decision["detail"], decision
 
 
 def _row(phase, items, grain="answer", **extra):
@@ -100,18 +102,20 @@ def _answer(item_id, suggestion=_NO_BLOCK):
 
 
 def test_second_test_an_empty_answer_is_silent():
-    state = _fold_second(_held_state(2), [])
-    assert _silent(state) == [_row("second-test", 2)]
-    _assert_decision(state, "second-test-silent", 2)
+    # #2618: the first silent answer in a round is asked again; the second is the one recorded silent
+    state = _fold_second(_fold_second(_held_state(2), []), [])
+    assert _silent(state) == [_row("second-test", 2, askedAgain=True)]
+    _assert_decision(state, "second-test-silent", 2, asked_again=True)
     # the same step and the same per-item rows as ever: the items go on with the test they have
     assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True
     assert [r["reason"] for r in state["rounds"]["1"]["secondTest"]["noTest"]] == ["no-result", "no-result"]
 
 
 def test_second_test_an_answer_naming_only_unknown_ids_is_silent():
-    state = _fold_second(_held_state(1), [_answer("v99"), _answer("nope")])
-    assert _silent(state) == [_row("second-test", 1)]
-    _assert_decision(state, "second-test-silent", 1)
+    unknown = [_answer("v99"), _answer("nope")]
+    state = _fold_second(_fold_second(_held_state(1), unknown), unknown)
+    assert _silent(state) == [_row("second-test", 1, askedAgain=True)]
+    _assert_decision(state, "second-test-silent", 1, asked_again=True)
     assert state["rounds"]["1"]["secondTest"]["unmatched"] == ["nope", "v99"]
 
 
@@ -139,20 +143,33 @@ def test_second_test_a_held_id_answered_twice_is_named_not_silent():
 
 # ---- second-test: every entry path reaches it -----------------------------------------------------------------------
 
+def _round_two_after_twice(tmp_path, results):
+    """`C7._round_two_after` for a seat answering twice: the first silent answer is asked again (#2618), so the
+    same order comes back once more and the seat's second answer is the one the fold takes."""
+    r = C7.Round(tmp_path, second_result=results)
+    n = r.to_second_test()
+    r.submit(n, r.second_result(n["payload"]))
+    again = r.to_second_test()
+    assert again["payload"].get("askedAgain"), again["payload"]
+    r.submit(again, r.second_result(again["payload"]))
+    return r.state(), r
+
+
 def test_second_test_hand_submit_of_an_empty_answer_is_silent(tmp_path):
-    state, _r = C7._round_two_after(tmp_path, lambda payload: [])
-    assert _silent(state) == [_row("second-test", 1)]
-    _assert_decision(state, "second-test-silent", 1)
+    state, _r = _round_two_after_twice(tmp_path, lambda payload: [])
+    assert _silent(state) == [_row("second-test", 1, askedAgain=True)]
+    _assert_decision(state, "second-test-silent", 1, asked_again=True)
     assert state["rounds"]["1"]["secondTest"]["noTest"] == [{"findingKey": C7._key(), "reason": "no-result"}]
     degraded = RD.build_receipt(state)["degraded"]
     assert any(line.startswith("silent-seat (round 1): the second-test seat answered none of its 1 item(s)")
+               and line.endswith("after the seat was asked once more")
                for line in degraded), degraded
 
 
 def test_second_test_hand_submit_of_only_unknown_ids_is_silent(tmp_path):
-    state, _r = C7._round_two_after(tmp_path, lambda payload: [
+    state, _r = _round_two_after_twice(tmp_path, lambda payload: [
         dict(e, id="v99") for e in C7.Round._default_result(payload)])
-    assert _silent(state) == [_row("second-test", 1)]
+    assert _silent(state) == [_row("second-test", 1, askedAgain=True)]
     assert state["rounds"]["1"]["secondTest"]["unmatched"] == ["v99"]
 
 
@@ -160,13 +177,13 @@ def test_second_test_hand_submit_the_fold_after_a_silent_answer_equals_the_fold_
     # the only differences: the silentSeats row, its decision, and the noTest reason (`no-result` vs `no-block`)
     (tmp_path / "silent").mkdir()
     (tmp_path / "named").mkdir()
-    silent, _ = C7._round_two_after(tmp_path / "silent", lambda payload: [])
+    silent, _ = _round_two_after_twice(tmp_path / "silent", lambda payload: [])
     named, _ = C7._round_two_after(tmp_path / "named", lambda payload: [
         dict(e, suggestion=_NO_BLOCK) for e in C7.Round._default_result(payload)])
     # a minimal answer for an item with no new test is graded `no-block` and is not silent
     assert "silentSeats" not in named["rounds"]["1"]
     assert named["rounds"]["1"]["secondTest"]["noTest"] == [{"findingKey": C7._key(), "reason": "no-block"}]
-    assert _silent(silent) == [_row("second-test", 1)]
+    assert _silent(silent) == [_row("second-test", 1, askedAgain=True)]
     assert silent["step"] == named["step"] == RD.P_VERIFIERS
     assert silent["_secondTestPass"] is named["_secondTestPass"] is True
 
@@ -178,7 +195,8 @@ def test_second_test_hand_submit_the_fold_after_a_silent_answer_equals_the_fold_
     assert silent_second.pop("noTest")[0]["reason"] == "no-result"
     assert named_second.pop("noTest")[0]["reason"] == "no-block"
     assert silent_second == named_second
-    assert [d["kind"] for d in silent["decisions"] if d["kind"] != "second-test-silent"] == \
+    assert [d["kind"] for d in silent["decisions"]
+            if d["kind"] not in ("second-test-silent", "second-test-asked-again")] == \
         [d["kind"] for d in named["decisions"]]
 
 
@@ -217,9 +235,10 @@ def _second_test_run_loop(tmp_path, answer):
 
 
 def test_second_test_run_loop_an_empty_answer_is_silent(tmp_path):
+    # the seam answers `[]` on every call, so the seat is asked once more and is then recorded silent
     state = _second_test_run_loop(tmp_path, lambda ctx: [])
-    assert _silent(state) == [_row("second-test", 1)]
-    _assert_decision(state, "second-test-silent", 1)
+    assert _silent(state) == [_row("second-test", 1, askedAgain=True)]
+    _assert_decision(state, "second-test-silent", 1, asked_again=True)
     assert state["rounds"]["1"]["secondTest"]["noTest"][0]["reason"] == "no-result"
 
 
@@ -229,33 +248,36 @@ def test_second_test_run_loop_a_named_answer_is_not_silent(tmp_path):
     assert state["rounds"]["1"]["secondTest"]["noTest"][0]["reason"] == "no-block"
 
 
-def _second_test_advance(tmp_path, payload_for):
-    """advance, with the second-test seat's result ``payload_for(pending findings)`` landed for it."""
+def _second_test_advance(tmp_path, payload_for, times=1):
+    """advance, with the second-test seat's result ``payload_for(pending findings)`` landed for it, ``times`` over:
+    a silent first answer is asked again (#2618), so the same order is pending once more after the first fold."""
     head = IT.make_checkout(IT._fixture_repo(tmp_path, "s"))
     session_dir, gitdir, head_path = IT._bootstrap(
         tmp_path, head_sha=head, sliced=True, fixerVendor="cursor",
         seatMap=dict(IT.SEAT_MAP, hostFamily="anthropic"), breakItInterpreter=shlex.quote(sys.executable))
     IT._drive_to_phase(session_dir, gitdir, [IT._test_finding()], head_path, RD.P_SECOND_TEST)
-    state = IT._state(session_dir)
-    pend = state["pending"]
-    roster, reason = RA.roster_for(RD.P_SECOND_TEST, state, state["config"])
-    assert reason is None
-    slots = IT._slots_of(roster)
-    IT._write_dispatch_manifest(session_dir, pend, slots, IT._auditor_vendor_for(state))
-    for seat, occurrence in slots:
-        IT._land(session_dir, state, pend, seat, {"findings": payload_for(pend["payload"]["findings"])},
-                 occurrence=occurrence)
-        assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
-    out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
-    assert out["ok"], out
-    assert out["folded"]["phase"] == RD.P_SECOND_TEST, out
+    for _ in range(times):
+        state = IT._state(session_dir)
+        pend = state["pending"]
+        assert pend["phase"] == RD.P_SECOND_TEST, pend
+        roster, reason = RA.roster_for(RD.P_SECOND_TEST, state, state["config"])
+        assert reason is None
+        slots = IT._slots_of(roster)
+        IT._write_dispatch_manifest(session_dir, pend, slots, IT._auditor_vendor_for(state))
+        for seat, occurrence in slots:
+            IT._land(session_dir, state, pend, seat, {"findings": payload_for(pend["payload"]["findings"])},
+                     occurrence=occurrence)
+            assert IT._record(session_dir, seat, occurrence=occurrence)["ok"]
+        out = RD.cmd_advance(session_dir, git=IT._fake_git(gitdir))
+        assert out["ok"], out
+        assert out["folded"]["phase"] == RD.P_SECOND_TEST, out
     return IT._state(session_dir)
 
 
 def test_second_test_advance_an_empty_answer_is_silent(tmp_path):
-    state = _second_test_advance(tmp_path, lambda items: [])
-    assert _silent(state) == [_row("second-test", 1)]
-    _assert_decision(state, "second-test-silent", 1)
+    state = _second_test_advance(tmp_path, lambda items: [], times=2)
+    assert _silent(state) == [_row("second-test", 1, askedAgain=True)]
+    _assert_decision(state, "second-test-silent", 1, asked_again=True)
     assert state["rounds"]["1"]["secondTest"]["noTest"][0]["reason"] == "no-result"
 
 
@@ -297,18 +319,22 @@ def _correction_row(state):
 
 
 def test_correction_an_empty_answer_is_silent_at_the_fold(tmp_path):
+    # #2618: the first silent answer in a round is asked again; the second is the one recorded silent
     w = _correction_world(tmp_path)
     w.fold(RD.P_SECOND_TEST, {"findings": []})
-    assert _silent(w.state, "2") == [_row("second-test-correction", 1)]
-    _assert_decision(w.state, "break-it-correction-silent", 1)
+    w.fold(RD.P_SECOND_TEST, {"findings": []})
+    assert _silent(w.state, "2") == [_row("second-test-correction", 1, askedAgain=True)]
+    _assert_decision(w.state, "break-it-correction-silent", 1, asked_again=True)
     assert _correction_row(w.state) == [{"findingKey": w.key, "outcome": "none", "reason": "no-result"}]
     assert w.state["step"] == RD.P_VERIFY  # the same step an unanswered correction always took
 
 
 def test_correction_an_answer_naming_only_unknown_ids_is_silent(tmp_path):
     w = _correction_world(tmp_path)
-    w.fold(RD.P_SECOND_TEST, {"findings": [{"id": "stranger", "suggestion": C1._block_text(C10B.CORRECTED_TEST)}]})
-    assert _silent(w.state, "2") == [_row("second-test-correction", 1)]
+    stranger = {"findings": [{"id": "stranger", "suggestion": C1._block_text(C10B.CORRECTED_TEST)}]}
+    w.fold(RD.P_SECOND_TEST, stranger)
+    w.fold(RD.P_SECOND_TEST, stranger)
+    assert _silent(w.state, "2") == [_row("second-test-correction", 1, askedAgain=True)]
     assert _correction_row(w.state) == [{"findingKey": w.key, "outcome": "none", "reason": "no-result"}]
 
 
@@ -382,8 +408,9 @@ def test_correction_run_loop_an_empty_answer_is_silent(tmp_path):
                        verify_runner=lambda command, rnd: "pass")
     seams["panel_diff"] = lambda config, head: (TRD.DIFF, None)
     _receipt, state = w.run_loop(seams)
-    assert _silent(state, "2") == [_row("second-test-correction", 1)]
-    _assert_decision(state, "break-it-correction-silent", 1)
+    # the seam answers `[]` on every call, so the seat is asked once more and is then recorded silent
+    assert _silent(state, "2") == [_row("second-test-correction", 1, askedAgain=True)]
+    _assert_decision(state, "break-it-correction-silent", 1, asked_again=True)
     assert state["rounds"]["2"]["testCorrection"] == [{"findingKey": w.key, "outcome": "none",
                                                        "reason": "no-result"}]
 
@@ -401,10 +428,17 @@ def test_correction_hand_submit_of_an_empty_answer_is_silent(tmp_path):
     out = RD.cmd_submit(str(session), n["phase"], n["attempt"], n["expectedStateHash"],
                         {"findings": [], "reviewerVendor": vendor})
     assert out["ok"] is True, out
+    # #2618: the first silent answer is asked again: the same order comes back, naming the items not answered
+    again = RD.cmd_next(str(session))
+    assert again["ok"] is True and again["phase"] == RD.P_SECOND_TEST and again["payload"]["correction"] is True, again
+    assert again["payload"]["askedAgain"] == [w.key], again["payload"]
+    out = RD.cmd_submit(str(session), again["phase"], again["attempt"], again["expectedStateHash"],
+                        {"findings": [], "reviewerVendor": vendor})
+    assert out["ok"] is True, out
     ok, state = RD.load_state(str(session))
     assert ok
-    assert _silent(state, "2") == [_row("second-test-correction", 1)]
-    _assert_decision(state, "break-it-correction-silent", 1)
+    assert _silent(state, "2") == [_row("second-test-correction", 1, askedAgain=True)]
+    _assert_decision(state, "break-it-correction-silent", 1, asked_again=True)
     assert state["rounds"]["2"]["testCorrection"] == [{"findingKey": w.key, "outcome": "none",
                                                        "reason": "no-result"}]
 
@@ -421,20 +455,22 @@ def test_correction_advance_an_empty_answer_is_silent(tmp_path):
     RD.save_state(str(session), w.state)
     n = RD.cmd_next(str(session))
     assert n["ok"] is True and n["phase"] == RD.P_SECOND_TEST and n["payload"]["correction"] is True, n
-    state = IT._state(str(session))
-    pend = state["pending"]
-    roster, reason = RA.roster_for(RD.P_SECOND_TEST, state, state["config"])
-    assert reason is None
-    slots = IT._slots_of(roster)
-    IT._write_dispatch_manifest(str(session), pend, slots, IT._auditor_vendor_for(state))
-    for seat, occurrence in slots:
-        IT._land(str(session), state, pend, seat, {"findings": []}, occurrence=occurrence)
-        assert IT._record(str(session), seat, occurrence=occurrence)["ok"]
-    out = RD.cmd_advance(str(session), git=IT._fake_git(str(gitdir)))
-    assert out["ok"] and out["folded"]["phase"] == RD.P_SECOND_TEST, out
+    for _ in range(2):  # #2618: the first silent answer is asked again, so the same order is pending once more
+        state = IT._state(str(session))
+        pend = state["pending"]
+        assert pend["phase"] == RD.P_SECOND_TEST and pend["payload"]["correction"] is True, pend
+        roster, reason = RA.roster_for(RD.P_SECOND_TEST, state, state["config"])
+        assert reason is None
+        slots = IT._slots_of(roster)
+        IT._write_dispatch_manifest(str(session), pend, slots, IT._auditor_vendor_for(state))
+        for seat, occurrence in slots:
+            IT._land(str(session), state, pend, seat, {"findings": []}, occurrence=occurrence)
+            assert IT._record(str(session), seat, occurrence=occurrence)["ok"]
+        out = RD.cmd_advance(str(session), git=IT._fake_git(str(gitdir)))
+        assert out["ok"] and out["folded"]["phase"] == RD.P_SECOND_TEST, out
     after = IT._state(str(session))
-    assert _silent(after, "2") == [_row("second-test-correction", 1)]
-    _assert_decision(after, "break-it-correction-silent", 1)
+    assert _silent(after, "2") == [_row("second-test-correction", 1, askedAgain=True)]
+    _assert_decision(after, "break-it-correction-silent", 1, asked_again=True)
     assert after["rounds"]["2"]["testCorrection"] == [{"findingKey": w.key, "outcome": "none",
                                                        "reason": "no-result"}]
 
