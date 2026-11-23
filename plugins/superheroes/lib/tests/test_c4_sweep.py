@@ -649,6 +649,8 @@ def test_s5_the_census_every_finding_staged_in_round_1_ends_verified_refuted_or_
     state = _verify(world, {"Held": MISSED_PATH, "Gone": REFUTED})
     if state["step"] == RD.P_SECOND_TEST:
         RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
+        # the first silent answer is asked again (#2618)
+        RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
     assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True
     state = _verify(world)  # the second test pass: the held finding is confirmed
     assert state["step"] == RD.P_SWEEP, state["step"]
@@ -716,6 +718,8 @@ def test_s5_a_record_write_park_during_the_second_test_pass_keeps_the_held_back_
     state = _verify(world, {"Held": MISSED_PATH})
     if state["step"] == RD.P_SECOND_TEST:
         RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
+        # the first silent answer is asked again (#2618)
+        RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
     # the state in the second-test window: the verifiers' second pass, the held finding staged, the survivors carried
     assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True
     assert [f["title"] for f in state["_toVerify"]] == ["Held"]
@@ -780,6 +784,8 @@ def test_s5_a_record_write_park_after_the_second_test_pass_finishes_keeps_the_su
             staged["breakItRun"] = {"outcome": "passed"}
     state = _verify(world, {"Held": MISSED_PATH})
     if state["step"] == RD.P_SECOND_TEST:
+        RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
+        # the first silent answer is asked again (#2618)
         RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
     state = _verify(world)  # the second pass confirms "Held"
     assert state["step"] == RD.P_SYNTHESIS

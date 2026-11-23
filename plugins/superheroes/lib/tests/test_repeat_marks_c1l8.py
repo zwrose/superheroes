@@ -921,6 +921,7 @@ def _held_round(state, raws, held_title, table):
     _fold_pass(state, dict(table, **{held_title: _MISSED_PATH}))
     assert state["step"] == RD.P_SECOND_TEST and state["_secondTestHeld"], "premise: pass 1 holds the finding"
     RD._fold_second_test(state, state["config"], {"findings": []})
+    RD._fold_second_test(state, state["config"], {"findings": []})  # the first silent answer is asked again (#2618)
     assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True, "premise: pass 2 is pending"
     assert [f["title"] for f in state["_toVerify"]] == [held_title]
 

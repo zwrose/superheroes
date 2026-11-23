@@ -3764,6 +3764,9 @@ def _advance(state, config):
             payload = {"findings": [_second_test_entry(row)
                                     for row in state.get("_secondTestHeld") or []
                                     if isinstance(row, dict)]}
+        unanswered = state.get(ASK_AGAIN_UNANSWERED_FIELD)
+        if isinstance(unanswered, list) and unanswered:
+            payload["askedAgain"] = list(unanswered)  # the order is sent once more: these ids were not answered
     elif step == P_SWEEP:
         payload = _sweep_payload(state)
     elif step == P_AUDITS:
@@ -4584,6 +4587,39 @@ def _recorded_verifier_vendor(state, session_dir):
 
 
 SILENT_SEATS_FIELD = "silentSeats"
+ASKED_AGAIN_FIELD = "askedAgain"  # the round's latch: the logical second-test phases whose silent seat was asked once more
+ASK_AGAIN_UNANSWERED_FIELD = "_askAgainUnanswered"  # transient: the ids the re-sent order names; never outlives the fold that answers it
+
+
+def _answer_is_silent(item_ids, answered_ids):
+    """The one silence rule: the order named items and no answered id is among them."""
+    named = set(item_ids)
+    return bool(item_ids) and not any(rid in named for rid in answered_ids)
+
+
+def _latch_spent(state, phase):
+    """True when the round's one-shot re-ask for the logical ``phase`` has been spent. Read off the persisted round
+    record, so a session reloaded from `state.json` reads it spent."""
+    spent = (state.get("rounds") or {}).get(str(state.get("round")), {}).get(ASKED_AGAIN_FIELD)
+    return isinstance(spent, list) and phase in spent
+
+
+def _ask_again_once(state, phase, kind, item_ids, answered_ids):
+    """The first silent answer in a round for the logical ``phase`` (``second-test`` or ``second-test-correction``) is
+    not folded: the round's one-shot latch for that phase is spent, a decision is recorded, and the step stays where
+    it is so the same order is sent once more with the ids not answered named. Returns True when it did; every
+    other answer (not silent, or the latch already spent) returns False and records nothing."""
+    # axis: only a silent answer is asked again — see bite-proof record silent_seat_ask_again_2618
+    if not _answer_is_silent(item_ids, answered_ids):
+        return False
+    # axis: the latch is spent once per round per logical phase, so a second silence folds and the review reaches a terminal — see bite-proof record silent_seat_ask_again_2618
+    if _latch_spent(state, phase):
+        return False
+    _record_round_append(state, ASKED_AGAIN_FIELD, phase)
+    _decision(state, kind, "the %s seat answered none of its %d item(s); the same order is sent once more"
+              % (phase, len(item_ids)))
+    state[ASK_AGAIN_UNANSWERED_FIELD] = list(item_ids)
+    return True
 
 
 def _record_silent_seat(state, phase, kind, item_ids, answered_ids, seats=None, ordered=None):
@@ -4592,7 +4628,9 @@ def _record_silent_seat(state, phase, kind, item_ids, answered_ids, seats=None, 
     ``answer``-grain row, silent when the order named items and no answered id is among them); with ``seats``
     (the verifier seats the assembly found silent, ``ordered`` the ids they were ordered) one ``seat``-grain row
     is recorded when the list is non-empty. Records the row and the decision and changes nothing else: the fold
-    goes on exactly as it would, the items are recorded as unanswered, and nothing is re-asked."""
+    goes on exactly as it would and the items are recorded as unanswered. A second-test seat is asked once more
+    before this is reached (`_ask_again_once`); its row says so when the latch was spent."""
+    asked_again = False
     if seats is not None:
         if not seats:
             return False
@@ -4600,13 +4638,16 @@ def _record_silent_seat(state, phase, kind, item_ids, answered_ids, seats=None, 
         who = "verifier seat(s) %s answered none of the %d item(s) they were ordered" % (
             ", ".join(sorted(seats)), ordered)
     else:
-        named = set(item_ids)
-        if not item_ids or any(rid in named for rid in answered_ids):
+        if not _answer_is_silent(item_ids, answered_ids):
             return False
         row = {"phase": phase, "grain": "answer", "items": len(item_ids)}
         who = "the %s seat answered none of its %d item(s)" % (phase, len(item_ids))
+        if _latch_spent(state, phase):
+            row["askedAgain"] = True
+            asked_again = True
     _record_round_append(state, SILENT_SEATS_FIELD, row)
-    _decision(state, kind, "%s; they are recorded as unanswered and nothing was re-asked" % who)
+    _decision(state, kind, "%s; they are recorded as unanswered %s" % (
+        who, "after the seat was asked once more" if asked_again else "and nothing was re-asked"))
     return True
 
 
@@ -4932,6 +4973,7 @@ def _fold_second_test(state, config, artifact, session_dir=None):
     """The second-test seat's result: for each held finding, the result finding with the same staged id whose
     `suggestion` is a break-it block supplies the one more test, run as the panel's tests are; any other held
     finding goes to the verifiers' second pass with the test it has. Nothing else of a result is taken."""
+    state.pop(ASK_AGAIN_UNANSWERED_FIELD, None)  # the re-sent order's transient never outlives the fold that answers it
     rows = state.get("_secondTestHeld")
     rows = [row for row in rows if isinstance(row, dict) and isinstance(row.get("finding"), dict)] \
         if isinstance(rows, list) else []
@@ -4945,6 +4987,10 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             duplicated.add(rid)
         by_id[rid] = result
     held_ids = {row["finding"].get("id") for row in rows}
+    # axis: the first silent answer in a round is not folded: the same order is sent once more, before any other side effect of the fold — see bite-proof record silent_seat_ask_again_2618
+    if _ask_again_once(state, "second-test", "second-test-asked-again",
+                       [row["finding"].get("id") for row in rows], list(by_id)):
+        return
     # axis: a second-test answer that names none of the held ids (a duplicated one is named) is recorded silent and folds as it would — see bite-proof record silent_seat_fold_2617
     _record_silent_seat(state, "second-test", "second-test-silent",
                         [row["finding"].get("id") for row in rows], list(by_id))
@@ -7714,7 +7760,8 @@ def _fold_test_correction(state, config, artifact):
     """The correction seat's result. A result for the item at the same `path` whose `suggestion` is a
     block that was not redacted is the corrected test: a second restore-only step commits it. Anything
     else is no correction and the restored test stands. Either way the finding's correction is used."""
-    pending = state.pop(TEST_CORRECTION_PENDING_FIELD)
+    state.pop(ASK_AGAIN_UNANSWERED_FIELD, None)  # the re-sent order's transient never outlives the fold that answers it
+    pending = state.get(TEST_CORRECTION_PENDING_FIELD)
     results = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     by_id, duplicated = {}, set()
     for result in results:
@@ -7724,6 +7771,11 @@ def _fold_test_correction(state, config, artifact):
         if rid in by_id:
             duplicated.add(rid)
         by_id[rid] = result
+    # axis: the correction form has its own latch, keyed on its own logical phase, and the pending correction stays as it was until the answer is taken — see bite-proof record silent_seat_ask_again_2618
+    if _ask_again_once(state, "second-test-correction", "break-it-correction-asked-again",
+                       [item["findingKey"] for item in pending["items"]], list(by_id)):
+        return
+    state.pop(TEST_CORRECTION_PENDING_FIELD)
     # axis: a correction answer that names none of its items is recorded silent and folds as it would — see bite-proof record silent_seat_fold_2617
     _record_silent_seat(state, "second-test-correction", "break-it-correction-silent",
                         [item["findingKey"] for item in pending["items"]], list(by_id))

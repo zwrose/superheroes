@@ -267,6 +267,7 @@ def test_t2_the_extra_audit_round_restores_then_verifies_then_hands_back_open(tm
     w.restore()
     assert w.committed() == ROLE_TEST and w.state["step"] == RD.P_SECOND_TEST
     w.fold(RD.P_SECOND_TEST, {"findings": []})
+    w.fold(RD.P_SECOND_TEST, {"findings": []})  # the first silent answer is asked again (#2618)
     assert w.state["step"] == RD.P_VERIFY and w.state["_verifyThen"] == RD.VERIFY_THEN_POST_AUDITS
     assert w.step()["payload"]["restoredHead"] == w.head()
     w.verify(head=w.head())
@@ -480,6 +481,7 @@ def test_t3_a_correction_that_returned_nothing_is_used_all_the_same(tmp_path):
     w.audit()
     w.restore()
     w.fold(RD.P_SECOND_TEST, {"findings": []})
+    w.fold(RD.P_SECOND_TEST, {"findings": []})  # the first silent answer is asked again (#2618)
     assert w.state["fixBatch"][0]["testCorrection"] == {"round": 2, "used": True, "outcome": "none"}
     assert w.state["step"] == RD.P_VERIFY and "break-it-correction-none" in _decisions(w.state)
     assert w.state["rounds"]["2"]["testCorrection"] == [
