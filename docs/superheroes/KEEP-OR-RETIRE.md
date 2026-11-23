@@ -1219,7 +1219,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 #### E1 — Issue contract checker (three-slot skeleton, anchor, DoD bar)
 
-- **Component.** The advisory build-ready anchor-shape checker (`lib/issue_contract.py`) and its
+- **Component.** The advisory build-ready checker (`lib/issue_contract.py`: anchor shape, and since #2619 an issue's native blocker edges) and its
   reference spine (`issue-contract.md`); it costs charter maintenance and an extra read at filing
   and vet time.
 - **Start date.** 2026-09-15.
