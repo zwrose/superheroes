@@ -82,7 +82,8 @@ Automated via release-please (see [RELEASING.md](RELEASING.md)). Merge
 Conventional-Commit work to `main`; release-please maintains an open release PR that
 bumps both `plugin.json` files + `version.txt` and regenerates the CHANGELOG. **Merging that
 release PR** cuts the `superheroes-vX.Y.Z` tag + GitHub Release. Do not hand-edit the
-version or hand-cut a release.
+version or hand-cut a release. Before asking the owner for the release word, follow
+[Release day](RELEASING.md#release-day) on the pre-release doc pass; that rule lives only there.
 
 ## Commits — Conventional Commits
 
