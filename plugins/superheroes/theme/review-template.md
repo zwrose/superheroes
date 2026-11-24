@@ -340,8 +340,8 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   on your list", a collector number) instead of carrying that decision's options. It is a best-effort
   pattern scan, so the rule binds the advisor whether or not the scan catches a wording. The item's
   number may be dashed (`2273-1`, a string `N-M`) and is shown on the card exactly as written. A card
-  that carries left-for-owner findings (below) shows them as its last section, `The review findings
-  this decides`.
+  that carries left-for-owner findings (below) shows them as its last section, titled by the
+  `carriedTitle` word.
 - A question stands on its own (`skills/showrunner/reference/owner-decisions.md` § The per-item
   spine). The builder refuses, with the token `dependent-question`, a card whose option or
   recommendation text depends on another card or collector item ("a if 1435-1 is fix-before-merge",
