@@ -91,7 +91,11 @@ The advisor's input is one JSON object; any key not listed is refused.
                  order. options is "none" (nothing is left to decide: the page's Accept and Discuss), a list of options, or
                  an object giving each of keep-it, fix-in-a-follow-up and fix-before-merge, and no other key, a non-empty
                  string: this finding's consequence for that option (the words' three options carry them). The bare string
-                 "leftover" is refused.
+                 "leftover" is refused. A value has a third shape, {"carriedBy": <list-item number>}: the finding gets no card
+                 of its own and no decided-for-you entry. It is listed under the named card's carriedTitle section, whose
+                 answer and the merge verdict cover it. A carriedBy that names no card is refused, and so is one beside
+                 another key or beside a second alias entry for the same finding. Accounting to its key with
+                 {"leftover": key} stays allowed.
   craftDeterminations
                  Optional. An object that re-grades left-for-owner findings as craft: a key names a finding as a leftovers key
                  does, and a value is {ground, reason}, both non-empty strings (the owner-vs-craft line's ground, and one line
@@ -105,7 +109,8 @@ The advisor's input is one JSON object; any key not listed is refused.
                  bullet each (the "What you're accepting" fold's routine notes).
   collectorItems Optional list. A decision from the owner's list that concerns this one PR, answered on this PR's sheet.
                  Each is {number, title, why, context, options, ifLeft, recommendation}, all required: number the collector
-                 item's number (an integer, 1 or more, unique among the entries); title, why, context and ifLeft non-empty
+                 item's number (an integer 1 or more, or a string N or N-M with no leading zeros, unique across both
+                 spellings, and shown on the card's label as written); title, why, context and ifLeft non-empty
                  strings (the question, why it is the owner's, what happened, and what leaving it costs); options a list of
                  at least 1 option, whose ids are a, b, c, ... in that order ("none" and an empty list are refused);
                  recommendation {text, reason, optionId} with optionId required and naming one of the options. Each lands as
@@ -147,7 +152,7 @@ over each card's option labels and consequences and its recommendation's text an
 recognizing: a choice made on another card or item ("only if you pick b on ..."), "depending on your answer" or "the ruling ...",
 "the same choice as ...", a collector, decision or list item, or a card or question, named by number, a bare dashed reference
 such as 1435-1, "the other card" or "the other question", and the number of another collector item on the same sheet unless it
-is written as a PR (#N, PR N). A card's own collector number is not another question. On a card with no options, text the
+is written as a PR (#N, PR N). A card's own collector number, plain or dashed, in any of these forms, is not another question. On a card with no options, text the
 list-item pointer check already refuses is reported by that check alone.
 
 A spec PR has no review record (review-crew never reviews a spec), so its sheet is built from the spec's own artifacts, chosen
@@ -293,6 +298,30 @@ def _text(v):
 
 def _num(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+# Axis: a list-item number has exactly one spelling, N or N-M with no leading zero and no zero part, so "02273", "2273-01", "2273-0" and "2273-1-2" are refused; the issue's ^\d+(-\d+)?$ narrowed on purpose (a disclosed design fork). See bite-proof record i2636_collector_cards (E1).
+_LIST_NUMBER = re.compile(r"[1-9]\d*(?:-[1-9]\d*)?", re.ASCII)
+
+
+def _list_number(v):
+    """True for a list-item number: an integer 1 or more (never a bool), or a string N or N-M."""
+    return _LIST_NUMBER.fullmatch(v) is not None if isinstance(v, str) else _num(v)
+
+
+def _list_key(v):
+    """The one canonical form every comparison of list-item numbers goes through: the number as a string (2273 and "2273" are the same item)."""
+    return str(v)
+
+
+def _carries(call):
+    """True for a leftovers value that names a list-item card by carriedBy (whatever else it holds)."""
+    return isinstance(call, dict) and "carriedBy" in call
+
+
+def _carried(call):
+    """True for a leftovers value that is exactly {"carriedBy": number}: the finding is listed on that list-item card."""
+    return isinstance(call, dict) and set(call) == {"carriedBy"}
 
 
 def _commit(v):
@@ -787,7 +816,19 @@ def _check_input(adv, words, problems):
     leftovers = adv.get("leftovers", {})
     if not isinstance(leftovers, dict):
         problems.append("leftovers must be an object")
+    entries = adv.get("collectorItems", [])
+    on_sheet = {_list_key(e["number"]) for e in entries if isinstance(e, dict) and _list_number(e.get("number"))} if isinstance(entries, list) else set()
     for k, call in (leftovers.items() if isinstance(leftovers, dict) else ()):
+        if _carries(call):
+            # Axis: carriedBy stands alone in its entry; a key beside it is refused. See bite-proof record i2636_collector_cards (E6).
+            if len(call) > 1:
+                problems.append(f"leftovers {k}: carriedBy takes no other key")
+            elif not _list_number(call["carriedBy"]):
+                problems.append(f"leftovers {k}: carriedBy must be a list-item number, an integer 1 or more or a string N or N-M")
+            # Axis: carriedBy must name a collectorItems card on this sheet. See bite-proof record i2636_collector_cards (E5).
+            elif _list_key(call["carriedBy"]) not in on_sheet:
+                problems.append(f"leftovers {k}: carriedBy {call['carriedBy']} names no list-item card on this sheet; give a collectorItems entry with that number")
+            continue
         if _keys(f"leftovers {k}", call, ("why", "context", "options"), ("ifLeft", "recommendation"), problems):
             problems.extend(f"leftovers {k}: {t} must be a non-empty string" for t in ("why", "context", "ifLeft")
                             if t in call and not _text(call[t]))
@@ -826,14 +867,16 @@ def _check_collector(entries, words, problems):
     seen = []
     for n, e in enumerate(entries, 1):
         number = e.get("number") if isinstance(e, dict) else None
-        where = f"collectorItems {number}" if _num(number) else f"collectorItems entry {n}"
+        where = f"collectorItems {number}" if _list_number(number) else f"collectorItems entry {n}"
         if not _keys(where, e, ("number", "title", "why", "context", "options", "ifLeft", "recommendation"), (), problems):
             continue
-        if not _num(number):
-            problems.append(f"{where} needs number, an integer 1 or more")
-        elif number in seen:
+        if not _list_number(number):
+            problems.append(f"{where} needs number, an integer 1 or more or a string N or N-M")
+        # Axis: two entries whose numbers are one item in two spellings (2273 and "2273") repeat; the comparison is by the canonical key. See bite-proof record i2636_collector_cards (E2).
+        elif _list_key(number) in seen:
             problems.append(f"{where} repeats the number {number}")
-        seen.append(number)
+        else:
+            seen.append(_list_key(number))
         problems.extend(f"{where}: {k} must be a non-empty string" for k in ("title", "why", "context", "ifLeft") if not _text(e[k]))
         opts = e["options"]
         if not (isinstance(opts, list) and opts):
@@ -1033,30 +1076,40 @@ def _shown(card):
 def _dependencies(card, own, numbers):
     """(field, found) for each place a card's option or recommendation text depends on another question, in field then match order.
 
-    own is the card's own collector number (None for any other card); numbers is every collector number on the sheet."""
+    own is the card's own collector number as a canonical key (None for any other card); numbers is every collector number on the
+    sheet, each as a canonical key."""
     rec = card.get("recommendation") or {}
     fields = [(f"option {o['id']}", o[k]) for o in card["options"] for k in ("label", "consequence")]
     fields += [("recommendation", rec[k]) for k in ("text", "reason") if k in rec]
-    others = sorted((n for n in numbers if n != own), reverse=True)
+    # Longest first, so a longer number wins the alternation over a shorter one it starts with.
+    others = sorted((n for n in numbers if n != own), key=lambda k: (len(k), k), reverse=True)
     # Axis: another collector number on the sheet, written bare (a whole token: not part of a longer number, a word or
-    # an identifier such as SKU1501, and not dashed to another number); D7.
-    bare = re.compile(r"(?<!\w)(?<!\d-)(?:" + "|".join(str(n) for n in others) + r")(?!\w)(?!-\d)") if others else None
+    # an identifier such as SKU1501, and not dashed to another number), plain or dashed (7-123); D7.
+    bare = re.compile(r"(?<!\w)(?<!\d-)(?:" + "|".join(re.escape(n) for n in others) + r")(?!\w)(?!-\d)") if others else None
     found_in = []
     for field, text in fields:
         # Axis: on a card with no options, text the list-item pointer check already refuses (a _DEPENDS span overlapping a _POINTER span) is left to that check.
         pointers = [] if card["options"] else [(p.start(), p.end()) for p in _POINTER.finditer(text)]
+        spans = []
         for hit in _DEPENDS.finditer(text):
             if any(hit.start() < end and start < hit.end() for start, end in pointers):
                 continue
-            if hit.group("numbered") and own is not None:
-                digits = re.search(r"(\d+)(-\d+)?", hit.group(0))
-                # Axis: a card's own collector number, written without a dash part, is not another question; D8.
-                if int(digits.group(1)) == own and not digits.group(2) and not re.match(r"-\d", text[hit.end():]):
+            if own is not None and (hit.group("numbered") or hit.group(0)[-1:].isdigit()):
+                token = list(re.finditer(r"\d+(?:-\d+)?", hit.group(0)))[-1]
+                shown = token.group(0)
+                after = re.match(r"-\d+", text[hit.end():])
+                if token.end() == len(hit.group(0)) and after:
+                    shown += after.group(0)
+                # Axis: a card's own collector number, plain or dashed, is not another question; another dashed number (2273-2 on 2273-1) still is; D8. See bite-proof record i2636_collector_cards (E3, E4).
+                if shown == own:
                     continue
             found_in.append((field, hit.group(0)))
+            spans.append((hit.start(), hit.end()))
         if bare is not None:
             # Axis: a number written as a PR (#N, PR N) names a pull request, not a collector item; the exemption of D7.
-            found_in.extend((field, hit.group(0)) for hit in bare.finditer(text) if not _AS_PR.search(text[:hit.start()]))
+            # A dashed number a _DEPENDS hit already reports is reported once.
+            found_in.extend((field, hit.group(0)) for hit in bare.finditer(text) if not _AS_PR.search(text[:hit.start()])
+                            and not ("-" in hit.group(0) and any(hit.start() < end and start < hit.end() for start, end in spans)))
     return found_in
 
 
@@ -1390,6 +1443,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     named, decisions, listed_keys = {}, {}, {}  # listed_keys: each lookup key of a finding listed for the merge verdict, counted
     # Only with the bodies read: a bodies-less build makes no fixed-above reading, so its leftovers entry stays required.
     fixed, auto = _fixed_above(recs, bodies, kind, allowed, problems) if bodies_sound else ({}, set())
+    carrying = False  # True once a left-for-owner finding is carried by a list-item card
     for r in recs:
         for n, f in enumerate(r["findings"]):
             if review_record.listed_for_merge(f):
@@ -1403,6 +1457,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                     continue
                 call_at, det_at = next((k for k in keys if k in leftovers), None), next((k for k in keys if k in determined), None)
                 prior = before.get(keys[0])
+                entered = [k for k in keys if k in leftovers]
+                # Axis: a finding has one disposition: a carriedBy entry beside a second leftovers entry under another of its keys is refused. See bite-proof record i2636_collector_cards (E7).
+                if len(entered) > 1 and any(_carries(leftovers[k]) for k in entered):
+                    problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has more than one leftovers entry ({', '.join(entered)}) and one of them is carriedBy; give one entry")
                 if (r["pr"], n) in fixed:
                     # axis: a finding fixed above needs no leftovers or craftDeterminations entry and takes none, and a carried sheet
                     # cannot move an earlier decided-for-you entry to caught
@@ -1422,6 +1480,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                         problems.append(f"craftDeterminations {det_at}: a carried sheet keeps the earlier sheet's determination unchanged; change it on an unsigned republish")
                 if prior is not None and call_at is not None:
                     problems.append(f"leftovers {call_at}: a carried sheet cannot turn a decided-for-you entry back into a card; do that on an unsigned republish")
+                if call_at is not None and _carried(leftovers[call_at]):
+                    carrying = True
                 if det is not None:
                     decisions[(r["pr"], n)] = det
                 if det is not None and call_at is not None:
@@ -1429,6 +1489,9 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                 elif det is None and call_at is None:
                     problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has no leftovers entry (key {keys[0]!r}); "
                                     "give it why, context and options, or a craft determination")
+    # Axis: a carried finding is shown under the card's carriedTitle; a words file with none (or a blank one) is refused, never a KeyError. See bite-proof record i2636_collector_cards (E12).
+    if carrying and not _text(words.get("carriedTitle")):
+        problems.append("the words file needs carriedTitle, a non-blank string: a list-item card that carries a finding shows it under that title")
     for name, given in (("leftovers", leftovers), ("craftDeterminations", determined)):
         problems.extend(f"{name} key {k!r} names no left-for-owner finding" for k in given if k not in named)
         problems.extend(f"{name} key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
@@ -1445,7 +1508,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     by_pr = {r["pr"]: r for r in recs}
     recs = [by_pr[n] for n in allowed] if stack else recs
     top, tag = recs[-1], (lambda r: f"#{r['pr']}: " if stack else "")
-    cards, decided_for_you, places, owners = [], [], [], []  # owners: each card's own collector number, None for any other card
+    cards, decided_for_you, places, owners = [], [], [], []  # owners: each card's own collector number (canonical key), None for any other card
+    carried = {}  # a list-item card's canonical number to (the carried finding's first lookup key, its shown line), in record order
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
@@ -1459,6 +1523,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                         "ground": det["ground"], "reason": det["reason"], **({"pr": r["pr"]} if stack else {})})
                 continue
             call = _leftover_call(kind, r["pr"], f, leftovers)
+            if _carried(call):
+                # Axis: a carried finding is no card and no decided-for-you entry; the list-item card that carries it lists it. See bite-proof record i2636_collector_cards (E8, E9).
+                carried.setdefault(_list_key(call["carriedBy"]), []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
+                continue
             options = _options(call["options"], words, True)
             cards.append(_card("f-", r["pr"], f.get("findingKey") or f["id"],
                                words["leftoverKind"] + (f" · #{r['pr']}" if stack else ""), _title(f),
@@ -1484,15 +1552,19 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         owners.append(None)
     for it in advisor.get("collectorItems", []):
         rec = it["recommendation"]
-        cards.append(_card("k-", number, it["number"], _fill(words["collectorKind"], number=it["number"]), it["title"],
+        lines = carried.get(_list_key(it["number"]), [])
+        # Axis: the card that carries findings shows them as a last section and its id changes with what it carries; a card that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (E10, E11).
+        cards.append(_card("k-", number, [it["number"], [k for k, _ in lines]] if lines else it["number"],
+                           _fill(words["collectorKind"], number=it["number"]), it["title"],
                            [_section(words["whyYours"], "paragraph", it["why"]),
                             _section(words["whatHappened"], "paragraph", it["context"]),
-                            _section(words["ifLeft"], "paragraph", it["ifLeft"])],
+                            _section(words["ifLeft"], "paragraph", it["ifLeft"]),
+                            *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
                            [{**o, "label": _fill(words["collectorOption"], letter=o["id"], label=o["label"])} for o in it["options"]],
                            {"text": _fill(words["collectorRecommendation"], letter=rec["optionId"], text=rec["text"]),
                             "reason": rec["reason"], "optionId": rec["optionId"]}))
         places.append(f"collectorItems {it['number']}")
-        owners.append(it["number"])
+        owners.append(_list_key(it["number"]))
     spec = advisor.get("closesSpec")
     if spec:
         context = [_section(words["ifLeft"], "paragraph", words["closureIfLeft"]),
@@ -1504,7 +1576,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
-    numbers = {it["number"] for it in advisor.get("collectorItems", [])}
+    numbers = {_list_key(it["number"]) for it in advisor.get("collectorItems", [])}
     dependent = [f"dependent-question: {where or 'breakdown'}: card {card['question']!r} {field} depends on another question ({found!r}); "
                  "a question must be answerable on its own: ask the two as one card whose options name each combination, "
                  "or hold this card until the other question is ruled and ask it then"

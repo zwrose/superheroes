@@ -1,0 +1,152 @@
+{
+  "schema": "superheroes-sheet/1",
+  "kind": "pr",
+  "title": "Reword the receipt page",
+  "prSheet": {
+    "number": 211,
+    "commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334",
+    "whatChanged": {
+      "summary": "The receipt page says 'Thank you for your order' in place of 'Order complete'.",
+      "reviewers": [
+        {
+          "name": "code-reviewer",
+          "family": "codex",
+          "ran": "engine-record"
+        }
+      ],
+      "caught": [],
+      "rounds": 1,
+      "stoppedAtCap": false,
+      "ci": {
+        "state": "green",
+        "commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334"
+      },
+      "lane": "light",
+      "laneReason": "A wording change on the receipt page."
+    },
+    "craft": [],
+    "alreadyDecided": [],
+    "history": [
+      "1 rounds ran."
+    ],
+    "nothingListed": true
+  },
+  "cards": [
+    {
+      "id": "k-42f04a278896",
+      "callKind": "From your list · item 1435",
+      "warning": false,
+      "question": "Should the receipt page keep the old wording for gift orders?",
+      "context": [
+        {
+          "title": "Why it's yours",
+          "blocks": [
+            {
+              "paragraph": "What a gift buyer reads on their receipt is a promise about how the shop talks to customers, and only you can decide that tone."
+            }
+          ]
+        },
+        {
+          "title": "What happened",
+          "blocks": [
+            {
+              "paragraph": "The new wording thanks the buyer, but a gift order's receipt goes to the buyer and the new text reads oddly there. This is decision item 1435 on your list, and it is answered here."
+            }
+          ]
+        },
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "The new wording ships on gift receipts as well."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "a",
+          "label": "a. Use the new wording everywhere",
+          "consequence": "Gift buyers read the thank-you line too; one wording to keep.",
+          "sendsBack": false
+        },
+        {
+          "id": "b",
+          "label": "b. Keep the old wording for gift orders",
+          "consequence": "Gift receipts stay as they are; the PR keeps a second wording to maintain.",
+          "sendsBack": false
+        },
+        {
+          "id": "c",
+          "label": "c. Hold the PR until gift orders are reworded",
+          "consequence": "The PR goes back and returns with a new sheet once gift receipts are settled.",
+          "sendsBack": true
+        }
+      ],
+      "recommendation": {
+        "text": "a — Use the new wording everywhere",
+        "reason": "One wording is cheaper to keep, and gift buyers are still thanked for their order.",
+        "optionId": "a"
+      }
+    },
+    {
+      "id": "k-3fb4fe9f3b5f",
+      "callKind": "From your list · item 1501",
+      "warning": false,
+      "question": "Should the receipt page show the order total in the thank-you line?",
+      "context": [
+        {
+          "title": "Why it's yours",
+          "blocks": [
+            {
+              "paragraph": "Showing money on a page a customer may share is a privacy call about your customers, and only you can make it."
+            }
+          ]
+        },
+        {
+          "title": "What happened",
+          "blocks": [
+            {
+              "paragraph": "A designer proposed adding the total to the thank-you line. The review found no rule against it and no rule for it."
+            }
+          ]
+        },
+        {
+          "title": "If left",
+          "blocks": [
+            {
+              "paragraph": "The thank-you line ships without the total."
+            }
+          ]
+        }
+      ],
+      "images": [],
+      "options": [
+        {
+          "id": "a",
+          "label": "a. Leave the total out",
+          "consequence": "The thank-you line stays short and shows no money.",
+          "sendsBack": false
+        },
+        {
+          "id": "b",
+          "label": "b. Add the total in a follow-up",
+          "consequence": "This ships without the total; a follow-up adds it if you want it.",
+          "sendsBack": false
+        },
+        {
+          "id": "c",
+          "label": "c. Add the total before merge",
+          "consequence": "The PR goes back to add the total and returns with a new sheet.",
+          "sendsBack": true
+        }
+      ],
+      "recommendation": {
+        "text": "a — Leave the total out",
+        "reason": "A receipt that is shared would show what the customer paid.",
+        "optionId": "a"
+      }
+    }
+  ]
+}

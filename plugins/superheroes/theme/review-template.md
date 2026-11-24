@@ -295,10 +295,12 @@ block of `sheet-words.json`, the home of the words.
 none. Before building a PR or stack sheet, the advisor reads the project's Canon
 (`rubric/canon-contract.md`): a standing ruling that already answers a call makes it craft. Then:
 
-- A leftover goes to `craftDeterminations`, not to a card, only on one of the three grounds in
-  § Decided for you, each of which means its real consequence needs no card of its own: another
-  card on the same sheet carries it; a fix in another layer of the same stack, named in the ground,
-  removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
+- A leftover goes to `craftDeterminations`, not to a card, only on one of the two grounds in
+  § Decided for you, each of which means its real consequence needs no card of its own: a fix in
+  another layer of the same stack, named in the ground, removed it; or a Canon entry, cited by id,
+  answers it. A leftover that asks exactly the decision a list-item card on the same sheet asks is
+  carried by that card instead (`leftovers` `{"carriedBy": <number>}`), as § Decided for you says.
+  Doubt keeps it a card.
 - A leftover whose PR body carries `fixed-above #<PR> <commit>` for it, on a stack sheet covering that
   higher PR, is shown in caught as fixed above by the build itself: give it no `leftovers` or
   `craftDeterminations` entry and its bullet no `accounting` entry. The craft ground "a fix in another
@@ -336,12 +338,16 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
   on your list", a collector number) instead of carrying that decision's options. It is a best-effort
-  pattern scan, so the rule binds the advisor whether or not the scan catches a wording.
+  pattern scan, so the rule binds the advisor whether or not the scan catches a wording. The item's
+  number may be dashed (`2273-1`, a string `N-M`) and is shown on the card exactly as written. A card
+  that carries left-for-owner findings (below) shows them as its last section, `The review findings
+  this decides`.
 - A question stands on its own (`skills/showrunner/reference/owner-decisions.md` § The per-item
   spine). The builder refuses, with the token `dependent-question`, a card whose option or
   recommendation text depends on another card or collector item ("a if 1435-1 is fix-before-merge",
   "only if you pick b on the other card", another collector number on the sheet). It is a best-effort
-  pattern scan too, and a card's question and context may still say what came before.
+  pattern scan too, and a card's question and context may still say what came before. A card's own
+  collector number, dashed or plain, is not another question; another card's number is.
 
 Each item shows, in this order, its kind, its title, what happens if it is left, its options with what
 each means, the recommendation, the answer buttons and a note box. Every item can be answered with its
@@ -358,8 +364,10 @@ note left empty.
   whose reason names the why and the cost. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
 - A collector card shows, in order, its kind (naming the collector number), its title, **Why it's yours**,
   **What happened**, **If left**, its lettered options (each label shown as `a. …`), the recommendation
-  naming its letter, the answer buttons and the note box. The input's exact shape is in `lib/pr_sheet.py`'s
-  docstring.
+  naming its letter, the answer buttons and the note box. The number may be dashed and is shown as
+  written (`From your list · item 2273-1`). A card that carries left-for-owner findings shows them after
+  **If left**, as a last context section, `The review findings this decides`, one bullet per finding
+  (each starting `#<pr>: ` on a stack). The input's exact shape is in `lib/pr_sheet.py`'s docstring.
 - An item with no real choice offers **Accept** and **Discuss** and shows no options list.
 - When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
 
@@ -407,15 +415,18 @@ answer that sends the PR back never counts.
 ### Decided for you
 
 A left-for-owner finding the advisor re-graded as craft at vet is no card, and neither is one whose real
-consequence needs no card of its own on one of three grounds: another card on the same sheet
-carries it; a fix in another layer of the same stack, named in the ground, removed it; or a Canon
-entry, cited by id, answers it. Each is an entry of the sheet's
+consequence needs no card of its own on one of two grounds: a fix in another layer of the same stack,
+named in the ground, removed it; or a Canon entry, cited by id, answers it. Each is an entry of the sheet's
 **Decided for you** list (`prSheet.decidedForYou`, `$defs/decided` in `sheet.schema.json`). The list sits
 below the cards, unfolded, and is left out when it is empty. Each entry shows its title, its ground, its
 reason and one control, **Make this mine**. An entry never counts toward the accepted items. The advisor
 writes each one in the `craftDeterminations` key of its input, whose shape is in the docstring of
 `lib/pr_sheet.py`. The list's words are in the `pr` block of `sheet-words.json`. A finding its body marks
 fixed above is not a decided-for-you entry; it is in caught.
+
+A left-for-owner finding that asks exactly the decision a list-item card on the same sheet asks is not a
+decided-for-you entry. It is carried by that card (`leftovers` `{"carriedBy": <number>}`), listed on it,
+and covered by its answer and the merge verdict.
 
 A carried sheet keeps the earlier sheet's entries. The builder refuses a carry that adds a determination,
 changes one, or turns one back into a card, because each of those changes what the owner decides.
