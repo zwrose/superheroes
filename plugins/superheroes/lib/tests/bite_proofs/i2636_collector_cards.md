@@ -537,6 +537,8 @@ Added at review-code round 3's fix step. The rules and command shape are the rou
 - **Raw red** (`-k "e15 or e03"`): `e15-one-of-several-targets-repeated-noun` failed (DID NOT RAISE Refusal); `1 failed, 30 passed, 47 deselected in 3.09s`.
 - **Restore receipt:** `_NEXT_TARGET` reads with the noun group again. **Raw green:** `31 passed, 47 deselected in 2.36s`. The e03 rows `if you pick a on collector card 2273-1` and `if you pick a on card 2273-1, 12 gift receipts change and` (a comma is not read as a join) stay green under it, as designed.
 
+**Withdrawn (vet 1028 fix order).** The sentence pins that E21, E22 and E23 proved were withdrawn under the pin rule (`rubric/review-discipline.md`): `vet-receipt.md` and `vet-drafter.md` are doctrine surfaces, and a new test may not pin their sentences. The doctrine edits themselves stay. `test_vet_carried_finding_2636.py` now keeps only structural checks, and E24 below proves them. The three entries are kept as the history of what was proved before the withdrawal; their detectors no longer exist.
+
 ### E21: the vet row reads the carrying card's decision
 
 - **Guarded element / axis:** the vet receipt's leftover row, the clause "the vet reads the finding's consequence against the card's question and options". Axis: a carried finding counts as shown only when the card asks the same decision.
@@ -557,3 +559,14 @@ Added at review-code round 3's fix step. The rules and command shape are the rou
 - **Neutralization:** ` (a Canon entry, cited by id, answers it)` was put back after "covers".
 - **Raw red:** `test_the_leftover_row_links_the_decided_for_you_grounds_and_restates_none` failed (`'a Canon entry, cited by id, answers it' is contained here`); `1 failed, 2 passed in 0.24s`.
 - **Restore receipt:** the row reads "... covers, names no ground, ..." again. **Raw green:** the closing scoped run, the whole-tree text tests plus the touched sheet and vet tests, ended `2210 passed in 100.16s`.
+
+## Vet 1028 fix order: E24 to E26
+
+Added after vet 1028, by the build session, with the same rules as above (one Edit-tool neutralization, the inverse Edit, then a green run).
+
+### E24: the vet's leftover row links the template's grounds (structural)
+
+- **Guarded element / axis:** `test_vet_carried_finding_2636.py`'s one structural test: the receipt has exactly one "No leftover skipped the owner's review" row, that row links `../../../theme/review-template.md#decided-for-you`, and the template has `### Decided for you`. No doctrine sentence is pinned.
+- **Neutralization:** in `vet-receipt.md`, `none of [the template's grounds](../../../theme/review-template.md#decided-for-you) covers` became `none of the template's grounds covers`.
+- **Raw red:** the test failed on `assert '(../../../theme/review-template.md#decided-for-you)' in "| **No leftover skipped the owner's review** | ..."`; `1 failed in 4.55s`.
+- **Restore receipt:** the inverse Edit, then `git status --short` showed `vet-receipt.md` clean. **Raw green:** `1 passed in 3.22s`.
