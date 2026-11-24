@@ -481,3 +481,40 @@ FAILED ...::test_e16_a_plain_number_keeps_one_card_id_in_either_spelling
 - **Restore:** the inverse Edit.
 - **Restore receipt:** the restored line reads `... if lines else _card_number(it["number"]),` at `:1574`.
 - **Raw green** (same `-k`): `4 passed, 57 deselected in 1.67s`.
+
+## Review round 2 fixes: E17 and E18
+
+Two elements added at review-code round 2's fix step, where the audit found that the E15 exemption ran after any hit and swallowed real cross-card dependencies. The rules and command shape are the round 1 entries' (`-k e15`, over `test_pr_sheet_collector_2636.py`).
+
+### E17: the exemption reads only a choice made on a target
+
+- **Guarded element / axis:** `pr_sheet.py`, `elif own is not None and _CHOICE_ON_NOUN.fullmatch(hit.group(0)):` (with `_CHOICE_ON_NOUN`). Axis: only a D1 hit that names a choice made on a target and ends on its noun is followed by its target's number; a positional hit (`card above`, `decisions above`) never is.
+- **Neutralization:** the condition became `elif own is not None:`.
+- **Raw red:**
+
+```
+FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question[e15-card-above]
+FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question[e15-card-below]
+FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question[e15-decisions-above]
+3 failed, 4 passed, 60 deselected in 8.20s
+```
+
+  Each red is `DID NOT RAISE Refusal`. The possessive and list rows stay green under this neutralization, because E18's lookahead still refuses them; E18 proves those rows.
+- **Restore:** the inverse Edit. **Restore receipt:** the line reads `elif own is not None and _CHOICE_ON_NOUN.fullmatch(hit.group(0)):` again.
+- **Raw green:** `7 passed, 60 deselected in 6.00s`.
+
+### E18: the number must complete the target
+
+- **Guarded element / axis:** `_TARGET_AFTER`'s two lookaheads, `(?![\w'’-])(?!\s*(?:,|&|\band\b|\bor\b)\s*#?\d)`. Axis: a number that is a possessive (`2273-1's twin`) or one of several targets (`card 2273-1 or 12`) is not the whole target, so the choice still depends on another question.
+- **Neutralization:** the two lookaheads became `(?![\w-])`.
+- **Raw red** (run after the row `e15-one-of-several-targets` was added to the parametrize, so the list leg has a row that only this element guards):
+
+```
+FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question[e15-possessive-target]
+FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question[e15-one-of-several-targets]
+2 failed, 6 passed, 60 deselected in 1.68s
+```
+
+- **Restore:** the inverse Edit. **Restore receipt:** the pattern reads `#?(\d+(?:-\d+)?)(?![\w'’-])(?!\s*(?:,|&|\band\b|\bor\b)\s*#?\d)` again.
+- **Raw green:** `8 passed, 60 deselected in 2.67s`.
+- Disclosure: a first E18 run, before the `e15-one-of-several-targets` row existed, reddened only `e15-possessive-target` (`1 failed, 6 passed`). The plural-list row `e15-a-list-of-cards` is guarded by E17 (a plural noun is not a choice target), not by E18.

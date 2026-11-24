@@ -160,6 +160,24 @@ def test_e15_a_field_naming_its_own_card_in_a_conditional_beside_another_item_re
     assert len(collector_cards(build(*with_text(("2273-1", "2273-2"), 0, "Only if you pick a on card 2273-1.")))) == 2
 
 
+@pytest.mark.parametrize("text", [
+    "Use the answer on the card above 2273-1.",
+    "Use the wording chosen on the card below 2273-1.",
+    "Use the same answer as card 2273-1's predecessor.",
+    "Keep the pricing copy only if the decisions above 2273-1 approve it.",
+    "Costs less if you chose a for cards 2273-1 and 12.",
+    "Only if you pick a on card 2273-1's twin.",
+    "Only if you pick a on card 2273-1 or 12.",
+], ids=["e15-card-above", "e15-card-below", "e15-same-answer-possessive", "e15-decisions-above", "e15-a-list-of-cards", "e15-possessive-target",
+        "e15-one-of-several-targets"])
+def test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question(text):
+    # Axis: the own-number exemption after a choice's target applies only when the number completes the target of a choice
+    # (if you pick a on card 2273-1); a positional or possessive reference, or a list of cards, still depends on another question.
+    # Bites on: the exemption read after any hit, or a number read as the whole target when it is one of several or a possessive.
+    problems = problems_of(*with_text(("2273-1", 1501), 0, text))
+    assert problems and all(p.startswith("dependent-question: collectorItems 2273-1: ") for p in problems)
+
+
 def test_e04_a_bare_reference_to_another_on_sheet_card_outside_the_dash_widths_is_refused():
     # Axis: another on-sheet number, written bare and dashed in a width the dashed-reference wording does not read (7-123), is another question.
     # Bites on: the bare scan reading only plain numbers, or its alternation not escaping the dash.

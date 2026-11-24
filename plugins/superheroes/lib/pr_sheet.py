@@ -272,8 +272,14 @@ _DEPENDS = re.compile(
     # D6 the other question by position
     r"|\bthe\s+(?:other|previous|next|earlier|later|first|second|last)\s+(?:cards?|questions?|decisions?|collector\s+items?)\b"
     r"|\b(?:cards?|questions?|decisions?)\s+(?:above|below)\b", re.IGNORECASE)
-# The number a _DEPENDS hit that ends on a target noun goes on to name: an optional second noun, then the number as a whole token.
-_TARGET_AFTER = re.compile(r"(?:\s+(?:item|number|entry|card|question)s?)?\s+#?(\d+(?:-\d+)?)(?![\w-])", re.IGNORECASE)
+# A D1 hit that names a choice made on a target and ends on the target's noun ("if you pick a on card", "only if you chose b
+# for collector"): only such a hit names its target by the number that follows it. A positional hit ("the card above") never does.
+_CHOICE_ON_NOUN = re.compile(r"(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\b.*\b(?:card|question|decision|item|collector)$",
+                             re.IGNORECASE | re.DOTALL)
+# The number that completes such a target: an optional second noun, then the number as a whole token that ends the target, not
+# one of several (a list such as "cards 1435 and 12" names more than one card) and not a possessive ("2273-1's predecessor").
+_TARGET_AFTER = re.compile(r"(?:\s+(?:item|number|entry))?\s+#?(\d+(?:-\d+)?)(?![\w'’-])(?!\s*(?:,|&|\band\b|\bor\b)\s*#?\d)",
+                           re.IGNORECASE)
 # Axis: a collector number written as a PR (#N, PR N) names a pull request, not a question.
 _AS_PR = re.compile(r"(?:#|\bPR\s)$", re.IGNORECASE)
 
@@ -321,7 +327,7 @@ def _list_key(v):
 def _card_number(v):
     """A list-item number as its card's id hashes it: a plain number as an integer, whichever spelling the input used, so 1435
     and "1435" keep one card id (and an integer-numbered card keeps the id it had before dashed numbers existed); a dashed one as written."""
-    return int(v) if isinstance(v, str) and "-" not in v else v
+    return int(v) if isinstance(v, str) and v.isascii() and v.isdigit() else v
 
 
 def _carries(call):
@@ -1113,8 +1119,10 @@ def _dependencies(card, own, numbers):
                 # Axis: a card's own collector number, plain or dashed, is not another question; another dashed number (2273-2 on 2273-1) still is; D8. See bite-proof record i2636_collector_cards (E3, E4).
                 if shown == own:
                     continue
-            elif own is not None:
-                # A hit that ends on its target's noun ("if you pick a on card", "on collector") names the number that follows it.
+            elif own is not None and _CHOICE_ON_NOUN.fullmatch(hit.group(0)):
+                # A choice hit that ends on its target's noun ("if you pick a on card", "on collector") names the number that follows it.
+                # Axis: only a choice made on a target is read this way (a positional "card above 2273-1" never is), and only a number that
+                # completes the target (not one of several, not a possessive). See bite-proof record i2636_collector_cards (E17, E18).
                 target = _TARGET_AFTER.match(text, hit.end())
                 # Axis: a conditional whose target noun is followed by the card's own number (on card 2273-1, on collector item 2273-1) is not another question; one followed by another number still is; D8. See bite-proof record i2636_collector_cards (E15).
                 if target and target.group(1) == own:
