@@ -583,9 +583,13 @@ def _line_key(text):
 
 def costly_unlisted(body):
     """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
-    text appears in no line under What we're accepting (accepting_listed), compared by _line_key. A harmless one is never
+    text appears in no line under What we're accepting as GitHub shows it (leftover_accepting.visible_acceptances: a hidden
+    line, a closed inline comment or an item cut by markup carries nothing), compared by _line_key. A harmless one is never
     returned; an empty text after the label is never matched."""
-    accepted = [_line_key(line) for line in accepting_listed(body)]
+    import leftover_accepting  # imported here: leftover_accepting imports this module
+
+    # axis: only text GitHub shows carries a costly line; words inside an inline HTML comment do not — see bite-proof record i2633_handback_costly_unlisted.md (G2)
+    accepted = [_line_key(line) for line in leftover_accepting.visible_acceptances(body)]
     missing = []
     for label, text in degradations_listed(body):
         key = _line_key(text)
@@ -597,8 +601,13 @@ def costly_unlisted(body):
 
 def costly_unlisted_problem(label, text):
     """The problem line for one (label, text) costly_unlisted returns, worded once for the sheet build and the builder's
-    handback check (vet_slot.py handback), which prefix it with where it was found."""
-    return (f'{"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
+    handback check (vet_slot.py handback), which prefix it with where it was found. A bullet with no text after its label is
+    told to say what the degradation was first, since no line can carry an empty text."""
+    kind = "costly" if label else "unlabelled (read as costly)"
+    if not _line_key(text):
+        return (f"{kind} deviation has no text after its label, so no line under What we're accepting can carry it: say what "
+                "the degradation was after the label, then carry that text into a line there")
+    return (f'{kind} deviation ("{_excerpt(text)}") has no line under '
             "What we're accepting: carry its text, after the label, into a line there")
 
 

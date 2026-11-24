@@ -9,7 +9,7 @@ import pytest
 
 import pr_sheet
 import vet_slot as vs
-from test_calibration_disclosure_2364 import CODE1, PR, REPO, Fake, record_comment, row
+from test_calibration_disclosure_2364 import CODE1, PR, REPO, Fake, mark, record_comment, row
 
 LIB = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
@@ -43,17 +43,30 @@ def sheet_costly_problems(text):
     try:
         pr_sheet.build(copy.deepcopy(records), copy.deepcopy(advisor), WORDS, bodies={SHEET_PR: text})
     except pr_sheet.Refusal as exc:
-        return [p for p in exc.problems if NO_LINE in p]
+        return [p for p in exc.problems if "deviation" in p and "What we're accepting" in p]
     return []
 
 
-REFUSED = {
-    "costly": body([], "[costly] %s." % GATE),
-    "unlabelled": body([], "%s." % GATE),
-    "costly-beside-harmless": body([], "[harmless] The order rode a prompt file.", "[costly] %s." % GATE),
-    "line-carries-another-text": body(["Something else entirely, so nothing is unverified."], "[costly] %s." % GATE),
-    "two-costly": body([], "[costly] %s." % GATE, "[costly] %s." % LONG),
+GATE_PROBLEM = 'costly deviation ("%s.") %s' % (GATE, NO_LINE)
+LONG_PROBLEM = 'costly deviation ("%s…") %s' % (LONG[:80], NO_LINE)
+EMPTY_PROBLEM = "costly deviation has no text after its label"
+
+# name -> (body, the problem texts the refusal must name, written out here and never derived from costly_unlisted)
+REFUSALS = {
+    "costly": (body([], "[costly] %s." % GATE), [GATE_PROBLEM]),
+    "unlabelled": (body([], "%s." % GATE), ['unlabelled (read as costly) deviation ("%s.") %s' % (GATE, NO_LINE)]),
+    "costly-beside-harmless": (body([], "[harmless] The order rode a prompt file.", "[costly] %s." % GATE),
+                               [GATE_PROBLEM]),
+    "line-carries-another-text": (body(["Something else entirely, so nothing is unverified."], "[costly] %s." % GATE),
+                                  [GATE_PROBLEM]),
+    "two-costly": (body([], "[costly] %s." % GATE, "[costly] %s." % LONG), [GATE_PROBLEM, LONG_PROBLEM]),
+    "carried-then-missing": (body(["%s, so CI is the receipt." % GATE], "[costly] %s." % GATE, "[costly] %s." % LONG),
+                             [LONG_PROBLEM]),
+    "hidden-in-inline-comment": (body(["CI will report separately. <!-- %s. -->" % GATE], "[costly] %s." % GATE),
+                                 [GATE_PROBLEM]),
+    "empty-costly-bullet": (body(["%s, so CI is the receipt." % GATE], "[costly]"), [EMPTY_PROBLEM]),
 }
+REFUSED = {name: text for name, (text, _problems) in REFUSALS.items()}
 PASSED = {
     "costly-carried": body(["%s, so the last commit's tests are unverified until CI runs." % GATE],
                            "[costly] %s." % GATE),
@@ -64,17 +77,18 @@ PASSED = {
 }
 
 
-@pytest.mark.parametrize("text", list(REFUSED.values()), ids=list(REFUSED))
-def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(text):
-    # Bites on: check_costly_accepted not calling costly_unlisted, so a body the merge sheet then refuses passes handback.
-    # Axis: a costly or unlabelled bullet with no carrying line refuses costly-not-accepted, naming each missing bullet.
+@pytest.mark.parametrize("name", list(REFUSALS))
+def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(name):
+    # Bites on: check_costly_accepted not calling costly_unlisted, a comparison that stops after the first carried bullet,
+    # or one that counts words inside an inline HTML comment as a shown line.
+    # Axis: a costly or unlabelled bullet with no shown carrying line refuses costly-not-accepted, naming exactly the
+    # bullets the case lists and no carried one.
+    text, problems = REFUSALS[name]
     result = vs.handback_body(text)
     assert result["ok"] is False and result["reason"] == "costly-not-accepted"
-    missing = pr_sheet.costly_unlisted(text)
-    assert missing
-    for label, bullet in missing:
-        assert pr_sheet.costly_unlisted_problem(label, bullet) in result["detail"]
-    assert result["detail"].count(NO_LINE) == len(missing)
+    for problem in problems:
+        assert "the " + problem in result["detail"]
+    assert result["detail"].count("deviation") == len(problems)
 
 
 @pytest.mark.parametrize("text", list(PASSED.values()), ids=list(PASSED))
@@ -127,3 +141,15 @@ def test_run_verb_pr_path_refuses_costly_not_accepted_after_its_record_checks(mo
     assert result["ok"] is ok
     if not ok:
         assert result["reason"] == "costly-not-accepted" and GATE in result["detail"]
+
+
+def test_run_verb_pr_path_keeps_earlier_refusals_ahead_of_the_costly_check(monkeypatch):
+    # Bites on: the costly check moved ahead of the review-record read or the calibration-disclosure check on the --pr path.
+    # Axis: a body that also misses its costly line still refuses review-record-unreadable with no record, and
+    # calibration-disclosure-contradicted when the record shows the named file read.
+    monkeypatch.setattr(vs.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else None)
+    assert vs.run_verb("handback", PR, REPO, run=Fake(REFUSED["costly"], []))["reason"] == "review-record-unreadable"
+    contradicted = body([], "[costly] %s" % mark(CODE1, "core.md"))
+    assert pr_sheet.costly_unlisted(contradicted)
+    result = vs.run_verb("handback", PR, REPO, run=Fake(contradicted, [record_comment([row(CODE1)])]))
+    assert result["reason"] == "calibration-disclosure-contradicted"

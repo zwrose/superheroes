@@ -2971,7 +2971,7 @@ def test_an_empty_costly_text_is_never_carried():
         advisor.setdefault("items", []).append({"id": "verify-gate", "kind": "Accept", "title": VERIFY_GATE, "ifLeft": "The last commit is unverified until CI runs.", "options": "none"})
         advisor["accounting"] = {bullet: {"item": "verify-gate"}}
     (problem,) = refused_with_bodies(SMALL, {211: body}, edit)
-    assert "PR #211's costly deviation (\"\")" in problem
+    assert problem.startswith("PR #211's costly deviation has no text after its label") and "say what the degradation was" in problem
 
 
 def test_a_stacks_later_layer_is_checked_for_costly_lines():
