@@ -518,3 +518,42 @@ FAILED ...::test_e15_the_cards_own_number_used_to_describe_another_card_is_still
 - **Restore:** the inverse Edit. **Restore receipt:** the pattern reads `#?(\d+(?:-\d+)?)(?![\w'’-])(?!\s*(?:,|&|\band\b|\bor\b)\s*#?\d)` again.
 - **Raw green:** `8 passed, 60 deselected in 2.67s`.
 - Disclosure: a first E18 run, before the `e15-one-of-several-targets` row existed, reddened only `e15-possessive-target` (`1 failed, 6 passed`). The plural-list row `e15-a-list-of-cards` is guarded by E17 (a plural noun is not a choice target), not by E18.
+
+## Review round 3 fixes: E19 to E23
+
+Added at review-code round 3's fix step. The rules and command shape are the round 1 entries'; E21 to E23 run `plugins/superheroes/lib/tests/test_vet_carried_finding_2636.py` (a text test over the vet receipt and the vet drafter). Each neutralization was one Edit-tool edit, undone by the inverse Edit before the green run.
+
+### E19: each part of a list-item number is at most 18 digits
+
+- **Guarded element / axis:** `_LIST_NUMBER = re.compile(r"[1-9]\d{0,17}(?:-[1-9]\d{0,17})?", re.ASCII)`. Axis: an over-long number is refused, so `_card_number`'s `int()` never meets a string past Python's integer-conversion limit.
+- **Neutralization:** the pattern became `r"[1-9]\d*(?:-[1-9]\d*)?"`.
+- **Raw red** (`-k e01`): `e01-refused-19-chars`, `e01-refused-24-chars` (DID NOT RAISE Refusal) and `e01-refused-4301-chars` (`ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits`) failed; `3 failed, 15 passed, 60 deselected in 12.29s`.
+- **Restore receipt:** the pattern reads `[1-9]\d{0,17}(?:-[1-9]\d{0,17})?` again. **Raw green:** `18 passed, 60 deselected in 7.54s`.
+
+### E20: a repeated noun before the next target still marks a list
+
+- **Guarded element / axis:** `_NEXT_TARGET`'s optional noun group, `(?:(?:card|question|decision|item|collector)s?\s+(?:(?:item|number|entry)\s+)?)?`. Axis: "item 2273-1 or item 12" names two targets, so the own number does not complete the target.
+- **Neutralization:** `_NEXT_TARGET` became `r"\s*(?:&|\band\b|\bor\b)\s*#?\d"`.
+- **Raw red** (`-k "e15 or e03"`): `e15-one-of-several-targets-repeated-noun` failed (DID NOT RAISE Refusal); `1 failed, 30 passed, 47 deselected in 3.09s`.
+- **Restore receipt:** `_NEXT_TARGET` reads with the noun group again. **Raw green:** `31 passed, 47 deselected in 2.36s`. The e03 rows `if you pick a on collector card 2273-1` and `if you pick a on card 2273-1, 12 gift receipts change and` (a comma is not read as a join) stay green under it, as designed.
+
+### E21: the vet row reads the carrying card's decision
+
+- **Guarded element / axis:** the vet receipt's leftover row, the clause "the vet reads the finding's consequence against the card's question and options". Axis: a carried finding counts as shown only when the card asks the same decision.
+- **Neutralization:** the clause became "the vet reads the card".
+- **Raw red:** `test_the_leftover_row_counts_a_carried_finding_only_when_the_card_asks_the_same_decision` failed; `1 failed, 2 passed in 0.35s`.
+- **Restore receipt:** the clause reads as before. **Raw green:** with E22 and E23 restored too, `3 passed in 0.33s`.
+
+### E22: the vet drafter's stack rule reads the carrying card the same way
+
+- **Guarded element / axis:** `agents/vet-drafter.md` rule 2's clause "when that card asks exactly the decision the finding asks (read the finding's consequence against the card's question and options, ...)".
+- **Neutralization:** the clause was removed ("... the list-item card that carries it, has reached ...").
+- **Raw red:** `test_the_drafters_stack_rule_reads_the_carrying_card_the_same_way` failed; `1 failed, 2 passed in 0.22s`.
+- **Restore receipt:** the clause reads as before. **Raw green:** `3 passed in 0.33s`.
+
+### E23: the vet row restates no decided-for-you ground
+
+- **Guarded element / axis:** the vet receipt's leftover row links `[the template's grounds](../../../theme/review-template.md#decided-for-you)` and lists none of its own.
+- **Neutralization:** ` (a Canon entry, cited by id, answers it)` was put back after "covers".
+- **Raw red:** `test_the_leftover_row_links_the_decided_for_you_grounds_and_restates_none` failed (`'a Canon entry, cited by id, answers it' is contained here`); `1 failed, 2 passed in 0.24s`.
+- **Restore receipt:** the row reads "... covers, names no ground, ..." again. **Raw green:** the closing scoped run, the whole-tree text tests plus the touched sheet and vet tests, ended `2210 passed in 100.16s`.

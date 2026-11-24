@@ -109,7 +109,7 @@ The advisor's input is one JSON object; any key not listed is refused.
                  bullet each (the "What you're accepting" fold's routine notes).
   collectorItems Optional list. A decision from the owner's list that concerns this one PR, answered on this PR's sheet.
                  Each is {number, title, why, context, options, ifLeft, recommendation}, all required: number the collector
-                 item's number (an integer 1 or more, or a string N or N-M with no leading zeros, unique across both
+                 item's number (an integer 1 or more, or a string N or N-M with no leading zeros and at most 18 digits a part, unique across both
                  spellings, and shown on the card's label as written; a plain number's card id is the same in either
                  spelling, so a republish that changes only its JSON type keeps the saved answer); title, why, context and ifLeft non-empty
                  strings (the question, why it is the owner's, what happened, and what leaving it costs); options a list of
@@ -276,9 +276,12 @@ _DEPENDS = re.compile(
 # for collector"): only such a hit names its target by the number that follows it. A positional hit ("the card above") never does.
 _CHOICE_ON_NOUN = re.compile(r"(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\b.*\b(?:card|question|decision|item|collector)$",
                              re.IGNORECASE | re.DOTALL)
-# The number that completes such a target: an optional second noun, then the number as a whole token that ends the target, not
-# one of several (a list such as "cards 1435 and 12" names more than one card) and not a possessive ("2273-1's predecessor").
-_TARGET_AFTER = re.compile(r"(?:\s+(?:item|number|entry))?\s+#?(\d+(?:-\d+)?)(?![\w'’-])(?!\s*(?:,|&|\band\b|\bor\b)\s*#?\d)",
+# The number that completes such a target: an optional second noun ("collector item", "collector card"), then the number as a
+# whole token that ends the target: not a possessive ("2273-1's predecessor"), and not the first of several targets joined by
+# "and", "or" or "&" ("card 2273-1 or 12", "item 2273-1 or item 12"). A comma is not read as a join, because a count often
+# follows one ("on card 2273-1, 12 receipts change"), so a comma-separated list of targets is a gap of this best-effort scan.
+_NEXT_TARGET = r"\s*(?:&|\band\b|\bor\b)\s*(?:(?:card|question|decision|item|collector)s?\s+(?:(?:item|number|entry)\s+)?)?#?\d"
+_TARGET_AFTER = re.compile(r"(?:\s+(?:item|number|entry|card|question))?\s+#?(\d+(?:-\d+)?)(?![\w'’-])(?!" + _NEXT_TARGET + ")",
                            re.IGNORECASE)
 # Axis: a collector number written as a PR (#N, PR N) names a pull request, not a question.
 _AS_PR = re.compile(r"(?:#|\bPR\s)$", re.IGNORECASE)
@@ -311,7 +314,8 @@ def _num(v):
 
 
 # Axis: a list-item number has exactly one spelling, N or N-M with no leading zero and no zero part, so "02273", "2273-01", "2273-0" and "2273-1-2" are refused; the issue's ^\d+(-\d+)?$ narrowed on purpose (a disclosed design fork). See bite-proof record i2636_collector_cards (E1).
-_LIST_NUMBER = re.compile(r"[1-9]\d*(?:-[1-9]\d*)?", re.ASCII)
+# Each part is at most 18 digits, so a plain one always converts to an integer for its card id (_card_number).
+_LIST_NUMBER = re.compile(r"[1-9]\d{0,17}(?:-[1-9]\d{0,17})?", re.ASCII)
 
 
 def _list_number(v):

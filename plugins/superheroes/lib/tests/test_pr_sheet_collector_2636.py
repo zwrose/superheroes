@@ -75,7 +75,7 @@ STACK_LINES = {
 }
 
 
-@pytest.mark.parametrize("number", ["2273-1", "2273", 5, 1], ids=lambda n: f"e01-builds-{n!r}")
+@pytest.mark.parametrize("number", ["2273-1", "2273", 5, 1, "9" * 18, "9" * 18 + "-" + "9" * 18], ids=lambda n: f"e01-builds-{n!r}")
 def test_e01_a_list_number_builds_and_is_shown_as_written(number):
     # Axis: a list-item number written as an integer 1 or more, or a string N or N-M, builds, and the card's label shows it exactly as written.
     # Bites on: a valid spelling refused, or the label changed from the number as written.
@@ -84,7 +84,8 @@ def test_e01_a_list_number_builds_and_is_shown_as_written(number):
     assert str(number) in kind_of(number)  # the label shows the number as written
 
 
-@pytest.mark.parametrize("number", ["02273", "2273-01", "2273-0", "0", 0, True, "2273-1-2", "a-1", 2273.0], ids=lambda n: f"e01-refused-{n!r}")
+@pytest.mark.parametrize("number", ["02273", "2273-01", "2273-0", "0", 0, True, "2273-1-2", "a-1", 2273.0, "1" * 19, "2273-" + "1" * 19, "1" * 4301],
+                         ids=lambda n: f"e01-refused-{n!r}" if len(repr(n)) < 20 else f"e01-refused-{len(str(n))}-chars")
 def test_e01_a_malformed_list_number_is_refused(number):
     # Axis: a list-item number with a leading zero, a zero part, a third part, a letter, a bool or a float is refused: every number has exactly one spelling.
     # Bites on: the pattern accepting leading zeros or zero parts, or the check taking a bool or a float for an integer.
@@ -100,7 +101,8 @@ def test_e02_the_same_number_in_two_spellings_repeats():
 
 
 OWN_FORMS = ["2273-1", "collector item 2273-1", "collector #2273-1", "collector number 2273-1", "if you pick a on 2273-1", "card 2273-1",
-             "if you pick a on card 2273-1", "if you pick a on collector item 2273-1", "only if you pick b on card #2273-1"]
+             "if you pick a on card 2273-1", "if you pick a on collector item 2273-1", "only if you pick b on card #2273-1",
+             "if you pick a on collector card 2273-1", "if you pick a on card 2273-1, 12 gift receipts change and"]
 
 
 @pytest.mark.parametrize("field", ["reason", "consequence"])
@@ -168,8 +170,9 @@ def test_e15_a_field_naming_its_own_card_in_a_conditional_beside_another_item_re
     "Costs less if you chose a for cards 2273-1 and 12.",
     "Only if you pick a on card 2273-1's twin.",
     "Only if you pick a on card 2273-1 or 12.",
+    "Only if you pick a on item 2273-1 or item 12.",
 ], ids=["e15-card-above", "e15-card-below", "e15-same-answer-possessive", "e15-decisions-above", "e15-a-list-of-cards", "e15-possessive-target",
-        "e15-one-of-several-targets"])
+        "e15-one-of-several-targets", "e15-one-of-several-targets-repeated-noun"])
 def test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another_question(text):
     # Axis: the own-number exemption after a choice's target applies only when the number completes the target of a choice
     # (if you pick a on card 2273-1); a positional or possessive reference, or a list of cards, still depends on another question.
