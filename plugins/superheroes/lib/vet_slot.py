@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of twenty reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of these reasons, the two stack reasons named above among them (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker (live: GitHub renders it, decided by
 ``md_hidden.scan``), so the builder's owner half is lost and the body is restored from the PR's edit history rather
@@ -28,7 +28,9 @@ comment - which the write would delete), ``receipt-missing``, ``followup-undispo
 hidden, or ``md_hidden`` cannot be sure it renders, or the slot text carries an at-sign GitHub reads as a login,
 outside a fence or code span, the detail opening "bare-mention:" and naming each token and the remedy),
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
-names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
+names a database tool or a Keychain read), ``costly-not-accepted`` (``REASON_COSTLY_NOT_ACCEPTED``; ``handback`` only: a costly or unlabelled
+degradation bullet whose text appears in no line under What we're accepting, by the merge sheet build's own comparison,
+``pr_sheet.costly_unlisted``), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
 named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
 ``leftover_accepting.py``), ``fixed-above-not-in-stack`` and ``fixed-above-unverified`` (both callers of the leftover
@@ -71,6 +73,7 @@ import md_fence  # noqa: E402
 import md_hidden  # noqa: E402
 import mention_guard  # noqa: E402
 import pr_body_regions  # noqa: E402
+import pr_sheet  # noqa: E402
 import review_record  # noqa: E402
 import stack_check  # noqa: E402
 
@@ -80,6 +83,7 @@ PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 REASON_STACK_NOT_CAUGHT_UP = "stack-not-caught-up"
 REASON_STACK_LOWER_UNREADABLE = "stack-lower-unreadable"
 REASON_BODY_EMPTIED = "body-emptied"
+REASON_COSTLY_NOT_ACCEPTED = "costly-not-accepted"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
@@ -725,13 +729,35 @@ def check_handback(body):
     return {"ok": True, "verb": "handback", "followups": ids or []}
 
 
+def check_costly_accepted(body):
+    """Refuse ``costly-not-accepted`` while a costly or unlabelled degradation bullet has no line under What we're
+    accepting carrying its text: the merge sheet build's own comparison (``pr_sheet.costly_unlisted``) and its own problem
+    wording, never a second copy of the rule. Run last on both handback paths, so every earlier refusal keeps its place."""
+    # axis: a costly or unlabelled degradation with no line under What we're accepting refuses costly-not-accepted, by the sheet build's own comparison — see bite-proof record i2633_handback_costly_unlisted.md
+    missing = pr_sheet.costly_unlisted(body)
+    if missing:
+        raise _Refusal(REASON_COSTLY_NOT_ACCEPTED, "; ".join(
+            "the " + pr_sheet.costly_unlisted_problem(label, text) for label, text in missing))
+
+
 def _handback_file(body_file):
     try:
         with open(body_file, encoding="utf-8") as handle:
             body = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
         return _refusal("read-failed", "body file unreadable: %s" % exc)
-    return check_handback(body)
+    return handback_body(body)
+
+
+def handback_body(body):
+    """``handback --body-file`` over a body already read: check_handback, then check_costly_accepted."""
+    result = check_handback(body)
+    if result["ok"]:
+        try:
+            check_costly_accepted(body)
+        except _Refusal as exc:
+            return _refusal(exc.reason, exc.detail)
+    return result
 
 
 def _claim_name(claim):
@@ -1117,6 +1143,7 @@ def _run_verb(verb, pr, repo, slot_file, run):
             check_leftovers(pr, repo, body, comments, run)
             # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
             check_calibration_disclosures(pr, repo, body, comments)
+            check_costly_accepted(body)
         return result
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
