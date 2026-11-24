@@ -92,3 +92,10 @@ On commit `4cd0bc34`, the same G1 neutralization (`missing = []`) with `-k "refu
 `10 failed, 2 passed, 19 deselected in 1.28s` (every refusal case, both `--pr` path refusal cases; the two passes are the
 `--pr` path's passing cases), and the restore printed `12 passed, 19 deselected in 0.45s`. Its full red output is not kept
 here; the command reproduces it.
+
+## G1 re-run on the narrowed tests
+
+On commit `3b135c4d` (the advisor's narrowing), the same neutralization and command printed
+`9 failed, 2 passed, 18 deselected in 1.88s` (all seven refusal cases and both `--pr` path refusal cases; the two passes are
+the `--pr` path's passing cases), and the restore printed `11 passed, 18 deselected in 6.98s`; `git status --porcelain`
+then printed nothing.
