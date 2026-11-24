@@ -64,8 +64,17 @@ REFUSALS = {
                              [LONG_PROBLEM]),
     "hidden-in-inline-comment": (body(["CI will report separately. <!-- %s. -->" % GATE], "[costly] %s." % GATE),
                                  [GATE_PROBLEM]),
-    "hidden-after-an-unclosed-comment": (body(["CI will report separately. <!-- %s." % GATE], "[costly] %s." % GATE),
+    "hidden-by-a-comment-across-items": (body(["CI will report. <!-- Internal note",
+                                               "%s. --> CI will report separately." % GATE], "[costly] %s." % GATE),
                                          [GATE_PROBLEM]),
+    "hidden-in-a-tag-attribute": (body(['<span title="%s.">See CI</span>' % GATE], "[costly] %s." % GATE),
+                                  [GATE_PROBLEM]),
+    "hidden-after-an-unclosed-block-comment": (body(["Something else entirely.", "<!-- %s." % GATE],
+                                                    "[costly] %s." % GATE), [GATE_PROBLEM]),
+    "hidden-by-a-block-comment-across-a-blank-line": (body(["Something else entirely.", "<!-- draft\n\n  %s. -->" % GATE],
+                                                           "[costly] %s." % GATE), [GATE_PROBLEM]),
+    "comment-joins-two-words":(body(["The verify gate did<!-- note -->not run on the final head."], "[costly] %s." % GATE),
+                                [GATE_PROBLEM]),
     "empty-costly-bullet": (body(["%s, so CI is the receipt." % GATE], "[costly]"), [EMPTY_PROBLEM]),
 }
 REFUSED = {name: text for name, (text, _problems) in REFUSALS.items()}
@@ -78,6 +87,8 @@ PASSED = {
                                              "[costly] %s." % GATE),
     "carried-before-an-autolink": body(["%s, so CI is the receipt: <https://example.com/run/1>" % GATE],
                                        "[costly] %s." % GATE),
+    "shown-after-an-inline-unclosed-comment": body(["CI will report separately. <!-- %s, so CI is the receipt." % GATE],
+                                                   "[costly] %s." % GATE),
     "harmless-only": body([], "[harmless] The order rode a prompt file."),
     "no-degradations": body([]),
 }
