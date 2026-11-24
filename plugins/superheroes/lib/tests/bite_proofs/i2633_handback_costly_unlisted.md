@@ -9,7 +9,7 @@ The neutralization was one targeted edit made with the Edit tool and undone by t
 Command (absolute paths in the cloud session, shown relative to the worktree root):
 `scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "two-costly or (pr_path and unlabelled)"`
 
-Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it); G2 (added at review round 1, reworked at rounds 2 and 3) the hidden-markup reading in `pr_sheet.costly_unlisted`. No others.
+Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it). No others. (A G2, a hidden-markup reading added in review rounds 1 to 3, was removed when the advisor narrowed the PR to the base's comparison; its record went with it.)
 
 Disclosures: captures are the runner's output; the long `text =` parameter lines and the long assertion line are shown as the runner printed them (the runner elided their middles with `...`); the worktree path prefix is shortened to `.claude/worktrees/b2633`, and the header warning line from the interpreter launcher is dropped. Nothing was redacted.
 
@@ -84,38 +84,6 @@ FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costl
 ```
 ...                                                                      [100%]
 3 passed, 21 deselected in 0.48s
-```
-
-## G2: words GitHub hides under What we're accepting carry no costly line
-
-Added at review round 1 (finding v0) and reworked at rounds 2 and 3. Round 1 reused the leftover rule's shown-text reader,
-which blanked whole visible acceptances (an inline comment or an autolink in them). Round 2 stripped comments per item,
-which missed a comment spanning items and a tag attribute. The guard now reads the acceptances from `pr_sheet._shown_markup`'s
-body: line-start comment blocks to their closer, mid-line comments within their paragraph, every raw tag, and the rest of
-the body after a line-start opener left unclosed, a superheroes marker never removed or crossed. Re-run on fix commit
-`55811f7c`. Same detector file; command:
-`scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "refuses_a_costly and (hidden or comment)"`
-
-- **Guarded element / axis:** `pr_sheet.py`, `costly_unlisted`, `accepting_listed(body if not isinstance(body, str) else _shown_markup(body))`. Axis: words GitHub hides (inside an HTML comment, across lines or items, or a tag's attributes) carry no costly line, and the shown words around them still do (the second half is held by the `PASSED` cases `carried-beside-an-inline-comment`, `carried-before-an-autolink` and `shown-after-an-inline-unclosed-comment`).
-- **Neutralization:** `accepting_listed(body if not isinstance(body, str) else _shown_markup(body))` became `accepting_listed(body)` (raw markup kept).
-- **Raw red** (the runner's last lines; the five failure blocks above them are the same assertion, `assert (True is False)` at line 105, one per case):
-
-```
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment]
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-by-a-comment-across-items]
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-a-tag-attribute]
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-after-an-unclosed-block-comment]
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-by-a-block-comment-across-a-blank-line]
-5 failed, 1 passed, 41 deselected in 5.38s
-```
-
-  The one pass is `comment-joins-two-words`, which the raw text refuses too (`did<!-- note -->not` never holds `did not`).
-- **Restore:** inverse Edit back to `_shown_markup(body)`; `git status --porcelain` then printed nothing.
-- **Raw green** (same command):
-
-```
-......                                                                   [100%]
-6 passed, 41 deselected in 1.62s
 ```
 
 ## G1 re-run on the round-1 test rewrite

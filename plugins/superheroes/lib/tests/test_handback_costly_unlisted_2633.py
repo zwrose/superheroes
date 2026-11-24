@@ -49,7 +49,7 @@ def sheet_costly_problems(text):
 
 GATE_PROBLEM = 'costly deviation ("%s.") %s' % (GATE, NO_LINE)
 LONG_PROBLEM = 'costly deviation ("%s…") %s' % (LONG[:80], NO_LINE)
-EMPTY_PROBLEM = "costly deviation has no text after its label"
+EMPTY_PROBLEM = 'costly deviation ("") %s' % NO_LINE
 
 # name -> (body, the problem texts the refusal must name, written out here and never derived from costly_unlisted)
 REFUSALS = {
@@ -62,19 +62,6 @@ REFUSALS = {
     "two-costly": (body([], "[costly] %s." % GATE, "[costly] %s." % LONG), [GATE_PROBLEM, LONG_PROBLEM]),
     "carried-then-missing": (body(["%s, so CI is the receipt." % GATE], "[costly] %s." % GATE, "[costly] %s." % LONG),
                              [LONG_PROBLEM]),
-    "hidden-in-inline-comment": (body(["CI will report separately. <!-- %s. -->" % GATE], "[costly] %s." % GATE),
-                                 [GATE_PROBLEM]),
-    "hidden-by-a-comment-across-items": (body(["CI will report. <!-- Internal note",
-                                               "%s. --> CI will report separately." % GATE], "[costly] %s." % GATE),
-                                         [GATE_PROBLEM]),
-    "hidden-in-a-tag-attribute": (body(['<span title="%s.">See CI</span>' % GATE], "[costly] %s." % GATE),
-                                  [GATE_PROBLEM]),
-    "hidden-after-an-unclosed-block-comment": (body(["Something else entirely.", "<!-- %s." % GATE],
-                                                    "[costly] %s." % GATE), [GATE_PROBLEM]),
-    "hidden-by-a-block-comment-across-a-blank-line": (body(["Something else entirely.", "<!-- draft\n\n  %s. -->" % GATE],
-                                                           "[costly] %s." % GATE), [GATE_PROBLEM]),
-    "comment-joins-two-words":(body(["The verify gate did<!-- note -->not run on the final head."], "[costly] %s." % GATE),
-                                [GATE_PROBLEM]),
     "empty-costly-bullet": (body(["%s, so CI is the receipt." % GATE], "[costly]"), [EMPTY_PROBLEM]),
 }
 REFUSED = {name: text for name, (text, _problems) in REFUSALS.items()}
@@ -83,12 +70,6 @@ PASSED = {
                            "[costly] %s." % GATE),
     "costly-carried-emphasis-and-case": body(["**the verify gate did not run on the final head** until CI runs"],
                                              "[costly] %s." % GATE),
-    "carried-beside-an-inline-comment": body(["%s, so CI is the receipt. <!-- Internal note. -->" % GATE],
-                                             "[costly] %s." % GATE),
-    "carried-before-an-autolink": body(["%s, so CI is the receipt: <https://example.com/run/1>" % GATE],
-                                       "[costly] %s." % GATE),
-    "shown-after-an-inline-unclosed-comment": body(["CI will report separately. <!-- %s, so CI is the receipt." % GATE],
-                                                   "[costly] %s." % GATE),
     "harmless-only": body([], "[harmless] The order rode a prompt file."),
     "no-degradations": body([]),
 }
@@ -96,10 +77,9 @@ PASSED = {
 
 @pytest.mark.parametrize("name", list(REFUSALS))
 def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(name):
-    # Bites on: check_costly_accepted not calling costly_unlisted, a comparison that stops after the first carried bullet,
-    # or one that counts words inside an inline HTML comment as a shown line.
-    # Axis: a costly or unlabelled bullet with no shown carrying line refuses costly-not-accepted, naming exactly the
-    # bullets the case lists and no carried one.
+    # Bites on: check_costly_accepted not calling costly_unlisted, or a comparison that stops after the first carried bullet.
+    # Axis: a costly or unlabelled bullet with no carrying line refuses costly-not-accepted, naming exactly the bullets the
+    # case lists and no carried one.
     text, problems = REFUSALS[name]
     result = vs.handback_body(text)
     assert result["ok"] is False and result["reason"] == "costly-not-accepted"

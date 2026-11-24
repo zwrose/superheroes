@@ -581,36 +581,11 @@ def _line_key(text):
     return key[:-1] if key.endswith(".") else key
 
 
-# Comments as GitHub hides them, never a superheroes marker (the section reader needs those) and never across one. A comment
-# that opens a line (after any list markers) is an HTML block and runs to its closer across blank lines; one opened mid-line
-# closes only inside its own paragraph, so it never crosses a blank line (unclosed there, GitHub shows it as text).
-_NO_MARKER = r"(?!<!--\s*superheroes:)"
-_BLOCK_COMMENT = re.compile(r"^([ \t]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)*)<!--(?!\s*superheroes:)(?:%s.)*?-->" % _NO_MARKER,
-                            re.S | re.M)
-_INLINE_COMMENT = re.compile(r"<!--(?!\s*superheroes:)(?:%s(?!\n[ \t]*\n).)*?-->" % _NO_MARKER, re.S)
-# A line-start opener left after the closed ones are gone: unclosed, or closed only past a marker. The rest is cut.
-_UNCLOSED_BLOCK_COMMENT = re.compile(r"^[ \t]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)*<!--(?!\s*superheroes:)", re.M)
-# A raw HTML tag, its attributes included; GitHub shows none of it (an autolink, which shows its address, goes too).
-_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>")
-
-
-def _shown_markup(body):
-    """The body as the costly-line comparison reads its acceptances: each closed HTML comment (bar a superheroes marker) and
-    each raw tag taken out with nothing in its place, as GitHub joins the text around them (a comment that opens a line keeps
-    the list markers before it), and the rest of the body cut at a line-start opener left unclosed. A comment opened mid-line
-    with no closer in its paragraph is kept, as GitHub shows it. Taking text out only ever makes a costly line harder to
-    carry, never easier."""
-    text = _HTML_TAG.sub("", _INLINE_COMMENT.sub("", _BLOCK_COMMENT.sub(r"\1", body)))
-    opened = _UNCLOSED_BLOCK_COMMENT.search(text)
-    return text if opened is None else text[:opened.start()]
-
-
 def costly_unlisted(body):
     """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
-    text appears in no line under What we're accepting (accepting_listed over _shown_markup's body), compared by _line_key. A
-    harmless one is never returned; an empty text after the label is never matched."""
-    # axis: words GitHub hides (inside an HTML comment, across lines or items, or a tag's attributes) carry no costly line, and the shown words around them still do — see bite-proof record i2633_handback_costly_unlisted.md (G2)
-    accepted = [_line_key(line) for line in accepting_listed(body if not isinstance(body, str) else _shown_markup(body))]
+    text appears in no line under What we're accepting (accepting_listed), compared by _line_key. A harmless one is never
+    returned; an empty text after the label is never matched."""
+    accepted = [_line_key(line) for line in accepting_listed(body)]
     missing = []
     for label, text in degradations_listed(body):
         key = _line_key(text)
@@ -622,13 +597,9 @@ def costly_unlisted(body):
 
 def costly_unlisted_problem(label, text):
     """The problem line for one (label, text) costly_unlisted returns, worded once for the sheet build and the builder's
-    handback check (vet_slot.py handback), which prefix it with where it was found. A bullet with no text after its label is
-    told to say what the degradation was first, since no line can carry an empty text."""
-    kind = "costly" if label else "unlabelled (read as costly)"
-    if not _line_key(text):
-        return (f"{kind} deviation has no text after its label, so no line under What we're accepting can carry it: say what "
-                "the degradation was after the label, then carry that text into a line there")
-    return (f'{kind} deviation ("{_excerpt(text)}") has no line under '
+    handback check (vet_slot.py handback), which prefix it with where it was found. The text is the sheet build's own problem
+    line, unchanged."""
+    return (f'{"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
             "What we're accepting: carry its text, after the label, into a line there")
 
 
