@@ -64,6 +64,8 @@ REFUSALS = {
                              [LONG_PROBLEM]),
     "hidden-in-inline-comment": (body(["CI will report separately. <!-- %s. -->" % GATE], "[costly] %s." % GATE),
                                  [GATE_PROBLEM]),
+    "hidden-after-an-unclosed-comment": (body(["CI will report separately. <!-- %s." % GATE], "[costly] %s." % GATE),
+                                         [GATE_PROBLEM]),
     "empty-costly-bullet": (body(["%s, so CI is the receipt." % GATE], "[costly]"), [EMPTY_PROBLEM]),
 }
 REFUSED = {name: text for name, (text, _problems) in REFUSALS.items()}
@@ -72,6 +74,10 @@ PASSED = {
                            "[costly] %s." % GATE),
     "costly-carried-emphasis-and-case": body(["**the verify gate did not run on the final head** until CI runs"],
                                              "[costly] %s." % GATE),
+    "carried-beside-an-inline-comment": body(["%s, so CI is the receipt. <!-- Internal note. -->" % GATE],
+                                             "[costly] %s." % GATE),
+    "carried-before-an-autolink": body(["%s, so CI is the receipt: <https://example.com/run/1>" % GATE],
+                                       "[costly] %s." % GATE),
     "harmless-only": body([], "[harmless] The order rode a prompt file."),
     "no-degradations": body([]),
 }

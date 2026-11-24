@@ -581,15 +581,23 @@ def _line_key(text):
     return key[:-1] if key.endswith(".") else key
 
 
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+
+def _uncommented(text):
+    """An acceptance's text with each closed HTML comment replaced by a space and an unclosed one cut to the end, which is
+    what GitHub hides of it; every other character, an autolink or a tag included, is kept."""
+    text = _HTML_COMMENT.sub(" ", text)
+    cut = text.find("<!--")
+    return text if cut < 0 else text[:cut]
+
+
 def costly_unlisted(body):
     """The (label, text) degradations of a PR body (degradations_listed) that are labelled costly or carry no label and whose
-    text appears in no line under What we're accepting as GitHub shows it (leftover_accepting.visible_acceptances: a hidden
-    line, a closed inline comment or an item cut by markup carries nothing), compared by _line_key. A harmless one is never
-    returned; an empty text after the label is never matched."""
-    import leftover_accepting  # imported here: leftover_accepting imports this module
-
-    # axis: only text GitHub shows carries a costly line; words inside an inline HTML comment do not — see bite-proof record i2633_handback_costly_unlisted.md (G2)
-    accepted = [_line_key(line) for line in leftover_accepting.visible_acceptances(body)]
+    text appears in no line under What we're accepting (accepting_listed) once its HTML comments are taken out (_uncommented),
+    compared by _line_key. A harmless one is never returned; an empty text after the label is never matched."""
+    # axis: words inside an HTML comment carry no costly line, and the shown words around a comment still do — see bite-proof record i2633_handback_costly_unlisted.md (G2)
+    accepted = [_line_key(_uncommented(line)) for line in accepting_listed(body)]
     missing = []
     for label, text in degradations_listed(body):
         key = _line_key(text)

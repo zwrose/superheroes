@@ -530,12 +530,6 @@ def _accepting_items(body):
     return pr_sheet.acceptance_texts(_cut_items(body)[0])
 
 
-def visible_acceptances(body):
-    """The acceptances under What we're accepting as GitHub shows them (``_accepting_items``): the reader the costly-line
-    comparison (``pr_sheet.costly_unlisted``, #2633) shares with the leftover rule, so hidden text never carries a line."""
-    return _accepting_items(body)
-
-
 def _cut_items(body):
     """``(items, void)``: the text of every item of the section (``_accepting_items`` steps 1 to 4, before the None and N/A
     filter; ``""`` for an item that counts as nothing), and ``void``, always ``False`` (the body-wide void is retired).
