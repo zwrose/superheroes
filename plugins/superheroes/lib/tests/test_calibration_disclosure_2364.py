@@ -32,7 +32,10 @@ def body(degradations, accepting="None\n"):
 
 
 def bullet(text, label="costly"):
-    return body("- [%s] %s\n" % (label, text))
+    """A body with one degradation bullet; a costly one is carried into What we're accepting, as the merge sheet build and
+    handback's costly-not-accepted check (#2633) require, so the calibration check alone decides the result."""
+    accepting = "None\n" if label == "harmless" else "- %s\n" % text
+    return body("- [%s] %s\n" % (label, text), accepting)
 
 
 def mark(name, files):

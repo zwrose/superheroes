@@ -725,12 +725,18 @@ def check_handback(body):
         named = ["the fenced %s block opening at line %d names %s"
                  % (b["language"] or "no-language", b["line"], b["tool"]) for b in blocks]
         return _refusal("owner-command-in-body", "; ".join(named) + "; " + OWNER_COMMAND_ADVICE)
+    return {"ok": True, "verb": "handback", "followups": ids or []}
+
+
+def check_costly_accepted(body):
+    """Refuse ``costly-not-accepted`` while a costly or unlabelled degradation bullet has no line under What we're
+    accepting carrying its text: the merge sheet build's own comparison (``pr_sheet.costly_unlisted``) and its own problem
+    wording, never a second copy of the rule. Run last on both handback paths, so every earlier refusal keeps its place."""
     # axis: a costly or unlabelled degradation with no line under What we're accepting refuses costly-not-accepted, by the sheet build's own comparison — see bite-proof record i2633_handback_costly_unlisted.md
     missing = pr_sheet.costly_unlisted(body)
     if missing:
-        return _refusal("costly-not-accepted", "; ".join(
+        raise _Refusal("costly-not-accepted", "; ".join(
             "the " + pr_sheet.costly_unlisted_problem(label, text) for label, text in missing))
-    return {"ok": True, "verb": "handback", "followups": ids or []}
 
 
 def _handback_file(body_file):
@@ -739,7 +745,18 @@ def _handback_file(body_file):
             body = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
         return _refusal("read-failed", "body file unreadable: %s" % exc)
-    return check_handback(body)
+    return handback_body(body)
+
+
+def handback_body(body):
+    """``handback --body-file`` over a body already read: check_handback, then check_costly_accepted."""
+    result = check_handback(body)
+    if result["ok"]:
+        try:
+            check_costly_accepted(body)
+        except _Refusal as exc:
+            return _refusal(exc.reason, exc.detail)
+    return result
 
 
 def _claim_name(claim):
@@ -1125,6 +1142,7 @@ def _run_verb(verb, pr, repo, slot_file, run):
             check_leftovers(pr, repo, body, comments, run)
             # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
             check_calibration_disclosures(pr, repo, body, comments)
+            check_costly_accepted(body)
         return result
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md

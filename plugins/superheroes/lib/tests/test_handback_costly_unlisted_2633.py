@@ -9,6 +9,7 @@ import pytest
 
 import pr_sheet
 import vet_slot as vs
+from test_calibration_disclosure_2364 import CODE1, PR, REPO, Fake, record_comment, row
 
 LIB = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_sheet"
@@ -65,9 +66,9 @@ PASSED = {
 
 @pytest.mark.parametrize("text", list(REFUSED.values()), ids=list(REFUSED))
 def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(text):
-    # Bites on: check_handback not calling costly_unlisted, so a body the merge sheet then refuses passes handback.
+    # Bites on: check_costly_accepted not calling costly_unlisted, so a body the merge sheet then refuses passes handback.
     # Axis: a costly or unlabelled bullet with no carrying line refuses costly-not-accepted, naming each missing bullet.
-    result = vs.check_handback(text)
+    result = vs.handback_body(text)
     assert result["ok"] is False and result["reason"] == "costly-not-accepted"
     missing = pr_sheet.costly_unlisted(text)
     assert missing
@@ -80,13 +81,13 @@ def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_acceptin
 def test_handback_passes_once_the_line_carries_the_text_or_the_degradation_is_harmless(text):
     # Bites on: the handback check asking a harmless bullet for a line, or comparing more strictly than the sheet.
     # Axis: a carried costly line, a harmless-only list and an empty list all pass.
-    assert vs.check_handback(text) == {"ok": True, "verb": "handback", "followups": []}
+    assert vs.handback_body(text) == {"ok": True, "verb": "handback", "followups": []}
 
 
 def test_the_refusal_names_the_unlabelled_reading_and_the_start_of_a_long_text():
     # Bites on: the handback detail dropping the label reading or the text excerpt the sheet's problem line gives.
     # Axis: the detail reads as the sheet's problem line does: the unlabelled reading named, a long text cut to 80 characters.
-    detail = vs.check_handback(body([], LONG + "."))["detail"]
+    detail = vs.handback_body(body([], LONG + "."))["detail"]
     assert "unlabelled (read as costly) deviation" in detail and LONG[:80] + "…" in detail and LONG not in detail
 
 
@@ -96,7 +97,7 @@ def test_handback_and_the_merge_sheet_build_agree(text):
     # Axis: the sheet build refuses a body for a costly line exactly when handback refuses it costly-not-accepted, and
     # each missing bullet's problem line is the same text after its prefix.
     sheet = sheet_costly_problems(text)
-    result = vs.check_handback(text)
+    result = vs.handback_body(text)
     assert bool(sheet) == (result.get("reason") == "costly-not-accepted")
     assert (result["ok"] is True) == (not sheet)
     for problem in sheet:
@@ -106,7 +107,23 @@ def test_handback_and_the_merge_sheet_build_agree(text):
 
 def test_run_verb_body_file_refuses_costly_not_accepted(tmp_path):
     # Bites on: the --body-file path skipping the costly check the --pr path runs.
-    # Axis: handback --body-file returns the same refusal check_handback does.
+    # Axis: handback --body-file returns the same refusal handback_body does, and passes a carried body.
     path = tmp_path / "body.md"
     path.write_text(REFUSED["costly"], encoding="utf-8")
     assert vs.run_verb("handback", None, None, body_file=str(path))["reason"] == "costly-not-accepted"
+    path.write_text(PASSED["costly-carried"], encoding="utf-8")
+    assert vs.run_verb("handback", None, None, body_file=str(path))["ok"] is True
+
+
+@pytest.mark.parametrize("name, ok", [("costly", False), ("unlabelled", False), ("costly-carried", True),
+                                      ("harmless-only", True)])
+def test_run_verb_pr_path_refuses_costly_not_accepted_after_its_record_checks(monkeypatch, name, ok):
+    # Bites on: the --pr path (the one the ready mark runs) skipping the costly check the --body-file path runs.
+    # Axis: over an open PR with a readable review record, a missing costly line refuses costly-not-accepted and a
+    # carried or harmless one passes.
+    monkeypatch.setattr(vs.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else None)
+    text = {**REFUSED, **PASSED}[name]
+    result = vs.run_verb("handback", PR, REPO, run=Fake(text, [record_comment([row(CODE1)])]))
+    assert result["ok"] is ok
+    if not ok:
+        assert result["reason"] == "costly-not-accepted" and GATE in result["detail"]
