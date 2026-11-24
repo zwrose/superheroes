@@ -67,8 +67,9 @@ Give every Bash call an explicit `timeout` (`timeout: 600000` for a long run).
    you or the vet find before the merge is a vet finding: it holds the verdict, and it gets no
    misses-log append as a review escape.
 2. **A stack layer is not held NOT-READY for review leftovers its own PR body does not name when
-   the stack's sheet carries them as cards.** A leftover the stack's sheet shows the owner as a card
-   has reached the owner; grade the layer on what is its own.
+   the stack's sheet carries them as cards.** A leftover the stack's sheet shows the owner as a card,
+   or as a line under the list-item card that carries it, has reached the owner; grade the layer on
+   what is its own.
 3. **Write the receipt as the advisor's own.** The advisor posts your text as its receipt, so
    neither file says "draft", "drafter", "drafting", "posting seat" or anything else that reads
    wrong once the advisor posts it.
