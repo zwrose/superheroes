@@ -595,6 +595,13 @@ def costly_unlisted(body):
     return missing
 
 
+def costly_unlisted_problem(label, text):
+    """The problem line for one (label, text) costly_unlisted returns, worded once for the sheet build and the builder's
+    handback check (vet_slot.py handback), which prefix it with where it was found."""
+    return (f'{"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
+            "What we're accepting: carry its text, after the label, into a line there")
+
+
 def listed_bullets(pr, body):
     """(bullet id, text) for each acceptance a PR body lists, in body order.
 
@@ -1430,8 +1437,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems, auto, listed_keys)
         for pr in allowed:
             for label, text in costly_unlisted(bodies[pr]):
-                problems.append(f'PR #{pr}\'s {"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
-                                "What we're accepting: carry its text, after the label, into a line there")
+                problems.append(f"PR #{pr}'s " + costly_unlisted_problem(label, text))
     if problems:
         raise Refusal(problems)
     stack = kind == "stack"

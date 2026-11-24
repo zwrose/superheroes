@@ -178,7 +178,10 @@ marker. It trusts the marker as your declaration, and the vet reads both.
 body before you open the ready PR (or `--pr <n> --repo <owner/name>` on an open one). It reads the
 body with the advisor's own parser, so a refusal (`markers-invalid`, naming the marker: missing,
 hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slot tool would refuse
-too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs). Fix the body and
+too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs), and
+`costly-not-accepted` while a `[costly]` or unlabelled degradation bullet has no line under *What
+we're accepting* carrying its text, naming each such bullet and the start of its text (§ Disclosed
+degradations; the comparison is the merge sheet build's own). Fix the body and
 re-run until it prints `"ok": true`; once your lane ends, nobody can.
 
 Before opening or editing the PR, run `python3 -B <plugin root>/lib/mention_guard.py check --file <body file>` on the body; a `bare-mention` refusal names each token to fix.
@@ -264,7 +267,7 @@ this rule, in this order:
    that could not run there.
 3. Doubt sorts costly.
 
-Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet. On the PR body, a
+Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet, and `vet_slot.py handback` refuses the same body first, with `costly-not-accepted`, by the same comparison. On the PR body, a
 harmless one stays only in the build record: it is never a body acceptance, so the merge sheet's
 accounting never counts it. On the merge sheet, the advisor may mention a harmless one as a line of
 the sheet's routine "What you're accepting" fold item; such a fold line is sheet-side, is not a body
