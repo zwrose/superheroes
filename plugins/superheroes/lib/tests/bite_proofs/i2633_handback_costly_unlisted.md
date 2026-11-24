@@ -9,7 +9,7 @@ The neutralization was one targeted edit made with the Edit tool and undone by t
 Command (absolute paths in the cloud session, shown relative to the worktree root):
 `scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "two-costly or (pr_path and unlabelled)"`
 
-Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it); G2 (added at review round 1, reworked at round 2) the comment strip in `pr_sheet.costly_unlisted`. No others.
+Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it); G2 (added at review round 1, reworked at rounds 2 and 3) the hidden-markup reading in `pr_sheet.costly_unlisted`. No others.
 
 Disclosures: captures are the runner's output; the long `text =` parameter lines and the long assertion line are shown as the runner printed them (the runner elided their middles with `...`); the worktree path prefix is shortened to `.claude/worktrees/b2633`, and the header warning line from the interpreter launcher is dropped. Nothing was redacted.
 
@@ -86,66 +86,36 @@ FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costl
 3 passed, 21 deselected in 0.48s
 ```
 
-## G2: words inside an HTML comment under What we're accepting carry no costly line
+## G2: words GitHub hides under What we're accepting carry no costly line
 
-Added at review round 1 (finding v0) and reworked at review round 2, when the round-1 reader (the leftover rule's shown-text
-reader) proved to blank a whole visible acceptance holding an inline comment or an autolink. The guard now strips only HTML
-comments from each raw acceptance (`pr_sheet._uncommented`). Re-run on fix commit `8a579b3f`. Same detector file, tests
-`test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment]` and
-`[hidden-after-an-unclosed-comment]` (unedited between the red and the green). Command:
+Added at review round 1 (finding v0) and reworked at rounds 2 and 3. Round 1 reused the leftover rule's shown-text reader,
+which blanked whole visible acceptances (an inline comment or an autolink in them). Round 2 stripped comments per item,
+which missed a comment spanning items and a tag attribute. The guard now reads the acceptances from `pr_sheet._shown_markup`'s
+body: line-start comment blocks to their closer, mid-line comments within their paragraph, every raw tag, and the rest of
+the body after a line-start opener left unclosed, a superheroes marker never removed or crossed. Re-run on fix commit
+`55811f7c`. Same detector file; command:
 `scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "refuses_a_costly and (hidden or comment)"`
 
-- **Guarded element / axis:** `pr_sheet.py`, `costly_unlisted`, `accepted = [_line_key(_uncommented(line)) for line in accepting_listed(body)]`. Axis: words inside an HTML comment carry no costly line, and the shown words around a comment still do (the second half is held by the `PASSED` cases `carried-beside-an-inline-comment` and `carried-before-an-autolink`).
-- **Neutralization:** `_line_key(_uncommented(line))` became `_line_key(line)` (comments kept).
-- **Raw red:**
+- **Guarded element / axis:** `pr_sheet.py`, `costly_unlisted`, `accepting_listed(body if not isinstance(body, str) else _shown_markup(body))`. Axis: words GitHub hides (inside an HTML comment, across lines or items, or a tag's attributes) carry no costly line, and the shown words around them still do (the second half is held by the `PASSED` cases `carried-beside-an-inline-comment`, `carried-before-an-autolink` and `shown-after-an-inline-unclosed-comment`).
+- **Neutralization:** `accepting_listed(body if not isinstance(body, str) else _shown_markup(body))` became `accepting_listed(body)` (raw markup kept).
+- **Raw red** (the runner's last lines; the five failure blocks above them are the same assertion, `assert (True is False)` at line 105, one per case):
 
 ```
-FF                                                                       [100%]
-=================================== FAILURES ===================================
-_ test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment] _
-
-name = 'hidden-in-inline-comment'
-
-    @pytest.mark.parametrize("name", list(REFUSALS))
-    def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(name):
-        # Bites on: check_costly_accepted not calling costly_unlisted, a comparison that stops after the first carried bullet,
-        # or one that counts words inside an inline HTML comment as a shown line.
-        # Axis: a costly or unlabelled bullet with no shown carrying line refuses costly-not-accepted, naming exactly the
-        # bullets the case lists and no carried one.
-        text, problems = REFUSALS[name]
-        result = vs.handback_body(text)
->       assert result["ok"] is False and result["reason"] == "costly-not-accepted"
-E       assert (True is False)
-
-.claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py:94: AssertionError
-_ test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-after-an-unclosed-comment] _
-
-name = 'hidden-after-an-unclosed-comment'
-
-    @pytest.mark.parametrize("name", list(REFUSALS))
-    def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(name):
-        # Bites on: check_costly_accepted not calling costly_unlisted, a comparison that stops after the first carried bullet,
-        # or one that counts words inside an inline HTML comment as a shown line.
-        # Axis: a costly or unlabelled bullet with no shown carrying line refuses costly-not-accepted, naming exactly the
-        # bullets the case lists and no carried one.
-        text, problems = REFUSALS[name]
-        result = vs.handback_body(text)
->       assert result["ok"] is False and result["reason"] == "costly-not-accepted"
-E       assert (True is False)
-
-.claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py:94: AssertionError
-=========================== short test summary info ============================
 FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment]
-FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-after-an-unclosed-comment]
-2 failed, 35 deselected in 6.98s
+FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-by-a-comment-across-items]
+FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-a-tag-attribute]
+FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-after-an-unclosed-block-comment]
+FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-by-a-block-comment-across-a-blank-line]
+5 failed, 1 passed, 41 deselected in 5.38s
 ```
 
-- **Restore:** inverse Edit, `_line_key(line)` back to `_line_key(_uncommented(line))`; `git status --porcelain` then printed nothing.
+  The one pass is `comment-joins-two-words`, which the raw text refuses too (`did<!-- note -->not` never holds `did not`).
+- **Restore:** inverse Edit back to `_shown_markup(body)`; `git status --porcelain` then printed nothing.
 - **Raw green** (same command):
 
 ```
-..                                                                       [100%]
-2 passed, 35 deselected in 4.22s
+......                                                                   [100%]
+6 passed, 41 deselected in 1.62s
 ```
 
 ## G1 re-run on the round-1 test rewrite
