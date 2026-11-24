@@ -9,7 +9,7 @@ The neutralization was one targeted edit made with the Edit tool and undone by t
 Command (absolute paths in the cloud session, shown relative to the worktree root):
 `scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "two-costly or (pr_path and unlabelled)"`
 
-Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it). No others.
+Guarded-element set: G1 the `costly_unlisted` call in `check_costly_accepted` (axis comment above it); G2 (added at review round 1) the shown-text reader in `pr_sheet.costly_unlisted`. No others.
 
 Disclosures: captures are the runner's output; the long `text =` parameter lines and the long assertion line are shown as the runner printed them (the runner elided their middles with `...`); the worktree path prefix is shortened to `.claude/worktrees/b2633`, and the header warning line from the interpreter launcher is dropped. Nothing was redacted.
 
@@ -85,3 +85,49 @@ FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costl
 ...                                                                      [100%]
 3 passed, 21 deselected in 0.48s
 ```
+
+## G2: words inside an inline HTML comment under What we're accepting carry no costly line
+
+Added at review round 1 (finding v0), on fix commit `da11fe70`. Same detector file, test
+`test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment]` (unedited between
+the red and the green). Command: `scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py -q -p no:cacheprovider -k "hidden-in-inline-comment"`
+(the filter also selects the agreement test's case of the same name, which passes under the neutralization because both
+checks share the comparison: that is the one-rule property, not a miss).
+
+- **Guarded element / axis:** `pr_sheet.py`, `costly_unlisted`, `accepted = [_line_key(line) for line in leftover_accepting.visible_acceptances(body)]`. Axis: only text GitHub shows carries a costly line; words inside an inline HTML comment do not.
+- **Neutralization:** `leftover_accepting.visible_acceptances(body)` became `accepting_listed(body)` (the raw reader, comments kept).
+- **Raw red:**
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment] _
+
+name = 'hidden-in-inline-comment'
+
+    @pytest.mark.parametrize("name", list(REFUSALS))
+    def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting(name):
+        # Bites on: check_costly_accepted not calling costly_unlisted, a comparison that stops after the first carried bullet,
+        # or one that counts words inside an inline HTML comment as a shown line.
+        # Axis: a costly or unlabelled bullet with no shown carrying line refuses costly-not-accepted, naming exactly the
+        # bullets the case lists and no carried one.
+        text, problems = REFUSALS[name]
+        result = vs.handback_body(text)
+>       assert result["ok"] is False and result["reason"] == "costly-not-accepted"
+E       assert (True is False)
+
+.claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py:88: AssertionError
+=========================== short test summary info ============================
+FAILED .claude/worktrees/b2633/plugins/superheroes/lib/tests/test_handback_costly_unlisted_2633.py::test_handback_refuses_a_costly_degradation_missing_from_what_we_are_accepting[hidden-in-inline-comment]
+1 failed, 1 passed, 29 deselected in 1.83s
+```
+
+- **Restore:** inverse Edit, `accepting_listed(body)` back to `leftover_accepting.visible_acceptances(body)`; `git status --porcelain` then printed nothing.
+- **Raw green** (same command):
+
+```
+..                                                                       [100%]
+2 passed, 29 deselected in 13.52s
+```
+
+The G1 captures above predate the round-1 test rewrite; G1 was re-run on the rewritten tests at the final head (build record).
