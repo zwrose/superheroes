@@ -82,7 +82,7 @@ def test_handback_refuses_a_costly_degradation_missing_from_what_we_are_acceptin
     # case lists and no carried one.
     text, problems = REFUSALS[name]
     result = vs.handback_body(text)
-    assert result["ok"] is False and result["reason"] == "costly-not-accepted"
+    assert result["ok"] is False and result["reason"] == vs.REASON_COSTLY_NOT_ACCEPTED
     for problem in problems:
         assert "the " + problem in result["detail"]
     assert result["detail"].count("deviation") == len(problems)
@@ -106,14 +106,15 @@ def test_the_refusal_names_the_unlabelled_reading_and_the_start_of_a_long_text()
 def test_handback_and_the_merge_sheet_build_agree(text):
     # Bites on: either check gaining a second copy of the rule that drifts from the other.
     # Axis: the sheet build refuses a body for a costly line exactly when handback refuses it costly-not-accepted, and
-    # each missing bullet's problem line is the same text after its prefix.
+    # handback's whole detail is the sheet's problem lines, each with its prefix swapped, joined in order.
     sheet = sheet_costly_problems(text)
     result = vs.handback_body(text)
-    assert bool(sheet) == (result.get("reason") == "costly-not-accepted")
+    assert bool(sheet) == (result.get("reason") == vs.REASON_COSTLY_NOT_ACCEPTED)
     assert (result["ok"] is True) == (not sheet)
-    for problem in sheet:
-        assert problem.startswith("PR #%d's " % SHEET_PR)
-        assert problem[len("PR #%d's " % SHEET_PR):] in result["detail"]
+    prefix = "PR #%d's " % SHEET_PR
+    assert all(problem.startswith(prefix) for problem in sheet)
+    if sheet:
+        assert result["detail"] == "; ".join("the " + problem[len(prefix):] for problem in sheet)
 
 
 def test_run_verb_body_file_refuses_costly_not_accepted(tmp_path):
@@ -121,9 +122,20 @@ def test_run_verb_body_file_refuses_costly_not_accepted(tmp_path):
     # Axis: handback --body-file returns the same refusal handback_body does, and passes a carried body.
     path = tmp_path / "body.md"
     path.write_text(REFUSED["costly"], encoding="utf-8")
-    assert vs.run_verb("handback", None, None, body_file=str(path))["reason"] == "costly-not-accepted"
+    assert vs.run_verb("handback", None, None, body_file=str(path))["reason"] == vs.REASON_COSTLY_NOT_ACCEPTED
     path.write_text(PASSED["costly-carried"], encoding="utf-8")
     assert vs.run_verb("handback", None, None, body_file=str(path))["ok"] is True
+
+
+def test_run_verb_body_file_keeps_the_marker_refusal_ahead_of_the_costly_check(tmp_path):
+    # Bites on: the costly check moved ahead of check_handback on the --body-file path.
+    # Axis: a body that misses its followups marker and its costly line refuses markers-invalid, naming the marker.
+    text = REFUSED["costly"].replace("<!-- superheroes:followups none -->\n", "")
+    assert text != REFUSED["costly"] and pr_sheet.costly_unlisted(text)
+    path = tmp_path / "body.md"
+    path.write_text(text, encoding="utf-8")
+    result = vs.run_verb("handback", None, None, body_file=str(path))
+    assert result["ok"] is False and result["reason"] == "markers-invalid" and "followups" in result["detail"]
 
 
 @pytest.mark.parametrize("name, ok", [("costly", False), ("unlabelled", False), ("costly-carried", True),
@@ -137,7 +149,7 @@ def test_run_verb_pr_path_refuses_costly_not_accepted_after_its_record_checks(mo
     result = vs.run_verb("handback", PR, REPO, run=Fake(text, [record_comment([row(CODE1)])]))
     assert result["ok"] is ok
     if not ok:
-        assert result["reason"] == "costly-not-accepted" and GATE in result["detail"]
+        assert result["reason"] == vs.REASON_COSTLY_NOT_ACCEPTED and GATE in result["detail"]
 
 
 def test_run_verb_pr_path_keeps_earlier_refusals_ahead_of_the_costly_check(monkeypatch):

@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of twenty-one reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of these reasons, the two stack reasons named above among them (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker (live: GitHub renders it, decided by
 ``md_hidden.scan``), so the builder's owner half is lost and the body is restored from the PR's edit history rather
@@ -28,7 +28,7 @@ comment - which the write would delete), ``receipt-missing``, ``followup-undispo
 hidden, or ``md_hidden`` cannot be sure it renders, or the slot text carries an at-sign GitHub reads as a login,
 outside a fence or code span, the detail opening "bare-mention:" and naming each token and the remedy),
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
-names a database tool or a Keychain read), ``costly-not-accepted`` (``handback`` only: a costly or unlabelled
+names a database tool or a Keychain read), ``costly-not-accepted`` (``REASON_COSTLY_NOT_ACCEPTED``; ``handback`` only: a costly or unlabelled
 degradation bullet whose text appears in no line under What we're accepting, by the merge sheet build's own comparison,
 ``pr_sheet.costly_unlisted``), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
@@ -83,6 +83,7 @@ PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 REASON_STACK_NOT_CAUGHT_UP = "stack-not-caught-up"
 REASON_STACK_LOWER_UNREADABLE = "stack-lower-unreadable"
 REASON_BODY_EMPTIED = "body-emptied"
+REASON_COSTLY_NOT_ACCEPTED = "costly-not-accepted"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
@@ -735,7 +736,7 @@ def check_costly_accepted(body):
     # axis: a costly or unlabelled degradation with no line under What we're accepting refuses costly-not-accepted, by the sheet build's own comparison — see bite-proof record i2633_handback_costly_unlisted.md
     missing = pr_sheet.costly_unlisted(body)
     if missing:
-        raise _Refusal("costly-not-accepted", "; ".join(
+        raise _Refusal(REASON_COSTLY_NOT_ACCEPTED, "; ".join(
             "the " + pr_sheet.costly_unlisted_problem(label, text) for label, text in missing))
 
 

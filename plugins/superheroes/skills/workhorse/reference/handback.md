@@ -179,7 +179,7 @@ body before you open the ready PR (or `--pr <n> --repo <owner/name>` on an open 
 body with the advisor's own parser, so a refusal (`markers-invalid`, naming the marker: missing,
 hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slot tool would refuse
 too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs), and
-`costly-not-accepted` while a `[costly]` or unlabelled degradation bullet has no line under *What
+`costly-not-accepted` (`REASON_COSTLY_NOT_ACCEPTED` in `lib/vet_slot.py` is its one home) while a `[costly]` or unlabelled degradation bullet has no line under *What
 we're accepting* carrying its text, naming each such bullet and the start of its text (§ Disclosed
 degradations; the comparison is the merge sheet build's own). Fix the body and
 re-run until it prints `"ok": true`; once your lane ends, nobody can.
@@ -267,7 +267,7 @@ this rule, in this order:
    that could not run there.
 3. Doubt sorts costly.
 
-Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet, and `vet_slot.py handback` refuses the same body first, with `costly-not-accepted`, by the same comparison. On the PR body, a
+Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet, and `vet_slot.py handback` refuses the same body first, by the same comparison (the handback check under § Follow-ups for the advisor names its refusal). On the PR body, a
 harmless one stays only in the build record: it is never a body acceptance, so the merge sheet's
 accounting never counts it. On the merge sheet, the advisor may mention a harmless one as a line of
 the sheet's routine "What you're accepting" fold item; such a fold line is sheet-side, is not a body

@@ -217,7 +217,7 @@ def test_ok_check_reports_receipt_present():
 SEVENTEEN_TOKENS = {
     "bad-argument", "read-failed", "body-emptied", "markers-invalid", "slot-span-foreign-content",
     "slot-span-builder-text", "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
-    "write-failed", "write-unconfirmed", "owner-command-in-body", "costly-not-accepted",
+    "write-failed", "write-unconfirmed", "owner-command-in-body",
     "leftover-not-accepted", "review-record-unreadable",
     "fixed-above-not-in-stack", "fixed-above-unverified",
 }
