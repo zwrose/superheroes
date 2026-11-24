@@ -179,7 +179,7 @@ body before you open the ready PR (or `--pr <n> --repo <owner/name>` on an open 
 body with the advisor's own parser, so a refusal (`markers-invalid`, naming the marker: missing,
 hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slot tool would refuse
 too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs), and
-`costly-not-accepted` (`REASON_COSTLY_NOT_ACCEPTED` in `lib/vet_slot.py` is its one home) while a `[costly]` or unlabelled degradation bullet has no line under *What
+its costly-line refusal (the token is `REASON_COSTLY_NOT_ACCEPTED` in `lib/vet_slot.py`) while a `[costly]` or unlabelled degradation bullet has no line under *What
 we're accepting* carrying its text, naming each such bullet and the start of its text (§ Disclosed
 degradations; the comparison is the merge sheet build's own). Fix the body and
 re-run until it prints `"ok": true`; once your lane ends, nobody can.

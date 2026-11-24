@@ -129,13 +129,18 @@ def test_run_verb_body_file_refuses_costly_not_accepted(tmp_path):
 
 def test_run_verb_body_file_keeps_the_marker_refusal_ahead_of_the_costly_check(tmp_path):
     # Bites on: the costly check moved ahead of check_handback on the --body-file path.
-    # Axis: a body that misses its followups marker and its costly line refuses markers-invalid, naming the marker.
-    text = REFUSED["costly"].replace("<!-- superheroes:followups none -->\n", "")
-    assert text != REFUSED["costly"] and pr_sheet.costly_unlisted(text)
-    path = tmp_path / "body.md"
-    path.write_text(text, encoding="utf-8")
-    result = vs.run_verb("handback", None, None, body_file=str(path))
-    assert result["ok"] is False and result["reason"] == "markers-invalid" and "followups" in result["detail"]
+    # Axis: a body that misses its followups marker and its costly line refuses exactly as the same body with no costly
+    # degradation does (the marker refusal, naming the followups marker), never with the costly refusal.
+    def refusal(text):
+        assert "<!-- superheroes:followups none -->\n" in text
+        path = tmp_path / "body.md"
+        path.write_text(text.replace("<!-- superheroes:followups none -->\n", ""), encoding="utf-8")
+        return vs.run_verb("handback", None, None, body_file=str(path))
+
+    assert pr_sheet.costly_unlisted(REFUSED["costly"]) and not pr_sheet.costly_unlisted(PASSED["no-degradations"])
+    control, both = refusal(PASSED["no-degradations"]), refusal(REFUSED["costly"])
+    assert control["ok"] is False and "followups" in control["detail"]
+    assert both["reason"] == control["reason"] != vs.REASON_COSTLY_NOT_ACCEPTED and both["detail"] == control["detail"]
 
 
 @pytest.mark.parametrize("name, ok", [("costly", False), ("unlabelled", False), ("costly-carried", True),
