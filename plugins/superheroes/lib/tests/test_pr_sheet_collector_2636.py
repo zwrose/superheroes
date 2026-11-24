@@ -13,7 +13,6 @@ from test_pr_sheet import COLLECTOR, FIXTURES, STACK, WORDS, build, bundle, cli,
 from test_review_template_pr import _page
 
 NEEDS_NUMBER = "collectorItems entry 1 needs number, an integer 1 or more or a string N or N-M"
-LIST_ITEM_LABEL = "From your list · item "
 ONE_ENTRY = "give one entry"
 
 
@@ -81,7 +80,8 @@ def test_e01_a_list_number_builds_and_is_shown_as_written(number):
     # Axis: a list-item number written as an integer 1 or more, or a string N or N-M, builds, and the card's label shows it exactly as written.
     # Bites on: a valid spelling refused, or the label changed from the number as written.
     records, advisor = small((number, 1501))
-    assert card_for(build(records, advisor), number)["callKind"] == LIST_ITEM_LABEL + str(number)
+    assert card_for(build(records, advisor), number)["callKind"] == kind_of(number)
+    assert str(number) in kind_of(number)  # the label shows the number as written
 
 
 @pytest.mark.parametrize("number", ["02273", "2273-01", "2273-0", "0", 0, True, "2273-1-2", "a-1", 2273.0], ids=lambda n: f"e01-refused-{n!r}")
@@ -99,7 +99,8 @@ def test_e02_the_same_number_in_two_spellings_repeats():
     assert problems_of(records, advisor) == ["collectorItems 2273 repeats the number 2273"]
 
 
-OWN_FORMS = ["2273-1", "collector item 2273-1", "collector #2273-1", "collector number 2273-1", "if you pick a on 2273-1", "card 2273-1"]
+OWN_FORMS = ["2273-1", "collector item 2273-1", "collector #2273-1", "collector number 2273-1", "if you pick a on 2273-1", "card 2273-1",
+             "if you pick a on card 2273-1", "if you pick a on collector item 2273-1", "only if you pick b on card #2273-1"]
 
 
 @pytest.mark.parametrize("field", ["reason", "consequence"])
@@ -126,7 +127,9 @@ def with_text(numbers, at, text, field="reason"):
     return records, advisor
 
 
-@pytest.mark.parametrize("text", ["2273-2", "2273-10", "collector #2273-2", "if you pick a on 2273-2"], ids=lambda t: "e04-other-" + t.replace(" ", "-"))
+@pytest.mark.parametrize("text", ["2273-2", "2273-10", "collector #2273-2", "if you pick a on 2273-2", "if you pick a on card 2273-2",
+                                  "if you pick a on collector item 2273-2", "if you pick a on the other card"],
+                         ids=lambda t: "e04-other-" + t.replace(" ", "-"))
 def test_e04_another_dashed_item_is_still_another_question(text):
     # Axis: another dashed number on a card whose own number shares its base is another question, in each scanned form.
     # Bites on: the own-number exemption reading only the base digits of the number, so a sibling item passes as the card's own.
@@ -146,6 +149,15 @@ def test_e04_one_field_holding_the_own_and_another_number_reports_one_problem_na
     # Bites on: the own number reported too, or the other reported twice (once by each scan).
     problems = problems_of(*with_text(("2273-1", "2273-2"), 0, "Both 2273-1 and 2273-2 matter."))
     assert len(problems) == 1 and "('2273-2')" in problems[0] and problems[0].startswith("dependent-question: collectorItems 2273-1: ")
+
+
+def test_e15_a_field_naming_its_own_card_in_a_conditional_beside_another_item_reports_only_the_other():
+    # Axis: in one field, a conditional naming the card's own number (on card 2273-1) is exempt while a conditional naming another item (on card 2273-2) is still reported.
+    # Bites on: the conditional's target number not read, so the own reference is reported; or the exemption swallowing the other one.
+    both = problems_of(*with_text(("2273-1", "2273-2"), 0, "Only if you pick a on card 2273-1, and only if you pick b on card 2273-2."))
+    other_only = problems_of(*with_text(("2273-1", "2273-2"), 0, "And only if you pick b on card 2273-2."))
+    assert other_only and both == other_only  # the own conditional adds nothing; the other one is reported exactly as it is alone
+    assert len(collector_cards(build(*with_text(("2273-1", "2273-2"), 0, "Only if you pick a on card 2273-1.")))) == 2
 
 
 def test_e04_a_bare_reference_to_another_on_sheet_card_outside_the_dash_widths_is_refused():
@@ -237,6 +249,18 @@ def test_e11_the_carried_identity_is_in_the_card_id():
     assert card_for(nothing, 1501)["id"] != card_for(plain, 1501)["id"]
 
 
+def test_e16_a_plain_number_keeps_one_card_id_in_either_spelling():
+    # Axis: 2273 and "2273" are one item, so a republish that changes only the number's JSON type keeps the card id, with and without a carried finding.
+    # Bites on: the card id hashing the raw number, so the saved answer is lost on a type change.
+    for carried in (None, {GIFT["findingKey"]: {"carriedBy": 2273}}):
+        findings = [GIFT] if carried else []
+        as_int = build(*small((2273, 1501), findings, carried))
+        as_str = build(*small(("2273", 1501), findings, carried))
+        assert card_for(as_int, 2273)["id"] == card_for(as_str, "2273")["id"]
+    dashed = build(*small(("2273-1", 1501)))
+    assert card_for(dashed, "2273-1")["id"] != card_for(build(*small((2273, 1501))), 2273)["id"]
+
+
 def test_e11_a_card_carrying_nothing_has_its_id_from_base():
     # Axis: a card that carries nothing has the id the builder gave it before this change (captured at base commit af6cfd27).
     # Bites on: the card id's identity changing for a card that carries nothing.
@@ -298,12 +322,12 @@ def test_e14_the_page_shows_each_carried_finding_on_its_own_card_and_the_answers
     """)
     result = page["result"]
     shown = {c["badge"]: c["text"] for c in result["cards"]}
-    assert sorted(shown) == [LIST_ITEM_LABEL + "2273-1", LIST_ITEM_LABEL + "2273-2"]
+    assert sorted(shown) == [kind_of("2273-1"), kind_of("2273-2")]
     for number, lines in STACK_LINES.items():
-        mine, other = shown[LIST_ITEM_LABEL + number], shown[LIST_ITEM_LABEL + ("2273-2" if number == "2273-1" else "2273-1")]
+        mine, other = shown[kind_of(number)], shown[kind_of("2273-2" if number == "2273-1" else "2273-1")]
         for line in lines:
             assert line in mine and line not in other
         assert WORDS["carriedTitle"] in mine
     assert "The balance line reads as a promise" in result["decided"]
     assert not any(line in result["decided"] for lines in STACK_LINES.values() for line in lines)
-    assert result["before"]["disabled"] is True and result["after"] == {"label": "Merge stack #4", "disabled": False}
+    assert result["before"]["disabled"] is True and result["after"] == {"label": pr_sheet._fill(WORDS["mergeStackLabel"], number=sheet["prSheet"]["number"]), "disabled": False}

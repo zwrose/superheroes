@@ -435,3 +435,49 @@ FAILED ...::test_e13_an_input_that_uses_neither_feature_builds_the_bytes_the_bas
 - The first run of the file (before any bite-proof run) was 49 passed, 1 failed: `test_e11_the_carried_identity_is_in_the_card_id` asserted that the 1501 card has the same id on two sheets in one of which 1501 itself carried the finding. That was the test's mistake, not the code's; the assertion was rewritten (see E11) before E11's red.
 - Elements whose red is a crash and not a missing refusal: E6 (`KeyError: 'options'`), E8 (`KeyError: 'options'`), E12 (`KeyError: 'carriedTitle'`). Each is red on the axis "a refusal, not a crash" or "no card of its own".
 - E13's expected file was written by the command from the unedited base tree, before the first `pr_sheet.py` edit, and `cmp` showed it identical to a second base build written to a scratch file.
+
+## Review round 1 fixes: E15 and E16
+
+Two elements added by the build session's review fix step (review-code round 1, findings on the conditional form of the own-number exemption and on the card id of a plain number's two spellings). The proofs were run by the build session, with the same rules as above (one targeted Edit-tool neutralization, the inverse Edit, no `git checkout`, `restore`, `reset`, `stash` or `sed`), and the prefix `scripts/pinned-python -B -X pycache_prefix=<session scratch>/pyc-probe -m pytest ... -q -p no:cacheprovider --tb=line`. Captures are trimmed to the summary lines; the uv deprecation warning line is dropped. Nothing was redacted.
+
+### E15: a conditional whose target is the card's own number
+
+- **Guarded element / axis:** `pr_sheet.py:1120`, `if target and target.group(1) == own:` (with `_TARGET_AFTER` at `:1118`). Axis: a `_DEPENDS` hit that ends on its target noun ("if you pick a on card", "on collector") and is followed by the card's own number is not another question; one followed by another number still is.
+- **Neutralization:** `if target and target.group(1) == own:` became `if False:`.
+- **Raw red** (files `test_pr_sheet_collector_2636.py`, `test_pr_sheet_collector_2636_conditional.py`, `test_pr_sheet_own_collector_reference_2636.py`; `-k "e03 or e15 or conditional or condition_can"`):
+
+```
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-if-you-pick-a-on-card-2273-1-reason]
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-if-you-pick-a-on-card-2273-1-consequence]
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-if-you-pick-a-on-collector-item-2273-1-reason]
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-if-you-pick-a-on-collector-item-2273-1-consequence]
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-only-if-you-pick-b-on-card-#2273-1-reason]
+FAILED ...test_pr_sheet_collector_2636.py::test_e03_a_cards_own_dashed_number_is_not_another_question[e03-only-if-you-pick-b-on-card-#2273-1-consequence]
+FAILED ...test_pr_sheet_collector_2636.py::test_e15_a_field_naming_its_own_card_in_a_conditional_beside_another_item_reports_only_the_other
+FAILED ...test_pr_sheet_collector_2636_conditional.py::test_conditional_can_name_its_own_dashed_card
+FAILED ...test_pr_sheet_own_collector_reference_2636.py::test_a_condition_can_name_the_cards_own_dashed_collector_item
+9 failed, 12 passed, 42 deselected in 2.25s
+```
+
+  Each red is the `dependent-question` refusal on the own conditional, for example `depends on another question ('if you pick a on card')`.
+- **Restore:** the inverse Edit.
+- **Restore receipt:** the restored line reads `if target and target.group(1) == own:` at `:1120`; `git status --porcelain` showed only the review fix step's own uncommitted edits.
+- **Raw green** (same selection): `21 passed, 42 deselected in 2.25s`.
+- The other-number side of the axis (`e04-other-if-you-pick-a-on-card-2273-2`, `e04-other-if-you-pick-a-on-collector-item-2273-2`, `e04-other-if-you-pick-a-on-the-other-card`, and the `both == other_only` leg of e15) stays green under this neutralization, as designed: those texts are refused with or without the exemption.
+
+### E16: one card id for a plain number in either spelling
+
+- **Guarded element / axis:** `pr_sheet.py:1574`, the card-id identity `_card_number(it["number"])` (the helper `_card_number`). Axis: 2273 and "2273" give one card id, so a republish that changes only the number's JSON type keeps the saved answer.
+- **Neutralization:** the no-carry branch `else _card_number(it["number"])` became `else it["number"]`.
+- **Raw red** (`-k "e16 or e11 or e13"`):
+
+```
+E   AssertionError: assert 'k-16ebf59a8c01' == 'k-f6536279684f'
+FAILED ...::test_e16_a_plain_number_keeps_one_card_id_in_either_spelling
+1 failed, 3 passed, 57 deselected in 2.11s
+```
+
+  The e11 and e13 rows stay green under it, as designed: they pin the integer ids, which the neutralization does not change.
+- **Restore:** the inverse Edit.
+- **Restore receipt:** the restored line reads `... if lines else _card_number(it["number"]),` at `:1574`.
+- **Raw green** (same `-k`): `4 passed, 57 deselected in 1.67s`.

@@ -110,7 +110,8 @@ The advisor's input is one JSON object; any key not listed is refused.
   collectorItems Optional list. A decision from the owner's list that concerns this one PR, answered on this PR's sheet.
                  Each is {number, title, why, context, options, ifLeft, recommendation}, all required: number the collector
                  item's number (an integer 1 or more, or a string N or N-M with no leading zeros, unique across both
-                 spellings, and shown on the card's label as written); title, why, context and ifLeft non-empty
+                 spellings, and shown on the card's label as written; a plain number's card id is the same in either
+                 spelling, so a republish that changes only its JSON type keeps the saved answer); title, why, context and ifLeft non-empty
                  strings (the question, why it is the owner's, what happened, and what leaving it costs); options a list of
                  at least 1 option, whose ids are a, b, c, ... in that order ("none" and an empty list are refused);
                  recommendation {text, reason, optionId} with optionId required and naming one of the options. Each lands as
@@ -152,7 +153,8 @@ over each card's option labels and consequences and its recommendation's text an
 recognizing: a choice made on another card or item ("only if you pick b on ..."), "depending on your answer" or "the ruling ...",
 "the same choice as ...", a collector, decision or list item, or a card or question, named by number, a bare dashed reference
 such as 1435-1, "the other card" or "the other question", and the number of another collector item on the same sheet unless it
-is written as a PR (#N, PR N). A card's own collector number, plain or dashed, in any of these forms, is not another question. On a card with no options, text the
+is written as a PR (#N, PR N). A card's own collector number, plain or dashed, in any of these forms, is not another question, including as the target
+of a choice ("only if you pick a on card 2273-1"); another number there still is. On a card with no options, text the
 list-item pointer check already refuses is reported by that check alone.
 
 A spec PR has no review record (review-crew never reviews a spec), so its sheet is built from the spec's own artifacts, chosen
@@ -270,6 +272,8 @@ _DEPENDS = re.compile(
     # D6 the other question by position
     r"|\bthe\s+(?:other|previous|next|earlier|later|first|second|last)\s+(?:cards?|questions?|decisions?|collector\s+items?)\b"
     r"|\b(?:cards?|questions?|decisions?)\s+(?:above|below)\b", re.IGNORECASE)
+# The number a _DEPENDS hit that ends on a target noun goes on to name: an optional second noun, then the number as a whole token.
+_TARGET_AFTER = re.compile(r"(?:\s+(?:item|number|entry|card|question)s?)?\s+#?(\d+(?:-\d+)?)(?![\w-])", re.IGNORECASE)
 # Axis: a collector number written as a PR (#N, PR N) names a pull request, not a question.
 _AS_PR = re.compile(r"(?:#|\bPR\s)$", re.IGNORECASE)
 
@@ -312,6 +316,12 @@ def _list_number(v):
 def _list_key(v):
     """The one canonical form every comparison of list-item numbers goes through: the number as a string (2273 and "2273" are the same item)."""
     return str(v)
+
+
+def _card_number(v):
+    """A list-item number as its card's id hashes it: a plain number as an integer, whichever spelling the input used, so 1435
+    and "1435" keep one card id (and an integer-numbered card keeps the id it had before dashed numbers existed); a dashed one as written."""
+    return int(v) if isinstance(v, str) and "-" not in v else v
 
 
 def _carries(call):
@@ -1103,6 +1113,12 @@ def _dependencies(card, own, numbers):
                 # Axis: a card's own collector number, plain or dashed, is not another question; another dashed number (2273-2 on 2273-1) still is; D8. See bite-proof record i2636_collector_cards (E3, E4).
                 if shown == own:
                     continue
+            elif own is not None:
+                # A hit that ends on its target's noun ("if you pick a on card", "on collector") names the number that follows it.
+                target = _TARGET_AFTER.match(text, hit.end())
+                # Axis: a conditional whose target noun is followed by the card's own number (on card 2273-1, on collector item 2273-1) is not another question; one followed by another number still is; D8. See bite-proof record i2636_collector_cards (E15).
+                if target and target.group(1) == own:
+                    continue
             found_in.append((field, hit.group(0)))
             spans.append((hit.start(), hit.end()))
         if bare is not None:
@@ -1554,7 +1570,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         rec = it["recommendation"]
         lines = carried.get(_list_key(it["number"]), [])
         # Axis: the card that carries findings shows them as a last section and its id changes with what it carries; a card that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (E10, E11).
-        cards.append(_card("k-", number, [it["number"], [k for k, _ in lines]] if lines else it["number"],
+        # Axis: a plain number's card id is the same for both spellings (1435 and "1435"), so a republish that changes only its JSON type keeps the saved answer. See bite-proof record i2636_collector_cards (E16).
+        cards.append(_card("k-", number, [_card_number(it["number"]), [k for k, _ in lines]] if lines else _card_number(it["number"]),
                            _fill(words["collectorKind"], number=it["number"]), it["title"],
                            [_section(words["whyYours"], "paragraph", it["why"]),
                             _section(words["whatHappened"], "paragraph", it["context"]),

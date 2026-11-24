@@ -364,10 +364,11 @@ note left empty.
   whose reason names the why and the cost. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
 - A collector card shows, in order, its kind (naming the collector number), its title, **Why it's yours**,
   **What happened**, **If left**, its lettered options (each label shown as `a. …`), the recommendation
-  naming its letter, the answer buttons and the note box. The number may be dashed and is shown as
-  written (`From your list · item 2273-1`). A card that carries left-for-owner findings shows them after
-  **If left**, as a last context section, `The review findings this decides`, one bullet per finding
-  (each starting `#<pr>: ` on a stack). The input's exact shape is in `lib/pr_sheet.py`'s docstring.
+  naming its letter, the answer buttons and the note box. The number may be dashed (`2273-1`) and is
+  shown on the kind as written (the `collectorKind` word). A card that carries left-for-owner findings
+  shows them after **If left**, as a last context section titled by the `carriedTitle` word, one bullet
+  per finding (each starting `#<pr>: ` on a stack). Both words are in the `pr` block of
+  `sheet-words.json`. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
 - An item with no real choice offers **Accept** and **Discuss** and shows no options list.
 - When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
 
