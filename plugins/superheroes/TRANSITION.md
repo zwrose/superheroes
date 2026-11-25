@@ -29,6 +29,27 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## 0.52.1
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.52.1. Each step names the note it comes from.
+
+- **After switching.** Nothing is owed by a caller: a review that hands back only for the owner's choices now writes a record that reads `awaits-owner` with no withheld-certificate line, so the merge sheet asks no separate go-ahead for it; the record account's `uncertified` entry and the driver's certification gain optional keys. See [Review record: an owner-choice-only hand-back keeps its certificate](#review-record-an-owner-choice-only-hand-back-keeps-its-certificate).
+- **After switching.** Nothing is owed by a caller: a review record for an owner-choice-only hand-back whose waiting findings the owner has all ruled on now reads `reviewed` when it is written again with those rulings, so the merge sheet asks no separate go-ahead over the withheld certificate. See [Review record: a fully ruled owner-choice hand-back reads reviewed](#review-record-a-fully-ruled-owner-choice-hand-back-reads-reviewed).
+
+### Review record: an owner-choice-only hand-back keeps its certificate
+
+- **The change.** A review session that hands back `handed-back` / `owner-choice-open` and has nothing left but findings only the owner's choice can settle no longer withholds its certificate. Its record reads `awaits-owner` (or `not-reviewed` when some other line, such as a missing review, still stands), and the owner's answers on the waiting findings' cards plus the saved Merge verdict are the go-ahead. Every other hand-back kind and every other non-converged terminal still withholds the certificate as before.
+- **New optional keys.** The round driver writes `certification.ownerChoiceOnly: true` when no owner ruling is left unsent to a fixer, no panel is incomplete, and the break-it kept check finds nothing to park on; otherwise it writes `certification.ownerChoiceGap`, one string naming why. The session writer copies the stamp into the record account's `uncertified` entry as `"ownerChoiceOnly": true`, which the account validator accepts only as exactly `true` and only on a `handed-back` entry. A hand-written account's entry never lifts the certificate.
+- Nothing is removed or renamed. A saved session from an earlier driver version is never stamped, so it reads as it did before.
+
+### Review record: a fully ruled owner-choice hand-back reads reviewed
+
+- **The change.** A record whose session handed back `handed-back` / `owner-choice-open` with the driver's `ownerChoiceOnly` stamp, written again after the owner's rulings were recorded in `ownerRulings`, leaves the withheld-certificate line out when every finding the session left for the owner now reads `ruling` through a resolving owner-ruling citation and every other finding keeps the outcome the session gave it. A Minor or Nit listed for the merge verdict and left as `left-for-owner` needs no ruling; one with no outcome still keeps the line. It reads `reviewed` when nothing else is open. Before, the line came back once nothing waited.
+- **Still withheld.** A finding the session left for the owner that the record settles another way (a carried check, a scope ruling, the advisor's bound), any other outcome that changed when the record was written, a finding with no outcome, every other hand-back kind and terminal, and a hand-written account's entry.
+- Nothing is added, removed or renamed in the account, the extras or the record.
+
 ## 0.52.0
 
 ### Before you upgrade
