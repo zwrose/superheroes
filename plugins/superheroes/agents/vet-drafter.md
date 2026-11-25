@@ -62,8 +62,10 @@ delete stops and waits for the owner's approval. You clean up in two ways only:
   its old place.
 - **Remove your own worktree** with `git worktree remove <draft directory>/wt-<ordinal>`, without
   `--force`, before you return. First undo each probe mutation with the inverse edit and move any
-  file you added there into the scratch folder, so git finds the worktree clean. If git still
-  refuses, leave the worktree where it is and say so in your reply.
+  file you added there into the scratch folder, so git finds the worktree clean. Git removes ignored
+  files (test caches, build output) with the worktree without asking, so run
+  `git status --porcelain --untracked-files=all --ignored` in it first and move anything listed
+  that you want kept. If git still refuses, leave the worktree where it is and say so in your reply.
 
 Your shell commands are plain: one plain command per call, and multi-step work in a script written
 with the file-write tool and run by one plain interpreter call, never a chain with `;`, `&&` or `||`

@@ -111,16 +111,21 @@ def test_vet_drafter_never_deletes_and_names_its_two_clean_up_moves():
     assert "into `<draft directory>/scratch/` with `mv -n`" in body, (
         "vet-drafter body no longer names the move into its scratch folder as a clean-up"
     )
-    # axis: the scratch folder is a place the drafter may write, so the move has a destination — see bite-proof record i2644_vet_drafter_no_delete (D-scratch)
-    assert "**The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p`" in body, (
-        "vet-drafter body no longer lists the scratch folder among the places it may write"
+    # axis: the scratch folder is listed inside the write allowlist, so the move has a destination — see bite-proof record i2644_vet_drafter_no_delete (D-scratch)
+    allowlist = body.partition("## Where you may write")[2].partition("Nothing else.")[0]
+    assert "**The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p`" in allowlist, (
+        "vet-drafter's `Where you may write` list no longer names the scratch folder"
     )
     # axis: the second clean-up move, a plain worktree removal, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-remove)
     assert "`git worktree remove <draft directory>/wt-<ordinal>`, without `--force`" in body, (
         "vet-drafter body no longer names the plain `git worktree remove` without `--force`"
     )
-    # axis: no forced worktree removal is ever offered, in either flag form, before or after the path — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
-    forced = re.findall(r"git worktree remove[^`]*?\s(?:--force|-f)\b", body)
+    # axis: ignored files are listed before the plain removal, which removes them unasked — see bite-proof record i2644_vet_drafter_no_delete (D-ignored)
+    assert "run `git status --porcelain --untracked-files=all --ignored` in it first" in body, (
+        "vet-drafter body no longer has the drafter list ignored files before removing its worktree"
+    )
+    # axis: no forced worktree removal is ever offered, in either flag form, before or after the path, with or without git's -C/-c — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    forced = re.findall(r"git(?:\s+-[Cc]\s+\S+)*\s+worktree\s+remove[^`]*?\s(?:--force|-f)\b", body)
     assert forced == [], f"vet-drafter body offers a forced worktree removal: {forced!r}"
 
 
