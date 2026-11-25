@@ -2057,34 +2057,42 @@ _STALE_CLAUSE = re.compile("|".join((_clause_pattern(finding_outcomes.UNRESOLVED
                                      _clause_pattern(_UNMET_CLAUSE, _LABELS, _WHY))))
 
 
+def _peel_marks(text):
+    """(core, run): ``text`` less its trailing run of carried suffixes and merge marks, read as the session writer
+    writes them, and that run."""
+    from review_record_session import CARRIED, merge_mark_start  # lazy: that module imports this one
+    core, run = text, ""
+    while True:
+        if core.endswith(CARRIED):
+            core, run = core[:-len(CARRIED)], CARRIED + run
+            continue
+        at = merge_mark_start(core)
+        if at is None:
+            return core, run
+        core, run = core[:at], core[at:] + run
+
+
 def _strip_stale(reason, lead=None):
     """(kept, rest): ``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else
     kept byte for byte, and the trailing marks of the dropped parts that no kept part took ("" unless every part went).
 
-    The reason reads as parts split at "; ". Each copy of ``lead`` (the resolved citation, which holds the owner's
-    quoted words) that stands at a part boundary is held whole first, so no quoted text is split or matched. A part
-    goes only when, less a trailing run of carried suffixes and merge marks (read as the session writer reads them), it
-    is a clause of `_STALE_CLAUSE`; that run joins the part before it, or the first kept part after it when none is
-    kept before. A non-string or empty reason is returned as it is."""
-    from review_record_session import CARRIED, merge_mark_start  # lazy: that module imports this one
+    Every copy of ``lead`` (the resolved citation, which holds the owner's quoted words) is held whole first, wherever
+    the writer put it (`decided by `, `earlier: `, a leading citation), so no quoted text is split or matched; a
+    citation that overlapped a clause would keep that clause, the safe side. The reason's own trailing marks are set
+    aside before it is split, so a mark whose id holds "; " stays whole. The rest reads as parts split at "; ". A part
+    goes only when, less a trailing run of marks, it is a clause of `_STALE_CLAUSE`; that run joins the part before
+    it, or the first kept part after it when none is kept before. A non-string or empty reason is returned as it is."""
     if not isinstance(reason, str) or not reason:
         return reason, ""
     hold = "\x00lead\x00"
     while hold in reason:
         hold = "\x00" + hold
     held = isinstance(lead, str) and lead != ""
-    masked = re.sub(r"(?:^|(?<=; ))" + re.escape(lead) + r"(?=; | \(|$)", lambda _: hold, reason) if held else reason
+    body, trail = _peel_marks(reason)
+    masked = body.replace(lead, hold) if held else body
     kept, carry = [], ""
     for part in masked.split("; "):
-        core, run = part, ""
-        while True:
-            if core.endswith(CARRIED):
-                core, run = core[:-len(CARRIED)], CARRIED + run
-                continue
-            at = merge_mark_start(core)
-            if at is None:
-                break
-            core, run = core[:at], core[at:] + run
+        core, run = _peel_marks(part)
         if not _STALE_CLAUSE.fullmatch(core):
             kept.append(part + carry)
             carry = ""
@@ -2093,7 +2101,8 @@ def _strip_stale(reason, lead=None):
         else:
             carry += run
     out = "; ".join(kept)
-    return (out.replace(hold, lead) if held else out), carry
+    out = out.replace(hold, lead) if held else out
+    return (out + trail, "") if out else ("", carry + trail)
 
 
 def _without_stale_clauses(reason, lead=None):
@@ -2112,9 +2121,12 @@ def _with_earlier(note, old, lead):
 
 
 def _leads_with(reason, citation):
-    """Whether ``reason`` starts with ``citation`` as a whole part, never as the prefix of a longer one."""
-    return isinstance(reason, str) and (reason == citation or reason.startswith(citation + "; ")
-                                        or reason.startswith(citation + " ("))
+    """Whether ``reason`` starts with ``citation`` as a whole part: followed by nothing, by "; ", or by nothing but
+    carried suffixes and merge marks; never as the prefix of a longer citation or of prose."""
+    if not (isinstance(reason, str) and reason.startswith(citation)):
+        return False
+    after = reason[len(citation):]
+    return after.startswith("; ") or _peel_marks(after)[0] == ""
 
 
 def _recheck_decisions(findings, sources):

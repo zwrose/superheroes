@@ -283,9 +283,9 @@ def test_t16_a_promotion_is_not_mistaken_for_a_longer_canon_id_it_starts_like():
     assert the_finding(record(again, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}; waits"
 
 
-def test_t17_the_citation_is_held_whole_only_at_a_part_boundary_and_a_placeholder_in_the_text_survives():
-    # Axis: masking never reaches text the citation merely appears inside, and text that already holds the
-    # placeholder's characters comes back unchanged.
+def test_t17_a_citation_inside_prose_and_a_placeholder_in_the_text_both_survive():
+    # Axis: a citation held whole inside prose comes back as it was, and text that already holds the placeholder's
+    # characters comes back unchanged.
     inside = f"see {CITE} for more; {A_L2}"
     assert rr._strip_stale(inside, lead=CITE) == (f"see {CITE} for more", "")
     odd = "x\x00lead\x00y"
@@ -310,3 +310,51 @@ def test_t18_a_repeat_and_its_member_hold_the_inherited_citation_whole_in_their_
     bare_member = dict(member, reason=A_L2 + rs.MERGED_INTO_FORMAT.format("f-2"))
     out = rr._follow_repeats([ruled, given, bare_member], [], lambda: resolves)
     assert out[2]["reason"] == f"{cite}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + rs.MERGED_INTO_FORMAT.format("f-2")
+
+
+QUOTED = "keep it; " + A_L2 + "; and more"
+QUOTED_CITE = f'owner ruling "{QUOTED}" ({U})'
+QUOTED_BY = {"kind": "owner-ruling", "ref": {"url": U, "words": QUOTED}}
+
+
+@pytest.mark.parametrize("before", [
+    pytest.param("decided by ", id="after-decided-by"),
+    pytest.param("note; earlier: ", id="after-earlier"),
+    pytest.param("note (", id="inside-a-bracket"),
+])
+def test_t19_a_citation_the_writer_put_after_its_own_prefix_is_held_whole_on_a_later_write(before):
+    # Axis: `settle` writes "decided by <citation>" and the repeat path writes "earlier: <citation>"; a later write
+    # resolving the same citation keeps its quoted words whole there and still drops the real clause.
+    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(QUOTED_BY), "reason": f"{before}{QUOTED_CITE}; {A_L2}"}
+    f = the_finding(record(ruled, doc=doc_for(QUOTED)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{QUOTED_CITE}; {before}{QUOTED_CITE}"
+
+
+def test_t19_the_repeat_writes_earlier_text_a_later_write_reads_back_unchanged():
+    # Axis: the reason `_follow_repeats` writes, read again by a later record write, keeps the inherited quote whole.
+    ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(QUOTED_BY)}
+    given = repeat(reason=f"{OLD}; {QUOTED_CITE}")
+    resolves = {"repo": "o/r", "ownerRulings": {U: doc_for(QUOTED)}}
+    written = rr._follow_repeats([ruled, given], [], lambda: resolves)[1]
+    assert written["reason"] == f"{QUOTED_CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {QUOTED_CITE}"
+    again = the_finding(record({k: v for k, v in written.items() if k != "repeatOf"}, doc=doc_for(QUOTED)))
+    assert again["reason"] == written["reason"]
+
+
+def test_t20_a_merge_mark_whose_id_holds_a_part_separator_is_set_aside_whole():
+    # Axis: the reason's trailing mark is set aside before the split, so an id with "; " never cuts the clause off.
+    mark = rs.MERGED_INTO_FORMAT.format("a; b.py::odd name@L1")
+    f = the_finding(record(stamped(reason="waits for the owner; " + A_L2 + mark)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
+    assert rr._strip_stale(A_L2 + mark + rs.CARRIED) == ("", mark + rs.CARRIED)
+
+
+def test_t21_a_promotion_is_not_mistaken_for_a_citation_followed_by_bracketed_prose():
+    # Axis: only marks may follow a leading citation it skips; a bracketed note after it is prose, so the citation is
+    # still written once in front.
+    note = f"canon {STANDING} (considered and rejected)"
+    left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": note}
+    f = the_finding(record(left, fake=Fake(sources=CANON_SOURCES)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"canon {STANDING}; {note}"
+    marked = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}" + rs.CARRIED}
+    assert the_finding(record(marked, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}" + rs.CARRIED

@@ -910,12 +910,11 @@ def merged_into(reason):
 
 
 def merge_mark_start(text):
-    """Where the mark `MERGED_INTO_FORMAT` writes begins at the end of ``text`` (its leading space), read as
-    `merged_into` reads it, or None when ``text`` does not end with one after some other text."""
-    found = _MERGED_INTO.search(text) if isinstance(text, str) else None
-    if found is None or found.start() < 2 or text[found.start() - 1] != " ":
-        return None
-    return found.start() - 1
+    """Where the last mark `MERGED_INTO_FORMAT` writes begins in ``text`` (its leading space) when ``text`` ends with
+    that mark after some other text, else None. The id between the mark's two ends is taken whole, whatever it holds."""
+    head, tail = MERGED_INTO_FORMAT.split("{}")
+    at = text.rfind(head) if isinstance(text, str) and text.endswith(tail) else -1
+    return at if at > 0 and len(text) > at + len(head) + len(tail) - 1 else None
 
 
 def _id(row, key):
