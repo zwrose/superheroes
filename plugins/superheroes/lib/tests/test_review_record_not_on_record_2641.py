@@ -179,7 +179,14 @@ _TEMPLATES = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE"}
 
 
 def _template_misreads(tree):
-    """(count of template reads, the reads that are not a % format whose result is only built, never compared)."""
+    """(count of template reads, the reads that do anything but build shown text).
+
+    The allowed shapes, and only these: the template is the left side of a `%` format; that formatted clause,
+    optionally joined with `+` into longer text, is then the whole value of an assignment or a return, or one
+    element of a tuple that is the whole value of an assignment or a return. Every other use reads the clause as
+    something other than shown text and fails: an operand of a comparison (`==`, `in`), an argument to a call
+    (`reason.split(...)`, `startswith(...)`), the receiver of a method, a subscript. No call that only assembles
+    shown text exists in review_record, so no call is allowed."""
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     seen, bad = 0, []
     for node in ast.walk(tree):
@@ -190,9 +197,17 @@ def _template_misreads(tree):
         if not (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mod) and parent.left is node):
             bad.append((node.lineno, "not the left side of a % format"))
             continue
-        # a formatted clause used as an operand of a comparison (==, in, startswith-free matching) is a reader
-        if isinstance(parents.get(parent), ast.Compare):
-            bad.append((node.lineno, "formatted clause feeds a comparison"))
+        built = parent
+        while isinstance(parents.get(built), ast.BinOp) and isinstance(parents[built].op, ast.Add):
+            built = parents[built]  # joined into longer text with `+`
+        holder = parents.get(built)
+        if isinstance(holder, ast.Tuple):
+            holder = parents.get(holder)
+            whole = isinstance(holder, (ast.Assign, ast.Return)) and isinstance(holder.value, ast.Tuple)
+        else:
+            whole = isinstance(holder, (ast.Assign, ast.AnnAssign, ast.Return)) and holder.value is built
+        if not whole:
+            bad.append((node.lineno, "formatted clause used other than to build shown text"))
     return seen, bad
 
 
@@ -206,13 +221,28 @@ def test_n7_no_clause_template_is_read_as_anything_but_the_left_side_of_a_percen
 @pytest.mark.parametrize("src", [
     pytest.param("if (_DEMOTED_CLAUSE % x) in reason:\n    pass\n", id="membership"),
     pytest.param("ok = reason == _UNMET_CLAUSE % (a, b)\n", id="equality"),
+    pytest.param('if ("; " + _DEMOTED_CLAUSE % x) in reason:\n    pass\n', id="joined-then-membership"),
+    pytest.param("parts = reason.split(_DEMOTED_CLAUSE % why)\n", id="call-argument"),
+    pytest.param("ok = reason.startswith(_UNMET_CLAUSE % (a, b))\n", id="string-method"),
+    pytest.param("at = (_DEMOTED_CLAUSE % why).find(x)\n", id="method-receiver"),
     pytest.param("parts = reason.split(_DEMOTED_CLAUSE)\n", id="bare-read"),
 ])
 def test_n7_the_census_refuses_a_template_used_to_match(src):
-    # Axis: the census bites on a formatted clause compared against text, and on any bare read of a template.
+    # Axis: the census bites on every use of a clause template but building shown text.
     seen, bad = _template_misreads(ast.parse(src))
     assert seen == 1 and len(bad) == 1, (src, bad)
-    assert _template_misreads(ast.parse("shown = reason + '; ' + _DEMOTED_CLAUSE % why\n")) == (1, [])
+
+
+@pytest.mark.parametrize("src", [
+    pytest.param("clause = _DEMOTED_CLAUSE % why\n", id="assigned"),
+    pytest.param("clause = _UNMET_CLAUSE % (label, why)\n", id="assigned-two-values"),
+    pytest.param("new, why, failed = left, _DEMOTED_CLAUSE % text, text\n", id="tuple-assigned"),
+    pytest.param("shown = reason + '; ' + _DEMOTED_CLAUSE % why\n", id="joined-then-assigned"),
+    pytest.param("def f():\n    return _DEMOTED_CLAUSE % why\n", id="returned"),
+])
+def test_n7_the_census_allows_every_shape_that_only_builds_shown_text(src):
+    # Axis: the allowed shapes named in `_template_misreads` pass, so the census never forces a change to the code.
+    assert _template_misreads(ast.parse(src)) == (1, [])
 
 
 def test_n8_a_two_round_bound_demotes_with_the_field_and_recovers_with_no_clause():

@@ -3,6 +3,7 @@
 The eight fixtures are PRs as a vet sees them, each with the record the writer builds for it. They hold
 no verdict. Run this module as a script to rewrite them from the accounts below.
 """
+import ast
 import json
 import os
 import re
@@ -223,6 +224,16 @@ def test_fixtures_carry_the_facts_they_stand_for():
     ph = f["pr-h"]
     assert ph["record"]["ci"]["state"] == "none" and ph["record"]["ci"]["sha"] == ph["record"]["finalCommit"]["sha"]
     assert ph["record"]["finalCommit"]["sha"] != ph["pr"]["head"]
+
+
+def test_entry_keys_name_the_not_on_record_field_by_the_writers_constant():
+    # axis: the census keys the finding field by review_record's own constant, so a rename of the field never leaves a stale spelling in the map
+    tree = ast.parse(open(os.path.abspath(__file__), encoding="utf-8").read())
+    (entry,) = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_ENTRY_KEYS" for t in n.targets)]
+    literal_keys = [k.value for k in entry.keys if isinstance(k, ast.Constant)]
+    assert rr.NOT_ON_RECORD_FIELD not in literal_keys, "_ENTRY_KEYS spells the writer's field as a literal"
+    assert _ENTRY_KEYS.get(rr.NOT_ON_RECORD_FIELD) == "findings"
 
 
 def test_record_checks_section_names_real_record_fields():
