@@ -227,6 +227,70 @@ E       AssertionError: vet-drafter body offers a forced worktree removal: ['git
 
 - Restore: clause removed by the inverse edit. Raw green: `1 passed, 5 deselected in 0.19s`
 
+## Review round 3 (changed elements, at `5c2ef6dd`)
+
+Round 3 changed two elements. (D-noforce) no longer uses a hand-written pattern: every inline code span of the collapsed
+body goes through `worktree_guard.destructive_discard_actions`, the worktree guard's own classifier, and no span may read
+`worktree-remove-force`; a sanity line first asserts that the classifier still names `git worktree remove --force wt`, so
+the span check cannot pass because the classifier went blind. (D-ignored) now pins the keep instruction too
+(`... in it first and move anything listed that you want kept`). Same method, in a detached probe worktree at
+`5c2ef6dd`; restore receipt for every element: `git status --porcelain` printed nothing after the inverse edit; the probe
+worktree was then removed with a plain `git worktree remove`.
+
+### (D-noforce) the spellings the reviewer named, through the classifier
+
+- Neutralization 1: the worktree bullet regained ``, and remove it with `git -C "/tmp/vet repo" worktree remove ./wt-1 --force` ``.
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git -C "/tmp/vet repo" worktree remove ./wt-1 --force']
+1 failed, 5 deselected in 0.22s
+```
+
+- Neutralization 2: the same clause as `git worktree remove -ff ./wt-1`.
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove -ff ./wt-1']
+1 failed, 5 deselected in 0.25s
+```
+
+- Neutralization 3: the same clause as `git worktree remove --force`.
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove --force']
+1 failed, 5 deselected in 0.22s
+```
+
+- Restore: clause removed by the inverse edit. Raw green: `1 passed, 5 deselected in 0.19s`
+
+### (D-noforce, sanity) the classifier still sees a forced removal
+
+- Guarded element and axis: `assert wg.destructive_discard_actions("git worktree remove --force wt") == ["worktree-remove-force"]`.
+  Axis: the span check cannot pass vacuously on a blinded classifier.
+- Neutralization (in the probe worktree's copy of `plugins/superheroes/lib/worktree_guard.py` only): in `_segment_action`,
+  `if _worktree_remove_force_match(args):` became `if False:`.
+- Raw red:
+
+```
+E       AssertionError: assert [] == ['worktree-remove-force']
+1 failed, 5 deselected in 0.24s
+```
+
+- Restore: inverse edit. Raw green: `1 passed, 5 deselected in 0.20s`
+
+### (D-ignored) the keep instruction
+
+- Neutralization: `` in it first and move anything listed that you want kept. If git `` became `` in it first. If git ``.
+
+```
+E       AssertionError: vet-drafter body no longer has the drafter list and keep ignored files before removing its worktree
+1 failed, 5 deselected in 0.22s
+```
+
+- Restore: inverse edit. Raw green: `1 passed, 5 deselected in 0.22s`
+
+A forced removal written in prose outside a code span is not read by (D-noforce); the agent file writes every command it
+offers as a code span.
+
 ## Not covered
 
 The test pins words, not behaviour: it cannot show that a dispatched vet-drafter obeys the rule, and nothing in the
