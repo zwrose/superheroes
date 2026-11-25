@@ -591,6 +591,7 @@ Added after vet 1028, by the build session, with the same rules as above (one Ed
 - **Neutralization:** `_list_key(call["carriedBy"])` became `call["carriedBy"]` (the raw spelling).
 - **Raw red** (`-k e08`): `e08-string-card` failed. The card's last section was `{'title': 'If left'}`, not `{'title': 'The review findings this decides'}`. Result: `1 failed, 2 passed, 77 deselected in 1.67s`. The `e08-int-card` row (an integer card with `carriedBy` `"2273"`) stays green under it, because the raw string already equals that card's canonical key.
 - **Restore receipt:** the inverse Edit, then `git diff --stat` showed only the test file. **Raw green:** `3 passed, 77 deselected in 9.52s`.
+- **Re-proof at the WO-B head:** WO-B moved the canonical spelling into `_reference` (`return ("list", _list_key(ref)) if _list_number(ref) else None`). The same neutralization there (`_list_key(ref)` became `ref`) turned `e08-string-card` red again: `1 failed, 2 passed, 94 deselected in 2.12s`. After the inverse Edit, `git status --short` was empty. **Raw green:** `3 passed, 94 deselected in 1.98s`.
 
 ## WO-B: carriedBy names any card (F1 to F10)
 
