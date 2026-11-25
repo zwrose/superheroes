@@ -120,12 +120,21 @@ def test_t3_a_finding_with_no_outcome_keeps_the_withheld_line_though_the_waiting
 
 
 def test_t4_one_of_two_waiting_findings_ruled_keeps_the_old_path_awaits_owner(tmp_path):
-    """axis: T4 — two waiting findings with only one ruled: one still waits, so the line stays out by the #2638 path and the
-    record reads awaits-owner, never reviewed."""
+    """axis: T4 — two waiting findings with only one ruled: the settled guard, read on the session's own account against the
+    rewritten record, is False (one choice has no ruling), so the line stays out only by the #2638 path, which the one still
+    waiting finding holds; the record reads awaits-owner, never reviewed."""
     state = _driven_state()
     second = ledger_row(**SECOND, **OOS)
-    _before, rec, _rd, _fake = _twice(tmp_path, "t4", unruled=SECOND["id"], dispositionLedger=state["dispositionLedger"] + [second])
+    session, fake, body = _from_state(_sub(tmp_path, "t4"), state, dispositionLedger=state["dispositionLedger"] + [second])
+    rd = _readers(fake)
+    assert _put(tmp_path, session, rd, body)["ok"]
+    ruling = _ruling(_held_key(rr.read(7, readers=rd), SECOND["id"]))
+    assert _put(tmp_path, session, rd, body, **ruling)["ok"]
+    rec = rr.read(7, readers=rd)
+    account = rs.account_from_session(session, extras(**body, **ruling), rd)
     assert sorted(f["outcome"] for f in rec["findings"]) == ["left-for-owner", "ruling"], rec["findings"]
+    assert rr._owner_choices_settled(account["findings"], rec["findings"]) is False
+    assert rr.owner_choice_only(rec, settled=False) is True
     assert rec["status"] == "awaits-owner"
     assert not any(m.startswith(LINE_START) for m in rec["whatIsMissing"]), rec["whatIsMissing"]
     assert len(rec["leftForOwner"]) == 1
