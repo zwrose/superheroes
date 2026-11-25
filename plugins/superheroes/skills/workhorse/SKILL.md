@@ -675,6 +675,9 @@ catch-up reviewed as a returning review; `vet_slot.py handback --pr <n> --repo <
 When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
 composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
 `skills/review-code/reference/review-record.md` says, so the PR sheet files it as already decided. A ruling with no resolvable link stays a card.
+**A ruling that orders a fix goes to the build as a fix, never to `ownerRulings` alone.** While the
+review runs, record it through the loop's own ruling (`guidance`, `skills/review-code/reference/round-driver.md`
+§ Owner and advisor rulings); after the review, make the fix and review it afresh (after handback, by §12's rows).
 
 **Bounded acceptance for prose-contract DoDs.** When the contract under review is prose, the bounded form applies, with the round bound that the advisor at vet, or the owner before review begins, states and records in the PR body or the vet receipt.
 

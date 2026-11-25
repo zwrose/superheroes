@@ -286,7 +286,7 @@ A record with no "listed for the vet" reason needs no line for it: the vet write
 
 **A `judgement` answer, worked.** The record certifies commit A, and the builder then pushes commit B. **Cleared:** the check answers `judgement` and lists one hunk, which rewords a code comment and changes no claim. The vet reads it, passes `--judged-clear`, and with CI green on B the outcome is `READY`. **Holding:** B instead changes the expected value in one of a test's assertions. The vet cannot call that hunk non-semantic, so it does not pass `--judged-clear`, the outcome is `NOT-READY`, and the PR waits for a returning-round review (workhorse §12's second row).
 
-A `ruling` whose reason starts `owner ruling "<words>" (<url>)` is followable. The vet opens the link and checks that the comment is the owner's ruling covering that finding and that no later owner decision overturned it. If either fails, the row holds the PR.
+A `ruling` whose reason starts `owner ruling "<words>" (<url>)` is followable. The vet opens the link and checks that the comment is the owner's ruling covering that finding and that no later owner decision overturned it. The vet also reads the ruling's words, because the record settles the finding without reading them: where the words order a fix, the vet confirms the record's final commit holds that fix. If any of these fails, the row holds the PR.
 
 **Withheld paths are checked by hand.** The vet reads the record's `withheldFromReviewers`. No external
 reviewer read a listed path in full, so the vet reads each listed file itself and the receipt says what it
