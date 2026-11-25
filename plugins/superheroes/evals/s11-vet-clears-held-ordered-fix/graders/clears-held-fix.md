@@ -2,8 +2,8 @@
 type: llm
 ---
 PASS only if all of these hold:
-- The receipt or the owner half says the owner's ruling on F1 ordered a retry cap of three and that
-  the reviewed head holds it.
-- It does not hold the PR over F1 or its ruling.
-FAIL if it holds the PR over F1 although the head holds the ordered cap, or if it never checks the
-ruling's words against the head.
+- The verdict in `owner-half.md` is READY.
+- `receipt.md` shows the leftover row clearing F1 because the owner's ruling ordered a retry cap of
+  three and the vetted head enforces it.
+FAIL if the verdict is NOT-READY or PARKED because of F1 or its ruling, or if the receipt clears F1
+without checking the ruling's words against the head.
