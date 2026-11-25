@@ -111,8 +111,73 @@ FAILED .claude/worktrees/probe-2644/plugins/superheroes/lib/tests/test_vet_draft
 1 passed, 5 deselected in 0.20s
 ```
 
+## Review round 1 (changed and added elements, at `d6b27d95`)
+
+The review's round 1 changed two elements and added one: (D-move) now pins `mv -n`, so a move never replaces a file
+already in the scratch folder; (D-noforce) now reads a force flag before or after the worktree path
+(`git worktree remove[^\`]*?\s(?:--force|-f)\b` over the collapsed body); and (D-scratch) is new: the scratch folder is
+listed among the places the drafter may write. (D-rule) and (D-remove) kept their assertions and their text, so their
+proofs above stand. Same method, in a second detached probe worktree at `d6b27d95`, with the same `-k`; captures trimmed
+the same way. Restore receipt for every element: `git status --porcelain` printed nothing after the inverse edit; the
+probe worktree was then removed with a plain `git worktree remove`.
+
+### (D-move) `mv -n`
+
+- Neutralization: `` with `mv -n`, one `` became `` with `mv`, one ``.
+- Raw red:
+
+```
+E       AssertionError: vet-drafter body no longer names the move into its scratch folder as a clean-up
+1 failed, 5 deselected in 0.21s
+```
+
+- Raw green: `1 passed, 5 deselected in 4.92s`
+
+### (D-scratch) the scratch folder is a place the drafter may write
+
+- Guarded element and axis: the bullet `**The scratch folder**, \`<draft directory>/scratch/\`, which you may create with
+  \`mkdir -p\``. Axis: the move has a destination the write rules allow.
+- Neutralization: the whole two-line bullet removed.
+- Raw red:
+
+```
+E       AssertionError: vet-drafter body no longer lists the scratch folder among the places it may write
+1 failed, 5 deselected in 0.22s
+```
+
+- Raw green: `1 passed, 5 deselected in 0.22s`
+
+### (D-noforce) a force flag in any place
+
+- Neutralization 1 (flag after the path, the spelling the reviewer named): the worktree bullet regained
+  ``, and remove it with `git worktree remove ./wt-1 --force` ``.
+- Raw red 1:
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove ./wt-1 --force']
+1 failed, 5 deselected in 0.20s
+```
+
+- Neutralization 2: the same clause as `git worktree remove --force`. Raw red 2:
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove --force']
+1 failed, 5 deselected in 0.29s
+```
+
+- Neutralization 3: the same clause as `git worktree remove -f wt-1`. Raw red 3:
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove -f']
+1 failed, 5 deselected in 0.23s
+```
+
+- Restore: clause removed by the inverse edit. Raw green: `1 passed, 5 deselected in 0.18s`
+
 ## Not covered
 
-The test pins words, not behaviour: it cannot show that a dispatched vet-drafter obeys the rule. That is checked by the
-advisor after each drafter returns (`skills/showrunner/reference/vetting.md` § Parallel vets, "Check what the drafter
-left").
+The test pins words, not behaviour: it cannot show that a dispatched vet-drafter obeys the rule, and nothing in the
+plugin checks that it did. The advisor's check after a drafter returns (`skills/showrunner/reference/vetting.md`
+§ Parallel vets, "Check what the drafter left") reads the PR, the worktree list and the advisor's checkout status, so it
+finds work left behind; a drafter that deleted a file it made and then removed a clean worktree would pass it unseen.
+Whether a drafter deleted anything is unverified by any check.
