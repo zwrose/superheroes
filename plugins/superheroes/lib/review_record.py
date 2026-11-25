@@ -1065,6 +1065,9 @@ def _validate_findings(a):
         chk(session_contract.BOUNDED_PASS_EVIDENCE_FIELD not in f or (
             f.get("outcome") == _LEFT_FOR_OWNER and _bounded_evidence_ok(f[session_contract.BOUNDED_PASS_EVIDENCE_FIELD])),
             f"findings[{i}].{session_contract.BOUNDED_PASS_EVIDENCE_FIELD}")
+        # axis: the not-on-record failure text, when a finding carries it, is a non-blank string and never another type — see bite-proof record i2641_not_on_record_field (E-valid)
+        chk(NOT_ON_RECORD_FIELD not in f or (isinstance(f[NOT_ON_RECORD_FIELD], str) and f[NOT_ON_RECORD_FIELD].strip() != ""),
+            f"findings[{i}].{NOT_ON_RECORD_FIELD}")
         if "grade" in f:
             fault = _grade_fault(f["grade"])
             # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
@@ -2068,6 +2071,50 @@ def _finding_sources(base, f):
 # How an unmet linked decision is named in the reason of the finding that cites it.
 _LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
                  finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
+# Display templates for the owner's text (`shown_reason`), used only with % formatting: the clause for a cited decision
+# the record cannot find (the failure text), and the same naming a linked decision by its label (label, failure text).
+_DEMOTED_CLAUSE = "the cited decision is not on record (%s)"
+_UNMET_CLAUSE = "the %s it cites is not on record (%s)"
+# The field on a finding that holds the failure text of a cited decision the writer found not on record.
+NOT_ON_RECORD_FIELD = "decisionNotOnRecord"
+
+
+def shown_reason(f):
+    """The reason the owner is shown for the finding ``f``: its reason when it carries no `NOT_ON_RECORD_FIELD`;
+    otherwise its reason followed by "; " and the clause naming the failure, or the clause alone when the reason is
+    empty or not a string. The clause names a linked decision (owner ruling, scope ruling, advisor's bound) by its
+    label and any other cited decision plainly. A field that is not a non-blank string counts as absent. Never raises."""
+    reason = f.get("reason") if isinstance(f, dict) else None
+    why = f.get(NOT_ON_RECORD_FIELD) if isinstance(f, dict) else None
+    if not (isinstance(why, str) and why.strip()):
+        return reason
+    by = f.get("decidedBy")
+    kind = by.get("kind") if isinstance(by, dict) else None
+    if kind in finding_outcomes.LINKED_KINDS:
+        clause = _UNMET_CLAUSE % (_LINKED_LABEL[kind], why)
+    else:
+        clause = _DEMOTED_CLAUSE % why
+    # axis: the owner's text is the reason followed by the clause the field builds, or the clause alone when there is no reason — see bite-proof record i2641_not_on_record_field (E-shown)
+    return f"{reason}; {clause}" if isinstance(reason, str) and reason else clause
+
+
+def _leads_with_citation(reason, citation):
+    """Whether ``reason`` already leads with ``citation``. The whole rest of the reason after the citation is compared,
+    as literal strings, with: nothing, a "; "-led continuation, the exact carried suffix, the exact carried suffix
+    followed by "; " (a carried check's note continues it), the exact merge mark the reason names
+    (`review_record_session.MERGED_INTO_FORMAT` around any representative id), or that mark followed by the carried
+    suffix. Nothing is split or scanned for clauses."""
+    from review_record_session import CARRIED, MERGED_INTO_FORMAT  # lazy: that module imports this one
+    if not (isinstance(reason, str) and reason.startswith(citation)):
+        return False
+    rest = reason[len(citation):]
+    # axis: a reason carried and then continued by a carried check's note already leads with its citation, so promotion does not give it twice — see bite-proof record i2641_not_on_record_field (E-once-B1)
+    if rest in ("", CARRIED) or rest.startswith("; ") or rest.startswith(CARRIED + "; "):
+        return True
+    mark = rest[:-len(CARRIED)] if rest.endswith(CARRIED) else rest
+    opener, closer = MERGED_INTO_FORMAT.split("{}")
+    # axis: the merge mark is the whole rest after the citation, the format's own opener and closer around the id, so neither words inside the citation nor an id holding the carried text count against it — see bite-proof record i2641_not_on_record_field (E-once)
+    return len(mark) > len(opener) + len(closer) and mark.startswith(opener) and mark.endswith(closer)
 
 
 def _recheck_decisions(findings, sources):
@@ -2076,25 +2123,32 @@ def _recheck_decisions(findings, sources):
     with no cited decision names its basis in prose, which the record cannot check, so it stays as it is. A
     ruling whose cited owner ruling resolves stays a ruling and its reason leads with the citation, once. A
     finding with no reason keeps none (its missing reason still counts against the record), except that one.
+    A finding that ends left for the owner with a cited decision that does not resolve carries `NOT_ON_RECORD_FIELD`
+    (the failure text) and keeps its reason as it was, and every other finding leaves without the field.
     Returns the findings and one entry per change."""
     out, changes = [], []
     for f in findings:
         by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
-        new, unmet, refreshed = None, None, None
+        new, refreshed, failed = None, None, None
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
             ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
             if outcome == _RULING and not ok:
-                new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
+                new, why, failed = _LEFT_FOR_OWNER, _DEMOTED_CLAUSE % text, text
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
             elif outcome == _RULING and ok and by.get("kind") in finding_outcomes.LINKED_KINDS:
                 refreshed = text
-            elif outcome == _LEFT_FOR_OWNER and by.get("kind") in finding_outcomes.LINKED_KINDS and not ok:
-                # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
+            elif outcome == _LEFT_FOR_OWNER and not ok:
+                # axis: a leftover whose cited decision does not resolve says so in a field, never in its reason, and stays for the owner — see bite-proof records wo_a_1958_owner_ruling and i2641_not_on_record_field (E-set)
                 # axis: the same for a scope ruling and an advisor's bound, each named by its own words — see bite-proof record i2532_scope_bound (E-recheck)
-                unmet = f"the {_LINKED_LABEL[by.get('kind')]} it cites is not on record ({text})"
+                failed = text
+        # axis: only a finding that ends left-for-owner with a cited decision that did not resolve carries the field, so every other finding is written without it — see bite-proof record i2641_not_on_record_field (E-clear)
+        if NOT_ON_RECORD_FIELD in f:
+            f = {k: v for k, v in f.items() if k != NOT_ON_RECORD_FIELD}
+        if failed is not None:
+            f = dict(f, **{NOT_ON_RECORD_FIELD: failed})
         if new is None:
             if refreshed:
                 # axis: an already-ruling finding whose owner-ruling citation resolves shows the citation as its reason, once, and keeps its outcome — see bite-proof record wo_a_1958_owner_ruling
@@ -2102,11 +2156,14 @@ def _recheck_decisions(findings, sources):
                     f = dict(f, reason=refreshed)
                 elif isinstance(reason, str) and not reason.startswith(refreshed):
                     f = dict(f, reason=f"{refreshed}; {reason}")
-                out.append(f)
-                continue
-            out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
+            out.append(f)
             continue
-        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))
+        if new == _RULING:
+            # axis: a promoted reason that already leads with its citation (a ruling demoted and then resolved again) is not given it twice — see bite-proof record i2641_not_on_record_field (E-once)
+            lead_again = _leads_with_citation(reason, why)
+            f = dict(f, reason=f"{why}; {reason}" if reason and not lead_again else reason)
+        # axis: a demoted ruling keeps its reason exactly as it was; the failure rides the field — see bite-proof record i2641_not_on_record_field (E-demote)
+        out.append(dict(f, outcome=new))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
     return out, changes
 
@@ -2114,7 +2171,8 @@ def _recheck_decisions(findings, sources):
 def _drop_stale_open_marker(findings):
     """Each finding without the `openAtLoopEnd` marker it can no longer hold: the marker stays only on a finding that
     is still left for the owner with no cited decision. A carried re-check that moved a marked finding to fixed, or an
-    owner-ruling citation set on it, ends the reason the marker stood for. Every other finding is returned as it is."""
+    owner-ruling citation set on it, ends the reason the marker stood for. The not-on-record field goes the same way
+    from any finding whose outcome is not left-for-owner. Every other finding is returned as it is."""
     out = []
     for f in findings:
         # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
@@ -2122,7 +2180,10 @@ def _drop_stale_open_marker(findings):
                  and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
         # axis: the bounded pass's evidence stays only on a finding still left for the owner, so a finding the owner later decides never carries it into the validator
         moved = session_contract.BOUNDED_PASS_EVIDENCE_FIELD in f and f.get("outcome") != _LEFT_FOR_OWNER
-        gone = ((session_contract.OPEN_AT_LOOP_END_FIELD,) if stale else ()) + ((session_contract.BOUNDED_PASS_EVIDENCE_FIELD,) if moved else ())
+        # axis: the not-on-record field stays only while the outcome is left-for-owner, so a leftover a later step moved to fixed never keeps it — see bite-proof record i2641_not_on_record_field (E-drop)
+        unrecorded = NOT_ON_RECORD_FIELD in f and f.get("outcome") != _LEFT_FOR_OWNER
+        gone = (((session_contract.OPEN_AT_LOOP_END_FIELD,) if stale else ()) + ((session_contract.BOUNDED_PASS_EVIDENCE_FIELD,) if moved else ())
+                + ((NOT_ON_RECORD_FIELD,) if unrecorded else ()))
         out.append({k: v for k, v in f.items() if k not in gone} if gone else f)
     return out
 

@@ -450,8 +450,9 @@ def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
-    owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
-    so the record writer can promote it if the decision is on record by write time. Never reads severity.
+    owner, with open_reason; that leftover keeps the citation, so the record writer can promote it if the decision is
+    on record by write time. The record writer re-checks the citation at write time and records any failure in a
+    field, so `settle` writes no text about it. Never reads severity.
 
     With ``open_at_end`` True, a leftover that cites no decision also carries `openAtLoopEnd: True`: it was left for
     the owner only because it was still open when its loop ended. Craft, a ruling and a leftover that cites a decision never do.
@@ -464,13 +465,11 @@ def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False
                   if has_stated_consequence(finding) else "no further consequence stated")
         return {"outcome": craft, "reason": "code quality only: " + stated, "decidedBy": None}
     decided_by = ruling.get("decidedBy") if isinstance(ruling, dict) else None
-    why = ""
     if decided_by is not None:
         resolved, text = on_record(decided_by, sources)
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
-        why = "; the cited decision is not on record: " + text
-    result = {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
+    result = {"outcome": left_for_owner, "reason": open_reason, "decidedBy": decided_by}
     if open_at_end and decided_by is None:
         result[session_contract.OPEN_AT_LOOP_END_FIELD] = True
     return result

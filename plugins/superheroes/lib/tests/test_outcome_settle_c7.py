@@ -279,8 +279,8 @@ def test_t3_out_of_scope_ruling_settles_by_the_decision_it_cites(tmp_path, monke
     assert ledger[k_resid]["decidedBy"]["kind"] == "residual"
     assert "keep the legacy retry loop" in ledger[k_resid]["settledReason"]
     assert ledger[k_unknown]["disposition"] == "left-for-owner"
-    assert "not on record" in ledger[k_unknown]["settledReason"]
-    assert ledger[k_unknown]["settledReason"].startswith("out of scope: belongs to the next milestone; ")
+    assert "not on record" not in ledger[k_unknown]["settledReason"]  # the writer's re-check records a failure in a field
+    assert ledger[k_unknown]["settledReason"].startswith("out of scope: belongs to the next milestone")
     assert ledger[k_unknown]["decidedBy"] == {"kind": "canon", "ref": OTHER_ID}  # kept for the writer's re-check
     assert sources_calls == [True]  # read once, for the whole terminal
 
@@ -297,7 +297,8 @@ def test_t3_unreadable_sources_leave_the_decision_off_the_record(tmp_path, monke
     RD._set_terminal(state, "halted")  # a raising seam never propagates
     row = _ledger(state)[key]
     assert row["disposition"] == "left-for-owner"
-    assert "no Canon text was available" in row["settledReason"]
+    assert "no Canon text was available" not in row["settledReason"]  # the writer's re-check records a failure in a field
+    assert row["decidedBy"] == {"kind": "canon", "ref": CANON_ID}  # the citation stays for that re-check
 
 
 def test_t3_out_of_scope_without_a_decision_goes_to_owner_or_craft(sources_calls):

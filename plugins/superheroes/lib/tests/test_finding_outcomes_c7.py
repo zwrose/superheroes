@@ -320,16 +320,16 @@ def test_settle_real_with_resolving_ruling():
                    "decidedBy": decided_by}
 
 
-def test_e7_unresolved_decided_by_stays_with_owner_with_reason_appended():
+def test_e7_unresolved_decided_by_stays_with_owner_with_no_text_about_the_citation():
     finding = {"consequence": "data lost", "consequenceKind": "real"}
     out = FO.settle(finding, ruling={"decidedBy": {"kind": "canon", "ref": OTHER_ID}},
                     sources=_sources(), open_reason=OPEN)
     assert out["outcome"] == "left-for-owner"
-    assert out["reason"] == OPEN + "; the cited decision is not on record: the cited Canon entry is not on record"
+    assert out["reason"] == OPEN  # the record writer re-checks the citation and records a failure in a field
     assert out["decidedBy"] == {"kind": "canon", "ref": OTHER_ID}  # the citation stays, for the writer's write-time re-check
     out = FO.settle(finding, ruling={"decidedBy": {"kind": "canon", "ref": CANON_ID}}, open_reason=OPEN)
     assert out["outcome"] == "left-for-owner" and out["decidedBy"] == {"kind": "canon", "ref": CANON_ID}
-    assert out["reason"].endswith("no Canon text was available")
+    assert out["reason"] == OPEN
     assert FO.settle(finding, ruling={"note": "no decidedBy"}, open_reason=OPEN)["reason"] == OPEN
 
 

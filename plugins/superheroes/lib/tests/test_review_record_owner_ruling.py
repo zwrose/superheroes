@@ -111,7 +111,8 @@ def test_t2_no_pointer_no_fold_and_the_finding_stays_a_card(over, kw, why):
     rec = build([entry(**over)], **kw)
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
-    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD % why
+    assert f["reason"] == "waits for the owner" and f[rr.NOT_ON_RECORD_FIELD] == why
+    assert rr.shown_reason(f) == "waits for the owner" + NOT_ON_RECORD % why
     sheet, found = cards(rec, {"f-1": CARD})
     assert len(found) == 1 and sheet["prSheet"]["alreadyDecided"] == []
 
@@ -136,7 +137,9 @@ def test_t2_a_ruling_with_no_link_or_words_in_the_citation_stays_a_card():
     bad = dict(X, decidedBy={"kind": "owner-ruling", "ref": {"url": U, "words": "  "}})
     rec = rr.build_record(account([], [bad]), readers())
     assert the_finding(rec)["outcome"] == "left-for-owner"
-    assert the_finding(rec)["reason"] == "waits for the owner" + NOT_ON_RECORD % "the ruling names no link or words"
+    why = "the ruling names no link or words"
+    assert the_finding(rec)["reason"] == "waits for the owner" and the_finding(rec)[rr.NOT_ON_RECORD_FIELD] == why
+    assert rr.shown_reason(the_finding(rec)) == "waits for the owner" + NOT_ON_RECORD % why
 
 
 def test_t3_a_ruling_whose_pointer_fails_is_demoted_and_becomes_a_card():
@@ -145,7 +148,8 @@ def test_t3_a_ruling_whose_pointer_fails_is_demoted_and_becomes_a_card():
     rec = build([entry()], [ruled], doc=dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", "I think otherwise", "finding f-1")))
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
-    assert f["reason"] == f"the cited decision is not on record ({L5}); the owner said so"
+    assert f["reason"] == "the owner said so" and f[rr.NOT_ON_RECORD_FIELD] == L5
+    assert rr.shown_reason(f) == f"the owner said so; the owner ruling it cites is not on record ({L5})"
     assert rec["decisionRechecks"] == [{"finding": "f-1", "from": "ruling", "to": "left-for-owner",
                                         "why": f"the cited decision is not on record ({L5})"}]
     assert len(cards(rec, {"f-1": CARD})[1]) == 1
@@ -360,7 +364,8 @@ def test_t9_an_account_naming_no_repository_fetches_nothing_and_keeps_the_findin
     acct = dict(account([entry()]), repo=None)
     rec = rr.build_record(acct, readers(calls=calls))
     assert the_finding(rec)["outcome"] == "left-for-owner" and calls == []
-    assert the_finding(rec)["reason"] == "waits for the owner" + NOT_ON_RECORD % L2
+    assert the_finding(rec)["reason"] == "waits for the owner" and the_finding(rec)[rr.NOT_ON_RECORD_FIELD] == L2
+    assert rr.shown_reason(the_finding(rec)) == "waits for the owner" + NOT_ON_RECORD % L2
 
 
 def test_t9_a_repository_in_other_case_is_the_same_repository():
@@ -429,7 +434,8 @@ def test_n1_an_owner_comment_that_is_not_a_chat_ruling_record_stays_a_card():
     rec = build([entry()], doc=dict(DOC, body=BUILDER_NOTE))
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
-    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD % L6
+    assert f["reason"] == "waits for the owner" and f[rr.NOT_ON_RECORD_FIELD] == L6
+    assert rr.shown_reason(f) == "waits for the owner" + NOT_ON_RECORD % L6
     sheet, found = cards(rec, {"f-1": CARD})
     assert len(found) == 1 and sheet["prSheet"]["alreadyDecided"] == []
 
@@ -441,7 +447,8 @@ def test_n2_words_only_in_the_what_it_rules_on_line_stay_a_card():
     rec = build([entry()], doc=dict(DOC, body=body))
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
-    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD % L5
+    assert f["reason"] == "waits for the owner" and f[rr.NOT_ON_RECORD_FIELD] == L5
+    assert rr.shown_reason(f) == "waits for the owner" + NOT_ON_RECORD % L5
 
 
 @pytest.mark.parametrize("words", [W, "ship it\nas is", "ship it\n\nas is"])
