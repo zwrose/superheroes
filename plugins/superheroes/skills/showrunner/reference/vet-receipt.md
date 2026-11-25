@@ -323,7 +323,7 @@ every PR, and a go-ahead covers a planned reviewer that did not run, never the l
 (`skills/showrunner/SKILL.md` duty 6). A record written before CI left the certificate may hold a line saying CI was pending or none on the final commit; it is accounted
 for once the head-coverage check covers the PR's head now and CI is green there. The line saying a finding waits for the owner's decision is
 accounted for when the third row finds that finding shown to the owner, or shown as fixed above. Any other line of
-`whatIsMissing` holds the PR, and the receipt names the line. The line naming a withheld certificate ("the review session ended <terminal>, not converged, so its certificate was withheld: <cause>") is accounted for only by the owner's go-ahead over it, which the vet follows as it follows any go-ahead, and the receipt names it.
+`whatIsMissing` holds the PR, and the receipt names the line. The line naming a withheld certificate ("the review session ended <terminal>, not converged, so its certificate was withheld: <cause>") is accounted for only by the owner's go-ahead over it, which the vet follows as it follows any go-ahead, and the receipt names it. A record whose owner-choice hand-back qualifies carries no such line and needs no go-ahead over it, as [the review record](../../review-code/reference/review-record.md#what-reviewed-means) says.
 
 **A go-ahead is followed, not trusted.** The record proves only that the go-ahead's citation is a
 non-blank string. Resolve it yourself: open the standing ruling's canon entry, or the place the owner's

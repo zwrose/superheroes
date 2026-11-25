@@ -1762,6 +1762,10 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         reason = next((v for v in (cert.get("reason") if isinstance(cert, dict) else None, last.get("detail"))
                        if isinstance(v, str) and v.strip()), None)
         uncertified = {"terminal": state["terminal"], "reason": reason}
+        # axis: the entry carries ownerChoiceOnly only for the driver's owner-choice hand-back whose certification stamped it true, never for another hand-back kind or terminal — see bite-proof record i2638_owner_choice_only
+        if (state["terminal"] == _HANDED_BACK and last.get("kind") == "owner-choice-open"
+                and isinstance(cert, dict) and cert.get("ownerChoiceOnly") is True):
+            uncertified["ownerChoiceOnly"] = True
     account = {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),

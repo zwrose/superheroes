@@ -53,13 +53,15 @@ _TEST_FAILING = (
     "assert len(ledger) == 1, 'charged %d times' % len(ledger)\n")
 
 # The chain: every function from which the kept step is reached, plus the step itself. A caller that
-# holds a `session_dir` must pass it down every one of these.
+# holds a `session_dir` must pass it down every one of these. The kept check's body is
+# `_break_it_kept_gap`, which the step (`_break_it_kept_step`) and the owner-choice hand-back (in
+# `_terminal_converged`) both call, so it is a chain member too.
 CHAIN = frozenset({
     "new_state", "_seed_returning_round", "_after_findings_settled",
     "_resolve_empty_fix_batch_convergence", "_fold_verify", "_after_audits",
     "_skip_empty_scoped_surface", "_fold_scoped", "_settle_delta", "_settle_delta_converged",
     "_settle_extra_audit", "_route_stall_self_recovery", "_handle_stall", "_terminal_converged",
-    "_queue_fix_batch", "_break_it_kept_step",
+    "_queue_fix_batch", "_break_it_kept_step", "_break_it_kept_gap",
 })
 
 
@@ -285,7 +287,7 @@ def _params(func):
 
 def test_t6_census_a_the_kept_step_and_the_certified_head_read_through_the_resolver():
     tree = _round_driver_tree()
-    kept = _function(tree, "_break_it_kept_step")
+    kept = _function(tree, "_break_it_kept_gap")
     assert "FIX_FOLD_HEAD_KEY" not in _names(kept)
     assert "headSha" not in _string_constants(kept)
     assert "_session_head" in _called_names(kept)
