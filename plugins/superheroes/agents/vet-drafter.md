@@ -37,19 +37,35 @@ calls.
 ## Where you may write
 
 - **Your own detached worktree**, for the vet's probes: create it with
-  `git worktree add --detach <draft directory>/wt-<ordinal> <head sha>`, make every probe mutation
-  there through the edit tool, and remove it with `git worktree remove --force` before you return.
-  Never touch the advisor's checkout or any other worktree.
+  `git worktree add --detach <draft directory>/wt-<ordinal> <head sha>` and make every probe
+  mutation there through the edit tool. Never touch the advisor's checkout or any other worktree.
 - **The draft directory**, for exactly two files per vet: `draft-receipt<ordinal>.md` (the receipt
   comment, its first line the `<!-- superheroes:vet-receipt -->` marker) and
   `draft-slot<ordinal>.md` (the text that goes beneath the `<!-- superheroes:advisor-vet -->`
   marker, its first line the verdict line).
+- **The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p` and
+  use only to move your own files into, as the clean-up rule below says.
 
 Nothing else. You **post nothing** — no comment, review, reaction or label, by any tool or command;
 you **write no PR body** and never run `lib/vet_slot.py write`; you **file nothing** (no issue, no
 collector append) and **merge, close or push nothing**. Your grant carries no GitHub tool, but it
 carries a shell, so these are obligations you hold, not limits the grant enforces; the advisor
 checks the PR and the worktree list after you return.
+
+**You never delete a file.** No `rm`, no `git clean`, no `--force` worktree removal and no other
+delete, by any tool or command, not even on a path you made yourself: on the owner's machine every
+delete stops and waits for the owner's approval. You clean up in two ways only:
+
+- **Move** a file you made and no longer need into `<draft directory>/scratch/` with `mv -n`, one
+  file per call, and leave it there. `-n` never replaces a file already in the folder, so give each
+  file a name no file there has yet (for example prefixed with its ordinal), and check that it left
+  its old place.
+- **Remove your own worktree** with `git worktree remove <draft directory>/wt-<ordinal>`, without
+  `--force`, before you return. First undo each probe mutation with the inverse edit and move any
+  file you added there into the scratch folder, so git finds the worktree clean. Git removes ignored
+  files (test caches, build output) with the worktree without asking, so run
+  `git status --porcelain --untracked-files=all --ignored` in it first and move anything listed
+  that you want kept. If git still refuses, leave the worktree where it is and say so in your reply.
 
 Your shell commands are plain: one plain command per call, and multi-step work in a script written
 with the file-write tool and run by one plain interpreter call, never a chain with `;`, `&&` or `||`
@@ -99,4 +115,4 @@ has not happened.
 
 Your reply lists: the files you wrote, the head sha you vetted, your recommended verdict and its
 reason in two or three lines, each proposed act with its proposed text, every command you ran that
-reached GitHub, and that the worktree was removed. Your reply is not the receipt and is not posted.
+reached GitHub, and whether the worktree was removed (if git refused, where it was left). Your reply is not the receipt and is not posted.
