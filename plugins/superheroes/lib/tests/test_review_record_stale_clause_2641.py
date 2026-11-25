@@ -24,7 +24,21 @@ FIELD = rr.NOT_ON_RECORD_FIELD
 BY = {"kind": "owner-ruling", "ref": {"url": U, "words": W}}
 CITE = f'owner ruling "{W}" ({U})'
 CLAUSE_L2 = fo.UNRESOLVED_CLAUSE % L2
-TAIL = fo.LEGACY_UNRESOLVED_TAILS[1]  # the repository text, as the old settle appended it
+# The exact tails the old `settle` appended to a reason, written out as literals so a change to the live template or
+# its list cannot pass unnoticed: each is "; the cited decision is not on record: " followed by one failure text.
+OLD_SETTLE_TAILS = tuple("; the cited decision is not on record: " + t for t in (
+    "the ruling's link is not a comment permalink", "the ruling's link is not in this repository",
+    "the ruling names no link or words", "the ruling's comment could not be read",
+    "the ruling's comment is not a chat-ruling record", "the ruling's comment does not hold the owner's words",
+    "a Critical finding is never settled by a scope ruling or the advisor's bound",
+    "the ruling's comment is neither a chat-ruling record nor a vet receipt",
+    "the bound's words state no number of rounds", "the vet receipt is not on this pull request",
+    "the vet receipt records no scope ruling for this finding with these words",
+    "the vet receipt records no advisor's bound with these words", "the review's round count is unknown",
+    "no decision was cited", "the cited decision kind is not recognised", "the cited decision names no reference",
+    "no Canon text was available", "the cited Canon entry is not on record", "no residual text was available",
+    "the cited residual is not recorded", "no sheet answers were available", "the sheet answer is not settled"))
+TAIL = "; the cited decision is not on record: the ruling's link is not in this repository"  # as the old settle appended it
 RESOLVES = {"repo": "o/r", "ownerRulings": {U: DOC}}
 MEMBER_RAW = "m::t@L1"
 OPEN = "waits for the owner"
@@ -179,7 +193,7 @@ def test_n6_a_leftover_with_the_old_tail_is_promoted_with_the_citation_and_no_ta
     assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}"
 
 
-@pytest.mark.parametrize("tail", fo.LEGACY_UNRESOLVED_TAILS, ids=[f"tail-{n}" for n in range(len(fo.LEGACY_UNRESOLVED_TAILS))])
+@pytest.mark.parametrize("tail", OLD_SETTLE_TAILS, ids=[f"tail-{n}" for n in range(len(OLD_SETTLE_TAILS))])
 def test_n6_every_literal_tail_is_dropped(tail):
     # Axis: each failure text the old `settle` wrote as a tail is an exact match, the one home being the tuple.
     f = the_finding(record(stamped(reason=OPEN + tail)))
@@ -188,7 +202,7 @@ def test_n6_every_literal_tail_is_dropped(tail):
 
 def test_n6_the_tail_is_dropped_once_and_only_as_a_whole_literal():
     # Axis: `_drop_legacy_tail` uses endswith and slicing only; one tail, once, and anything else comes back as it was.
-    second = fo.LEGACY_UNRESOLVED_TAILS[3]
+    second = OLD_SETTLE_TAILS[3]
     assert rr._drop_legacy_tail(OPEN + TAIL) == OPEN
     assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED) == OPEN + rs.CARRIED
     assert rr._drop_legacy_tail(OPEN + second + TAIL) == OPEN + second
@@ -378,7 +392,7 @@ def test_n10_every_failure_text_has_one_home_and_the_legacy_tails_are_built_from
     formatted = {t.left.id for t, k in zip(tails, kinds) if k == "formatted"}
     assert formatted == {"WHY_FEWER_ROUNDS"}
     assert {getattr(fo, n) for n in named} == set(fo.UNRESOLVED_WHY_TEXTS) and len(fo.UNRESOLVED_WHY_TEXTS) == len(named)
-    assert set(fo.LEGACY_UNRESOLVED_TAILS) == {"; " + fo.UNRESOLVED_CLAUSE % t for t in fo.UNRESOLVED_WHY_TEXTS}
+    assert set(fo.LEGACY_UNRESOLVED_TAILS) == set(OLD_SETTLE_TAILS)
 
 
 def test_n12_a_repeats_recorded_earlier_text_is_never_trimmed_on_a_later_write():
