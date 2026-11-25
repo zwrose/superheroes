@@ -2082,7 +2082,7 @@ NOT_ON_RECORD_FIELD = "decisionNotOnRecord"
 def shown_reason(f):
     """The reason the owner is shown for the finding ``f``: its reason when it carries no `NOT_ON_RECORD_FIELD`;
     otherwise its reason followed by "; " and the clause naming the failure, or the clause alone when the reason is
-    empty or not a string. The clause names a linked decision (owner ruling, scope ruling, advisor's bound) by its
+    blank (empty or whitespace only) or not a string. The clause names a linked decision (owner ruling, scope ruling, advisor's bound) by its
     label and any other cited decision plainly. A field that is not a non-blank string counts as absent. Never raises."""
     reason = f.get("reason") if isinstance(f, dict) else None
     why = f.get(NOT_ON_RECORD_FIELD) if isinstance(f, dict) else None
@@ -2095,7 +2095,7 @@ def shown_reason(f):
     else:
         clause = _DEMOTED_CLAUSE % why
     # axis: the owner's text is the reason followed by the clause the field builds, or the clause alone when there is no reason — see bite-proof record i2641_not_on_record_field (E-shown)
-    return f"{reason}; {clause}" if isinstance(reason, str) and reason else clause
+    return f"{reason}; {clause}" if _nb(reason) else clause
 
 
 def _leads_with_citation(reason, citation):

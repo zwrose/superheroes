@@ -175,20 +175,44 @@ def _loaded_name(node):
     return None
 
 
+_TEMPLATES = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE"}
+
+
+def _template_misreads(tree):
+    """(count of template reads, the reads that are not a % format whose result is only built, never compared)."""
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    seen, bad = 0, []
+    for node in ast.walk(tree):
+        if _loaded_name(node) not in _TEMPLATES:
+            continue
+        seen += 1
+        parent = parents.get(node)
+        if not (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mod) and parent.left is node):
+            bad.append((node.lineno, "not the left side of a % format"))
+            continue
+        # a formatted clause used as an operand of a comparison (==, in, startswith-free matching) is a reader
+        if isinstance(parents.get(parent), ast.Compare):
+            bad.append((node.lineno, "formatted clause feeds a comparison"))
+    return seen, bad
+
+
 def test_n7_no_clause_template_is_read_as_anything_but_the_left_side_of_a_percent_format():
     # Axis: the no-reader census, a template is formatted to be shown and never searched, split or matched.
-    templates = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE"}
-    seen = 0
-    for module in (rr,):
-        tree = _source_of(module)
-        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-        for node in ast.walk(tree):
-            if _loaded_name(node) in templates:
-                seen += 1
-                parent = parents[node]
-                assert isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mod) and parent.left is node, (
-                    f"{module.__name__}:{node.lineno} reads {_loaded_name(node)} other than as a % format")
+    seen, bad = _template_misreads(_source_of(rr))
+    assert bad == [], f"review_record reads a clause template other than to build shown text: {bad}"
     assert seen >= 3
+
+
+@pytest.mark.parametrize("src", [
+    pytest.param("if (_DEMOTED_CLAUSE % x) in reason:\n    pass\n", id="membership"),
+    pytest.param("ok = reason == _UNMET_CLAUSE % (a, b)\n", id="equality"),
+    pytest.param("parts = reason.split(_DEMOTED_CLAUSE)\n", id="bare-read"),
+])
+def test_n7_the_census_refuses_a_template_used_to_match(src):
+    # Axis: the census bites on a formatted clause compared against text, and on any bare read of a template.
+    seen, bad = _template_misreads(ast.parse(src))
+    assert seen == 1 and len(bad) == 1, (src, bad)
+    assert _template_misreads(ast.parse("shown = reason + '; ' + _DEMOTED_CLAUSE % why\n")) == (1, [])
 
 
 def test_n8_a_two_round_bound_demotes_with_the_field_and_recovers_with_no_clause():
@@ -317,6 +341,19 @@ def test_the_sheet_lists_a_merge_listed_finding_with_an_empty_reason_by_the_fail
     (listed,) = pr_sheet.build([rec], ADVISOR, WORDS)["prSheet"]["listed"]
     assert listed["detail"] == "Minor: the owner ruling it cites is not on record (" + L3 + ")"
     assert "; " not in listed["detail"]
+
+
+@pytest.mark.parametrize("blank", [pytest.param("   ", id="spaces"), pytest.param("\t\n", id="tab-newline")])
+def test_a_whitespace_only_reason_shows_the_failure_alone_on_the_sheet(blank):
+    # Axis: a reason of whitespace only counts as no reason, so the listed detail has no stray "; " before the clause.
+    assert rr.shown_reason({"reason": blank, FIELD: L3, "decidedBy": copy.deepcopy(BY)}) == (
+        f"the owner ruling it cites is not on record ({L3})")
+    minor = {**X, "severity": "Minor", "reason": blank, "decidedBy": copy.deepcopy(BY)}
+    rec = rr.build_record(account([], [minor]), {**readers(doc=None), "finding_risk": lambda *args: False})
+    f = the_finding(rec)
+    assert rr.listed_for_merge(f) and f["reason"] == blank and f[FIELD] == L3
+    (listed,) = pr_sheet.build([rec], ADVISOR, WORDS)["prSheet"]["listed"]
+    assert listed["detail"] == "Minor: the owner ruling it cites is not on record (" + L3 + ")"
 
 
 def test_promotion_gives_a_merged_member_its_citation_once_and_keeps_its_merge_marker(tmp_path):

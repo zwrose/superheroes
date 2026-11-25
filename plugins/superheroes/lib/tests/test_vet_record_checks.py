@@ -33,7 +33,7 @@ _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha",
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
-               "outcome": "findings", "reason": "findings", "decisionNotOnRecord": "findings",
+               "outcome": "findings", "reason": "findings", rr.NOT_ON_RECORD_FIELD: "findings",
                "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
 _ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
