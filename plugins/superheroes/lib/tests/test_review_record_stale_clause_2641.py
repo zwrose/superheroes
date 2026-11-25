@@ -379,3 +379,15 @@ def test_n10_every_failure_text_has_one_home_and_the_legacy_tails_are_built_from
     assert formatted == {"WHY_FEWER_ROUNDS"}
     assert {getattr(fo, n) for n in named} == set(fo.UNRESOLVED_WHY_TEXTS) and len(fo.UNRESOLVED_WHY_TEXTS) == len(named)
     assert set(fo.LEGACY_UNRESOLVED_TAILS) == {"; " + fo.UNRESOLVED_CLAUSE % t for t in fo.UNRESOLVED_WHY_TEXTS}
+
+
+def test_n12_a_repeats_recorded_earlier_text_is_never_trimmed_on_a_later_write():
+    # Axis: the exact-match removal reads only the old settle's own reason; a reason holding a repeat's `earlier:`
+    # history keeps every word, carried or not, while a plain reason still loses the tail.
+    cite = f'owner ruling "{W}" ({U})'
+    history = f"{cite}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {CLAUSE_L2}"
+    for reason in (history, history + rs.CARRIED):
+        assert rr._drop_legacy_tail(reason) == reason
+        ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": W}}, "reason": reason}
+        assert the_finding(rr.build_record(account([], [ruled]), readers()))["reason"] == reason
+    assert rr._drop_legacy_tail(f"{cite}; waits; {CLAUSE_L2}") == f"{cite}; waits"

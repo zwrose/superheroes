@@ -2063,11 +2063,18 @@ def shown_reason(f):
     return f"{reason}; {clause}" if isinstance(reason, str) and reason else clause
 
 
+# The separator the record writer puts before a finding's earlier reason when it writes that reason's history.
+_EARLIER = "; earlier: "
+
+
 def _drop_legacy_tail(reason):
     """``reason`` without the one whole literal tail the old `settle` wrote (`finding_outcomes.LEGACY_UNRESOLVED_TAILS`),
-    matched exactly at its end, or at its end before a carried suffix, which stays at the end. Any other reason, a
-    non-string included, is returned as it is. One tail, once; nothing else is read out of a reason."""
-    if not isinstance(reason, str):
+    matched exactly at its end, or at its end before a carried suffix, which stays at the end. A reason that holds a
+    repeat's recorded history (`; earlier: `, which `_follow_repeats` writes) is history, not the old `settle`'s own
+    reason, and is returned as it is, as is any other reason, a non-string included. One tail, once; nothing else is
+    read out of a reason."""
+    # axis: a repeat's recorded earlier text is history and is never trimmed, whatever it ends with
+    if not isinstance(reason, str) or _EARLIER in reason:
         return reason
     from review_record_session import CARRIED  # lazy: that module imports this one
     for tail in finding_outcomes.LEGACY_UNRESOLVED_TAILS:
@@ -2076,6 +2083,22 @@ def _drop_legacy_tail(reason):
         if reason.endswith(tail + CARRIED):
             return reason[:-len(tail + CARRIED)] + CARRIED
     return reason
+
+
+def _leads_with_citation(reason, citation):
+    """Whether ``reason`` already leads with ``citation``. The whole rest of the reason after the citation is compared,
+    as literal strings, with: nothing, a "; "-led continuation, the exact carried suffix, the exact merge mark the
+    reason names (`review_record_session.merged_into`), or that mark followed by the carried suffix. Nothing is split
+    or scanned for clauses."""
+    from review_record_session import CARRIED, MERGED_INTO_FORMAT, merged_into  # lazy: that module imports this one
+    if not (isinstance(reason, str) and reason.startswith(citation)):
+        return False
+    rest = reason[len(citation):]
+    if rest in ("", CARRIED) or rest.startswith("; "):
+        return True
+    rep = merged_into(reason)
+    # axis: a citation followed only by its exact merge mark, with or without the carried suffix, is not given twice
+    return rep is not None and rest in (MERGED_INTO_FORMAT.format(rep), MERGED_INTO_FORMAT.format(rep) + CARRIED)
 
 
 def _recheck_decisions(findings, sources):
@@ -2125,7 +2148,7 @@ def _recheck_decisions(findings, sources):
             continue
         if new == _RULING:
             # axis: a promoted reason that already leads with its citation (a ruling demoted and then resolved again) is not given it twice
-            lead_again = isinstance(reason, str) and (reason == why or reason.startswith(why + "; "))
+            lead_again = _leads_with_citation(reason, why)
             f = dict(f, reason=f"{why}; {reason}" if reason and not lead_again else reason)
         # axis: a demoted ruling keeps its reason exactly as it was; the failure rides the field
         out.append(dict(f, outcome=new))
