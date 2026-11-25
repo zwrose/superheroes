@@ -3,6 +3,7 @@
 The eight fixtures are PRs as a vet sees them, each with the record the writer builds for it. They hold
 no verdict. Run this module as a script to rewrite them from the accounts below.
 """
+import ast
 import json
 import os
 import re
@@ -33,7 +34,8 @@ _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha",
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
-               "outcome": "findings", "reason": "findings", "source": "provenCopies"}
+               "outcome": "findings", "reason": "findings", rr.NOT_ON_RECORD_FIELD: "findings",
+               "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
 _ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
               "The proven copies match their source", "A merged finding's fix is its own",
@@ -111,10 +113,14 @@ def _rebuild(name):
 
 
 def _rebuild_with_proven_copies():
-    """pr-d's record with the optional `provenCopies` the writer builds only when the account carries it."""
+    """pr-d's record with the optional `provenCopies` and `decisionNotOnRecord` the writer builds only when the account carries them."""
     acct, rd, _ = _scenarios()["pr-d"]
-    acct = {**acct, "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
-                                      "sha256": "a" * 64}]}
+    # axis: the census resolves decisionNotOnRecord only from a record that carries it — see bite-proof record i2641_not_on_record_field (E-census-field)
+    cited = finding("code-cited-ruling", title="A cited ruling is not on record", outcome="left-for-owner",
+                    reason="needs the owner's call", decidedBy={"kind": "canon", "ref": "2026-01-01-aaaaaaaa-1"})
+    acct = {**acct, "findings": [*acct["findings"], cited],
+            "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
+                              "sha256": "a" * 64}]}
     return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
 
 
@@ -218,6 +224,26 @@ def test_fixtures_carry_the_facts_they_stand_for():
     ph = f["pr-h"]
     assert ph["record"]["ci"]["state"] == "none" and ph["record"]["ci"]["sha"] == ph["record"]["finalCommit"]["sha"]
     assert ph["record"]["finalCommit"]["sha"] != ph["pr"]["head"]
+
+
+def test_entry_keys_name_the_not_on_record_field_by_the_writers_constant():
+    # axis: the census keys the finding field by review_record's own constant, so a rename of the field never leaves a stale spelling in the map
+    tree = ast.parse(open(os.path.abspath(__file__), encoding="utf-8").read())
+    (entry,) = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_ENTRY_KEYS" for t in n.targets)]
+    def is_writers_constant(k):
+        return (isinstance(k, ast.Attribute) and k.attr == "NOT_ON_RECORD_FIELD"
+                and isinstance(k.value, ast.Name) and k.value.id == "rr")
+
+    def spelled(k):  # what a key that is not the writer's constant evaluates to: a literal, or a module name
+        if isinstance(k, ast.Constant):
+            return k.value
+        return globals().get(k.id) if isinstance(k, ast.Name) else None
+
+    assert [is_writers_constant(k) for k in entry.keys].count(True) == 1, "_ENTRY_KEYS does not key the field by rr.NOT_ON_RECORD_FIELD"
+    copies = [ast.unparse(k) for k in entry.keys if not is_writers_constant(k) and spelled(k) == rr.NOT_ON_RECORD_FIELD]
+    assert copies == [], f"_ENTRY_KEYS spells the writer's field by a copy: {copies}"
+    assert _ENTRY_KEYS.get(rr.NOT_ON_RECORD_FIELD) == "findings"
 
 
 def test_record_checks_section_names_real_record_fields():

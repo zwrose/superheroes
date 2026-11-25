@@ -469,7 +469,8 @@ def test_a_ruling_citing_an_entry_that_is_not_on_record_goes_to_the_owner():
     rec = build(account(findings=[ruling("r-1", "2026-09-09-ffffffff-9")]), Fake(sources=CANON_SOURCES))
     f = rec["findings"][0]
     assert f["outcome"] == "left-for-owner" and f["sheetPart"] == rfs.OUTCOME_SHEET_PART["left-for-owner"]
-    assert f["reason"] == "the cited decision is not on record (the cited Canon entry is not on record); decided earlier"
+    assert f["reason"] == "decided earlier" and f[rr.NOT_ON_RECORD_FIELD] == "the cited Canon entry is not on record"
+    assert rr.shown_reason(f) == "decided earlier; the cited decision is not on record (the cited Canon entry is not on record)"
     assert rec["decisionRechecks"] == [{"finding": "r-1", "from": "ruling", "to": "left-for-owner",
                                         "why": "the cited decision is not on record (the cited Canon entry is not on record)"}]
     assert rec["leftForOwner"] == ["r-1"] and "finding r-1 waits for the owner's decision" in rec["whatIsMissing"]
@@ -491,7 +492,8 @@ def test_a_ruling_citing_an_id_two_different_canon_entries_share_goes_to_the_own
     rec = build(account(findings=[ruling("r-1", CANON_ID)]), Fake(sources=sources))
     f = rec["findings"][0]
     assert f["outcome"] == "left-for-owner"
-    assert f["reason"] == "the cited decision is not on record (the cited Canon entry is not on record); decided earlier"
+    assert f["reason"] == "decided earlier" and f[rr.NOT_ON_RECORD_FIELD] == "the cited Canon entry is not on record"
+    assert rr.shown_reason(f) == "decided earlier; the cited decision is not on record (the cited Canon entry is not on record)"
     assert rec["decisionRechecks"] == [{"finding": "r-1", "from": "ruling", "to": "left-for-owner",
                                         "why": "the cited decision is not on record (the cited Canon entry is not on record)"}]
     assert rec["leftForOwner"] == ["r-1"]

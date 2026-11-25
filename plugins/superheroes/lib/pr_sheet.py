@@ -1730,7 +1730,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             entries = {_CRAFT: craft, _RULING: decided}.get(f.get("outcome"))
             # axis: the listed part holds exactly the findings the record lists for the merge verdict, each with its severity and reason — see bite-proof record i2493_wo2_sheet (E-listed)
             if review_record.listed_for_merge(f):
-                reason = f.get("reason")
+                # axis: the listed detail reads the reason `shown_reason` builds, so the failure a finding's field carries is shown to the owner — see bite-proof record i2641_not_on_record_field (E-sheet)
+                reason = review_record.shown_reason(f)
                 merge_listed.append({"title": _title(f), "detail": f"{f['severity']}: " + (reason if _text(reason) else words["listedNoOutcome"]),
                                      **({"pr": r["pr"]} if stack else {})})
             if (r["pr"], n) in fixed:

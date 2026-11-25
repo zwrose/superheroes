@@ -1046,7 +1046,8 @@ other docs link here.
   2. Otherwise, a finding whose latest ruling cites a `decidedBy` decision that is **on record** is
      `ruling`, and the decision is named.
   3. Otherwise it is `left-for-owner` (a [leftover](../../../rubric/glossary.md#leftover)). The reason
-     says why it is open and, when a cited decision did not resolve, why not.
+     says why it is open. When a cited decision did not resolve, the record writer puts why not in the
+     finding's `decisionNotOnRecord`, never in the reason.
 - **Severity never decides the outcome.** `settle` is never given it.
 - **On record.** A decision is on record only when it is an active Canon entry (complete, and not
   superseded), a recorded residual (its text appears in the residuals the review read), or a settled
