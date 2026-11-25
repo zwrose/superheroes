@@ -11,6 +11,8 @@ pointers that tell the advisor when to use the drafter.
 import os
 import re
 
+import worktree_guard as wg
+
 PLUGIN_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 
 AGENT = os.path.join("agents", "vet-drafter.md")
@@ -120,12 +122,18 @@ def test_vet_drafter_never_deletes_and_names_its_two_clean_up_moves():
     assert "`git worktree remove <draft directory>/wt-<ordinal>`, without `--force`" in body, (
         "vet-drafter body no longer names the plain `git worktree remove` without `--force`"
     )
-    # axis: ignored files are listed before the plain removal, which removes them unasked — see bite-proof record i2644_vet_drafter_no_delete (D-ignored)
-    assert "run `git status --porcelain --untracked-files=all --ignored` in it first" in body, (
-        "vet-drafter body no longer has the drafter list ignored files before removing its worktree"
-    )
-    # axis: no forced worktree removal is ever offered, in either flag form, before or after the path, with or without git's -C/-c — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
-    forced = re.findall(r"git(?:\s+-[Cc]\s+\S+)*\s+worktree\s+remove[^`]*?\s(?:--force|-f)\b", body)
+    # axis: ignored files are listed and kept ones moved before the plain removal, which removes them unasked — see bite-proof record i2644_vet_drafter_no_delete (D-ignored)
+    assert (
+        "run `git status --porcelain --untracked-files=all --ignored` in it first and move anything listed "
+        "that you want kept"
+    ) in body, "vet-drafter body no longer has the drafter list and keep ignored files before removing its worktree"
+    # axis: the guard's own classifier still names a forced removal, so the span check below cannot pass vacuously — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    assert wg.destructive_discard_actions("git worktree remove --force wt") == ["worktree-remove-force"]
+    # axis: no inline command offers a forced worktree removal, in any spelling the worktree guard reads — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    forced = [
+        span for span in re.findall(r"`([^`]+)`", body)
+        if "worktree-remove-force" in wg.destructive_discard_actions(span)
+    ]
     assert forced == [], f"vet-drafter body offers a forced worktree removal: {forced!r}"
 
 
