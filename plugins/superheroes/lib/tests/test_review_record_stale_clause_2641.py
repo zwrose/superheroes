@@ -203,13 +203,13 @@ def test_n6_every_literal_tail_is_dropped(tail):
 def test_n6_the_tail_is_dropped_once_and_only_as_a_whole_literal():
     # Axis: `_drop_legacy_tail` uses endswith and slicing only; one tail, once, and anything else comes back as it was.
     second = OLD_SETTLE_TAILS[3]
-    assert rr._drop_legacy_tail(OPEN + TAIL) == OPEN
-    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED) == OPEN + rs.CARRIED
-    assert rr._drop_legacy_tail(OPEN + second + TAIL) == OPEN + second
-    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED + rs.CARRIED) == OPEN + TAIL + rs.CARRIED + rs.CARRIED
-    assert rr._drop_legacy_tail(TAIL) == ""
+    assert rr._drop_legacy_tail(OPEN + TAIL, CITE) == OPEN
+    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED, CITE) == OPEN + rs.CARRIED
+    assert rr._drop_legacy_tail(OPEN + second + TAIL, CITE) == OPEN + second
+    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED + rs.CARRIED, CITE) == OPEN + TAIL + rs.CARRIED + rs.CARRIED
+    assert rr._drop_legacy_tail(TAIL, CITE) == ""
     for same in (OPEN, "", OPEN + TAIL[:-1], OPEN + TAIL + " ", OPEN + TAIL.replace("; ", ";", 1), None, 3, ["a"]):
-        assert rr._drop_legacy_tail(same) == same, same
+        assert rr._drop_legacy_tail(same, CITE) == same, same
 
 
 def test_n6_a_reason_carrying_the_formatted_round_count_text_stays_byte_for_byte():
@@ -401,7 +401,31 @@ def test_n12_a_repeats_recorded_earlier_text_is_never_trimmed_on_a_later_write()
     cite = f'owner ruling "{W}" ({U})'
     history = f"{cite}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {CLAUSE_L2}"
     for reason in (history, history + rs.CARRIED):
-        assert rr._drop_legacy_tail(reason) == reason
+        assert rr._drop_legacy_tail(reason, cite) == reason
         ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": W}}, "reason": reason}
         assert the_finding(rr.build_record(account([], [ruled]), readers()))["reason"] == reason
-    assert rr._drop_legacy_tail(f"{cite}; waits; {CLAUSE_L2}") == f"{cite}; waits"
+    assert rr._drop_legacy_tail(f"{cite}; waits; {CLAUSE_L2}", cite) == f"{cite}; waits"
+
+
+def test_n13_ordinary_prose_holding_the_earlier_separator_still_loses_the_old_tail():
+    # Axis: only the history `_follow_repeats` writes, led by the citation, is kept whole; a reason whose own prose
+    # holds "; earlier: " is the old settle's reason and loses its exact tail, carried or not.
+    prose = "waits for the owner; earlier: the owner asked us to defer"
+    f = the_finding(record(stamped(reason=prose + TAIL)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {prose}"
+    assert rr._drop_legacy_tail(prose + TAIL, CITE) == prose
+    assert rr._drop_legacy_tail(prose + TAIL + rs.CARRIED, CITE) == prose + rs.CARRIED
+    assert rr._drop_legacy_tail(f"{CITE}; {prose}" + TAIL, CITE) == f"{CITE}; {prose}"
+    member = f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="r-1") + f"; earlier: {OPEN}" + TAIL
+    assert rr._drop_legacy_tail(member, CITE) == member
+    assert rr._drop_legacy_tail(member, "another citation") == f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="r-1") + f"; earlier: {OPEN}"
+
+
+def test_n14_a_merge_opener_inside_the_citation_never_counts_as_the_reasons_mark():
+    # Axis: the merge mark is read only from the rest after the citation, so quoted words that look like a mark
+    # leave one citation, with or without the carried suffix.
+    cite = 'owner ruling "keep the note (merged into the appendix)" (https://example.invalid/c)'
+    for rest in (rs.MERGED_INTO_FORMAT.format("rep-1"), rs.MERGED_INTO_FORMAT.format("rep-1") + rs.CARRIED):
+        assert rr._leads_with_citation(cite + rest, cite) is True
+    assert rr._leads_with_citation(cite + " (merged into rep-1) tail", cite) is False
+    assert rr._leads_with_citation(cite + rs.CARRIED + rs.MERGED_INTO_FORMAT.format("rep-1"), cite) is False
