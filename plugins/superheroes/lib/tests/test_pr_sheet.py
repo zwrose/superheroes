@@ -2312,6 +2312,7 @@ def with_pointer_on_f7(text):
 REFUSED_POINTERS = [
     pytest.param("Whether to change that is decision item 1435.", "decision item 1435", id="refused-decision-item"),
     pytest.param("see item 1435 on your list", "item 1435 on your list", id="refused-item-on-your-list"),
+    pytest.param("see item 1435-1 on your list", "item 1435-1 on your list", id="refused-dashed-item-on-your-list"),
     pytest.param("collector #1435", "collector #1435", id="refused-collector-number"),
     pytest.param("Whether to change that is decision item 1435 on your list", "decision item 1435", id="refused-field-case"),
 ]
