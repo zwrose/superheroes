@@ -570,3 +570,17 @@ Added after vet 1028, by the build session, with the same rules as above (one Ed
 - **Neutralization:** in `vet-receipt.md`, `none of [the template's grounds](../../../theme/review-template.md#decided-for-you) covers` became `none of the template's grounds covers`.
 - **Raw red:** the test failed on `assert '(../../../theme/review-template.md#decided-for-you)' in "| **No leftover skipped the owner's review** | ..."`; `1 failed in 4.55s`.
 - **Restore receipt:** the inverse Edit, then `git status --short` showed `vet-receipt.md` clean. **Raw green:** `1 passed in 3.22s`.
+
+### E25: the bare-number scan's leading dash guard
+
+- **Guarded element / axis:** `_dependencies`'s bare-number pattern, its leading `(?<!\d-)`. Axis: an on-sheet number (1501) at the tail of a longer dashed token (`SKU 2273-1501`) is not another question.
+- **Neutralization:** `r"(?<!\w)(?<!\d-)(?:"` became `r"(?<!\w)(?:"`.
+- **Raw red** (`-k "e25 or e26"`): `e25-leading-dash-guard` failed with `pr_sheet.Refusal: ["dependent-question: collectorItems 2273-1: ... depends on another question ('1501'); ..."]`; `1 failed, 1 passed, 78 deselected in 1.22s`.
+- **Restore receipt:** the inverse Edit; `git diff --stat` afterwards showed only the test file changed. **Raw green:** `2 passed, 78 deselected in 1.23s`.
+
+### E26: the bare-number scan's trailing dash guard
+
+- **Guarded element / axis:** the same pattern's trailing `(?!-\d)`. Axis: an on-sheet number (1501) at the head of a longer dashed token (`range 1501-2273`) is not another question.
+- **Neutralization:** `r")(?!\w)(?!-\d)")` became `r")(?!\w)")`.
+- **Raw red:** `e26-trailing-dash-guard` failed with the same refusal naming `('1501')`; `1 failed, 1 passed, 78 deselected in 1.28s`.
+- **Restore receipt:** the inverse Edit; `git diff --stat` showed only the test file changed. **Raw green:** `2 passed, 78 deselected in 1.23s`.

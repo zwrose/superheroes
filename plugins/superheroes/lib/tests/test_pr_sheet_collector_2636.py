@@ -181,6 +181,17 @@ def test_e15_the_cards_own_number_used_to_describe_another_card_is_still_another
     assert problems and all(p.startswith("dependent-question: collectorItems 2273-1: ") for p in problems)
 
 
+@pytest.mark.parametrize("text", ["Print SKU 2273-1501 on the slip.", "Use the range 1501-2273 for the batch."],
+                         ids=["e25-leading-dash-guard", "e26-trailing-dash-guard"])
+def test_e25_e26_an_on_sheet_number_inside_a_longer_dashed_token_is_not_another_question(text):
+    # Axis: the bare-number scan reads another on-sheet number (1501) only as a whole token: not after "<digit>-" (the leading
+    # guard, SKU 2273-1501) and not before "-<digit>" (the trailing guard, range 1501-2273). Neither text is a dashed
+    # reference the D5 wording reads, so the card builds.
+    # Bites on: either dash guard of the bare-number pattern removed, so the token's tail or head is read as card 1501.
+    records, advisor = with_text(("2273-1", 1501), 0, text)
+    assert len(collector_cards(build(records, advisor))) == 2
+
+
 def test_e04_a_bare_reference_to_another_on_sheet_card_outside_the_dash_widths_is_refused():
     # Axis: another on-sheet number, written bare and dashed in a width the dashed-reference wording does not read (7-123), is another question.
     # Bites on: the bare scan reading only plain numbers, or its alternation not escaping the dash.
