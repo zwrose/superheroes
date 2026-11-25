@@ -256,9 +256,11 @@ _DEFS = _SCHEMA["$defs"]
 _LINK = re.compile(_DEFS["indexRow"]["properties"]["link"]["pattern"])
 _STORE_KEYS = ("answers", "verdict", "walk")
 # Axis: an option-less card that sends the owner to a list item by number, in any of three wordings.
-_POINTER = re.compile(r"\b(?:decision|collector|list)\s+item\s+#?\d+"
-                      r"|\bitem\s+#?\d+\s+(?:on|in|from)\s+(?:your|the)\s+(?:list|collector)\b"
-                      r"|\bcollector\s+(?:#\d+|(?:number|entry)\s+#?\d+)", re.IGNORECASE)
+# Axis: a list-item number may be dashed (N-M), as a collectorItems number may; each wording reads the whole number. See bite-proof
+# record i2636_collector_cards (F16).
+_POINTER = re.compile(r"\b(?:decision|collector|list)\s+item\s+#?\d+(?:-\d+)?"
+                      r"|\bitem\s+#?\d+(?:-\d+)?\s+(?:on|in|from)\s+(?:your|the)\s+(?:list|collector)\b"
+                      r"|\bcollector\s+(?:#\d+(?:-\d+)?|(?:number|entry)\s+#?\d+(?:-\d+)?)", re.IGNORECASE)
 # Axis: option or recommendation text that conditions on, or names, another question; six wordings (D1-D6), the group "numbered" being D4.
 _DEPENDS = re.compile(
     # D1 a choice made somewhere else
@@ -1609,8 +1611,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         for n, f in enumerate(r["findings"]):
             if (r["pr"], n) in carrier:
                 carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
-    copied = []  # each section the build writes from the record, not from the advisor's input; the list-item pointer check never reads them
-    titled = []  # each leftover card, whose question is its record finding's title; the pointer check never reads that question
+    copied = []  # each descriptive section the build copies from the record (see authored); the list-item pointer check never reads them
 
     def from_record(section):
         copied.append(section)
@@ -1645,12 +1646,9 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                 _section(words["whatHappened"], "paragraph", call["context"]),
                                 # axis: the card shows what the bounded pass tried from the record finding's evidence, never from the advisor's text — see bite-proof record i2554_bounded_pass_record (E-card)
                                 *(from_record(s) for s in _loop_tried(words, f)),
-                                # The If left is the advisor's when the leftovers entry gives one, else the record finding's consequence.
-                                (_section(words["ifLeft"], "paragraph", call["ifLeft"]) if "ifLeft" in call
-                                 else from_record(_section(words["ifLeft"], "paragraph", f["consequence"]))),
+                                _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),
                                 *([carried_section(lines)] if lines else [])],
                                options, call.get("recommendation")))
-            titled.append(cards[-1])
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
             owners.append(None)
     if breakdown is not None:
@@ -1694,14 +1692,14 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         places.append("closesSpec")
         owners.append(None)
     def authored(card):
-        """The card as the advisor wrote it. Left out: a leftover card's question (its finding's title), and every section written from
-        the record (a carried section of finding titles, a leftover's What the loop tried, and a leftover's If left when its leftovers
-        entry gives none, which is then the finding's consequence). Kept: everything from the advisor's input, the closure receipt included."""
-        return {**card, "question": "" if any(card is c for c in titled) else card["question"],
-                "context": [s for s in card["context"] if not any(s is c for c in copied)]}
+        """The card as the pointer check reads it: everything the owner answers or accepts, whoever wrote it (the question, If left,
+        recommendation and every advisor section; on a leftover card the question is the finding's title and the If left may be its
+        consequence). Left out: the two descriptive sections the build copies from the record, a carried section of other findings'
+        titles and a leftover's What the loop tried."""
+        return {**card, "context": [s for s in card["context"] if not any(s is c for c in copied)]}
 
-    # Axis: the pointer check reads only what the advisor wrote for the card (see authored), never text the build copies from the
-    # record. See bite-proof record i2636_collector_cards (F12).
+    # Axis: the pointer check reads what the owner answers or accepts, never the descriptive sections copied from the record (see
+    # authored). See bite-proof record i2636_collector_cards (F12).
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"]

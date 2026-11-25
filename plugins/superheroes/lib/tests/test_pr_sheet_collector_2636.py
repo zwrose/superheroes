@@ -24,7 +24,7 @@ def finding(fid, key, title):
 GIFT = finding("A1", "shop/gift-tone", "Gift receipts read oddly to the buyer")
 TOTAL = finding("A2", "shop/total-line", "The thank-you line may show the total")
 FONT = finding("A3", "shop/receipt-font", "The receipt font changes between pages")
-GIFT_TWIN = finding("B1", "shop/gift-tone-again", GIFT["title"])  # the same title as GIFT under another key
+GIFT_TWIN = finding("A1", "shop/gift-tone-again", GIFT["title"])  # GIFT's reviewer id and title under another findingKey: only the key differs
 CALL = {"why": "Only you can decide the tone.", "context": "It happened on the receipt page.", "options": "none"}
 DETERMINATION = {"ground": "A Canon entry answers it", "reason": "The shop's tone is already ruled."}
 
@@ -276,6 +276,7 @@ def test_e11_the_carried_identity_is_in_the_card_id():
     twin = build(*small((2273, 1501), [GIFT_TWIN], {GIFT_TWIN["findingKey"]: {"carriedBy": 2273}}))
     again = build(*small((2273, 1501), [GIFT], {GIFT["findingKey"]: {"carriedBy": 2273}}))
     nothing = build(*small((2273, 1501), [GIFT], {GIFT["findingKey"]: {"carriedBy": 1501}}))
+    assert card_for(gift, 2273)["context"] == card_for(twin, 2273)["context"]
     assert card_for(gift, 2273)["id"] != card_for(twin, 2273)["id"]
     assert card_for(gift, 2273)["id"] == card_for(again, 2273)["id"]
     plain = build(*small((2273, 1501)))  # the same sheet with no finding at all: the card that carries nothing keeps this id

@@ -338,7 +338,7 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
 - A collector item that concerns this PR is its own card, from the input's `collectorItems`. It is never
   folded into the "What you're accepting" item and never only mentioned there by number. The builder
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
-  on your list", a collector number) instead of carrying that decision's options. It is a best-effort
+  on your list", a collector number, each plain or dashed) instead of carrying that decision's options. It is a best-effort
   pattern scan, so the rule binds the advisor whether or not the scan catches a wording. The item's
   number may be dashed (`2273-1`, a string `N-M`) and is shown on the card exactly as written. Any card
   on the sheet that asks a left-for-owner finding's decision may carry it (a leftover card, an Accept

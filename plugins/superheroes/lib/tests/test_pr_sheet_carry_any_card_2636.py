@@ -97,17 +97,19 @@ def test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check():
     assert len(problems) == 1 and problems[0].startswith(f"items {ITEM['id']}: card {ITEM['title']!r} sends the owner to a list item ('decision item 9191')")
 
 
-def test_f13_a_leftover_cards_question_copied_from_its_finding_title_is_not_read_by_the_pointer_check():
-    # Axis: an option-less leftover card's question is its record finding's title, which the advisor did not write; a title that names a
-    # past list decision builds, and the card shows it as written. The card's own text (its context) is still read: see
-    # test_a_leftover_with_no_options_that_points_away_is_refused_naming_its_key in test_pr_sheet.py.
-    # Bites on: the pointer check reading the leftover card's question. See bite-proof record i2636_collector_cards (F12).
-    total = {**TOTAL, "title": "Decision item 9191 left the thank-you line as it was"}
-    sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
-    assert [c["question"] for c in leftover_cards(sheet)] == [total["title"]]
-
-
 POINTING_PAST = "Decision item 9191 settled the receipt wording"
+POINTING = "Choose the receipt wording in decision item 9191 before accepting"
+
+
+def test_f13_a_leftover_cards_question_is_read_by_the_pointer_check_whoever_wrote_it():
+    # Axis: an option-less leftover card's question is what the owner answers; when it is the record finding's title and names a list
+    # item, the card is still refused, as it was before the carry widening.
+    # Bites on: the pointer check skipping a leftover card's question because it came from the record. See bite-proof record
+    # i2636_collector_cards (F12).
+    total = {**TOTAL, "title": POINTING}
+    records, advisor = small((2273, 1501), [total], {total["findingKey"]: CALL})
+    problems = problems_of(records, advisor)
+    assert len(problems) == 1 and problems[0].startswith(f"leftovers {total['findingKey']}: card {POINTING!r} sends the owner to a list item")
 
 
 def test_f14_a_leftovers_what_the_loop_tried_from_the_record_is_not_read_by_the_pointer_check():
@@ -120,15 +122,15 @@ def test_f14_a_leftovers_what_the_loop_tried_from_the_record_is_not_read_by_the_
     assert POINTING_PAST in str(leftover_card(sheet, total)["context"])
 
 
-def test_f15_a_leftovers_if_left_taken_from_its_finding_is_not_read_but_the_advisors_own_is():
-    # Axis: a leftover whose leftovers entry gives no ifLeft shows the record finding's consequence, which the pointer check does not
-    # read; an ifLeft the advisor writes is the card's own text and is still refused when it names a list item.
-    # Bites on: the pointer check reading the consequence copied from the record, or skipping the advisor's own If left.
-    # See bite-proof record i2636_collector_cards (F12).
-    total = {**TOTAL, "consequence": POINTING_PAST}
-    sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
-    assert leftover_card(sheet, total)["context"][-1] == {"title": WORDS["ifLeft"], "blocks": [{"paragraph": POINTING_PAST}]}
-    records, advisor = small((2273, 1501), [TOTAL], {TOTAL["findingKey"]: {**CALL, "ifLeft": POINTING_PAST}})
+@pytest.mark.parametrize("source", ["advisor", "record"], ids=["f15-advisor-if-left", "f15-record-consequence"])
+def test_f15_a_leftovers_if_left_is_read_by_the_pointer_check_whoever_wrote_it(source):
+    # Axis: a leftover card's If left is what the owner accepts; one that sends the owner to a list item is refused whether the advisor
+    # wrote it or the card took the record finding's consequence because the leftovers entry gives none.
+    # Bites on: the pointer check skipping the If left the card took from the record, or the advisor's own. See bite-proof record
+    # i2636_collector_cards (F12).
+    total = {**TOTAL, "consequence": POINTING} if source == "record" else TOTAL
+    call = CALL if source == "record" else {**CALL, "ifLeft": POINTING}
+    records, advisor = small((2273, 1501), [total], {total["findingKey"]: call})
     problems = problems_of(records, advisor)
     assert len(problems) == 1 and problems[0].startswith(f"leftovers {TOTAL['findingKey']}: card {TOTAL['title']!r} sends the owner to a list item")
 
@@ -206,6 +208,7 @@ def test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carry
     gift = build(*small((2273, 1501), [TOTAL, GIFT], {TOTAL["findingKey"]: CALL, GIFT["findingKey"]: by(TOTAL)}))
     twin = build(*small((2273, 1501), [TOTAL, GIFT_TWIN], {TOTAL["findingKey"]: CALL, GIFT_TWIN["findingKey"]: by(TOTAL)}))
     again = build(*small((2273, 1501), [TOTAL, GIFT], {TOTAL["findingKey"]: CALL, GIFT["findingKey"]: by(TOTAL)}))
+    assert leftover_card(gift, TOTAL)["context"] == leftover_card(twin, TOTAL)["context"]
     assert leftover_card(gift, TOTAL)["id"] != leftover_card(twin, TOTAL)["id"]
     assert leftover_card(gift, TOTAL)["id"] == leftover_card(again, TOTAL)["id"]
     # The same input with nothing carried on TOTAL (GIFT carried by FONT instead): TOTAL's card is the one the base formula gives.
