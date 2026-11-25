@@ -215,6 +215,61 @@ def test_t7_a_finding_a_carried_check_settles_fixed_at_write_time_keeps_the_with
     assert rec["status"] == "not-reviewed" and _line(rec) in rec["whatIsMissing"], (rec["status"], rec["whatIsMissing"])
 
 
+def test_t7_b_a_ruling_on_the_first_choice_does_not_clear_a_second_choice_a_carried_check_fixes(tmp_path):
+    """axis: T7b — a stamped owner-choice session that left two findings for the owner: the first is ruled, the second a
+    carried check settles fixed when the record is written. Nothing waits, but the second choice has no owner ruling, so the
+    line stays and the record reads not-reviewed."""
+    fake = Fake()
+    _first_record(tmp_path, fake, disposition="out-of-scope")
+    (before,) = _by_key(fake)
+    assert before["outcome"] == "left-for-owner"
+    ledger = [ledger_row(**SECOND, **OOS), ledger_row(**OOS)]
+    s = Session(_sub(tmp_path, "t7b"), terminal="handed-back", dispositionLedger=ledger, decisions=list(OWNER_CHOICE),
+                seatMapReceipts=[{"round": "1", "map": {"seats": {}, "makerFamilies": ["xai"]}}], certification=dict(ONLY))
+    s.meta["sessionId"] = "s-2"
+    s.seat("code-reviewer", head=HEAD, nonce="n1")
+    fake.runs["/run/n1"] = (dict(GOOD_RUN, runnerNonce="n1", viewHeadSha=HEAD), None)
+    rd = {**_readers(fake), "is_ancestor": lambda root, commit, to: True}
+    body = {"ci": "green", "runDirs": ["/run/n1"]}
+    out = _put(tmp_path, s.save(), rd, body, carriedChecks=[carried_entry(key=before["findingKey"], checkedHead=HEAD)],
+               **_ruling(SECOND["key"]))
+    assert out["ok"], out
+    rec = rr.read(7, readers=rd)
+    outcomes = {f["id"]: f["outcome"] for f in rec["findings"]}
+    assert outcomes == {"f-9": "ruling", "f-1": "fixed"}, outcomes
+    assert rec["leftForOwner"] == []
+    assert rec["uncertified"]["ownerChoiceOnly"] is True and rec["uncertified"]["source"] == "session"
+    assert rec["status"] == "not-reviewed" and _line(rec) in rec["whatIsMissing"], (rec["status"], rec["whatIsMissing"])
+
+
+MINOR = dict(key="h.py::listed@L4", id="f-8", title="listed", file="h.py", line=4, severity="Minor")
+
+
+def _risk(root, file, pinned=None):
+    """No declared risk area covers h.py (a Minor there is listed for the merge verdict); every other file is in one."""
+    return file != "h.py"
+
+
+def test_t7_c_a_listed_minor_left_as_it_was_does_not_hold_the_line_once_the_owner_rules(tmp_path):
+    """axis: T7c S-listed — the driven session plus a Minor it left for the owner in a file no risk area covers: the record
+    lists the Minor for the merge verdict and gives it no card. Once the owner rules on the one finding that waits, the
+    listed Minor, unchanged, needs no ruling, so the record reads reviewed."""
+    state = _driven_state()
+    minor = ledger_row(**MINOR, **OOS)
+    session, fake, body = _from_state(_sub(tmp_path, "t7c"), state, dispositionLedger=state["dispositionLedger"] + [minor])
+    rd = {**_readers(fake), "finding_risk": _risk}
+    assert _put(tmp_path, session, rd, body)["ok"]
+    before = rr.read(7, readers=rd)
+    assert before["listedForMerge"] == [MINOR["id"]] and before["status"] == "awaits-owner", before
+    out = _put(tmp_path, session, rd, body, **_ruling(_held_key(before)))
+    assert out["ok"], out
+    rec = rr.read(7, readers=rd)
+    outcomes = {f["id"]: f["outcome"] for f in rec["findings"]}
+    assert outcomes[MINOR["id"]] == "left-for-owner" and rec["listedForMerge"] == [MINOR["id"]], outcomes
+    assert rec["leftForOwner"] == []
+    assert rec["status"] == "reviewed" and rec["whatIsMissing"] == [], (rec["status"], rec["whatIsMissing"])
+
+
 # --- unit: _owner_choices_settled on hand-built lists ---
 
 def _waiting(**over):
@@ -248,6 +303,26 @@ def test_t8_another_outcome_changed_is_not_settled():
     """axis: T8 S-kept — a finding the session did not leave for the owner that reads another outcome in the record
     (shown-wrong to fixed) keeps the line."""
     assert rr._owner_choices_settled([_waiting(), _fixed(outcome="shown-wrong")], [_ruled(), _fixed()]) is False
+
+
+def _listed(**over):
+    return dict({"id": "f-3", "severity": "Minor", "outcome": "left-for-owner", "inRiskArea": False}, **over)
+
+
+def test_t8_a_listed_minor_left_as_it_was_needs_no_ruling():
+    """axis: T8 S-listed — a Minor the session left for the owner that the record lists for the merge verdict, unchanged, is
+    kept: the ruled waiting finding settles the session."""
+    assert rr._owner_choices_settled([_waiting(), _listed()], [_ruled(), _listed()]) is True
+
+
+def test_t8_a_session_whose_only_choice_is_a_listed_minor_settles_nothing():
+    """axis: T8 S-listed — a listed Minor alone is no owner ruling, so a session that left only that settles nothing."""
+    assert rr._owner_choices_settled([_listed()], [_listed()]) is False
+
+
+def test_t8_a_listed_minor_in_a_risk_area_still_needs_a_ruling():
+    """axis: T8 S-listed — the same Minor in a risk area holds a card, so left as it was it is not settled."""
+    assert rr._owner_choices_settled([_waiting(), _listed()], [_ruled(), _listed(inRiskArea=True)]) is False
 
 
 def test_t8_no_once_waiting_finding_is_not_settled():

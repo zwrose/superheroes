@@ -1942,17 +1942,21 @@ def uncertified_line(u):
 def _owner_choices_settled(session_findings, findings):
     """True when the session's owner choices are all settled by the owner: every finding the session left for the owner
     (its account outcome is left-for-owner, or it has no outcome and is a Minor or Nit) now reads `ruling` through an
-    owner-ruling citation, at least one did, and every other finding keeps the outcome the session gave it. The two
-    lists are the account's findings and the record's, index-aligned; any mismatch reads False (the
-    withheld-certificate bullet of skills/review-code/reference/review-record.md)."""
+    owner-ruling citation, at least one did, and every other finding keeps the outcome the session gave it. A finding
+    the session left for the owner that the record lists for the merge verdict and leaves as the session gave it holds no
+    card, so it needs no ruling and counts as kept. The two lists are the account's findings and the record's,
+    index-aligned; any mismatch reads False (the withheld-certificate bullet of
+    skills/review-code/reference/review-record.md)."""
     if not (isinstance(session_findings, list) and isinstance(findings, list) and len(session_findings) == len(findings)):
         return False
     waited = 0
     for s, f in zip(session_findings, findings):
         if not (isinstance(s, dict) and isinstance(f, dict)):
             return False
-        if s.get("outcome") == _LEFT_FOR_OWNER or (s.get("outcome") not in rfs.OUTCOMES
-                                                   and s.get("severity") in LISTED_SEVERITIES):
+        # axis: a finding listed for the merge verdict and unchanged holds no card, so it needs no ruling; it still keeps its outcome and settles nothing on its own — see bite-proof record i2640_owner_choice_settled (S-listed)
+        listed_as_left = listed_for_merge(f) and f.get("outcome") == s.get("outcome")
+        if not listed_as_left and (s.get("outcome") == _LEFT_FOR_OWNER or (s.get("outcome") not in rfs.OUTCOMES
+                                                                           and s.get("severity") in LISTED_SEVERITIES)):
             waited += 1
             by = f.get("decidedBy")
             # axis: a once-waiting finding counts as settled only as a ruling through an owner-ruling citation, never a write-time fix, a scope ruling or an uncited ruling — see bite-proof record i2640_owner_choice_settled (S-ruled)
