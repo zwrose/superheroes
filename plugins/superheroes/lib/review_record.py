@@ -2057,21 +2057,23 @@ _STALE_CLAUSE = re.compile("|".join((_clause_pattern(finding_outcomes.UNRESOLVED
                                      _clause_pattern(_UNMET_CLAUSE, _LABELS, _WHY))))
 
 
-def _without_stale_clauses(reason, lead=None):
-    """``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else kept byte for byte.
+def _strip_stale(reason, lead=None):
+    """(kept, rest): ``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else
+    kept byte for byte, and the trailing marks of the dropped parts that no kept part took ("" unless every part went).
 
-    The reason reads as parts split at "; ". Every copy of ``lead`` (the resolved citation, which holds the owner's
-    quoted words) is held whole first, wherever it sits, so no quoted text is split or matched. A part goes only when,
-    less a trailing run of carried suffixes and merge marks, it is a clause of `_STALE_CLAUSE`; that run joins the part
-    before it (the first kept part after it when none is kept before). A non-string or empty reason is returned as it
-    is; all parts gone gives ""."""
-    from review_record_session import CARRIED, MERGED_INTO_FORMAT  # lazy: that module imports this one
+    The reason reads as parts split at "; ". Each copy of ``lead`` (the resolved citation, which holds the owner's
+    quoted words) that stands at a part boundary is held whole first, so no quoted text is split or matched. A part
+    goes only when, less a trailing run of carried suffixes and merge marks (read as the session writer reads them), it
+    is a clause of `_STALE_CLAUSE`; that run joins the part before it, or the first kept part after it when none is
+    kept before. A non-string or empty reason is returned as it is."""
+    from review_record_session import CARRIED, merge_mark_start  # lazy: that module imports this one
     if not isinstance(reason, str) or not reason:
-        return reason
-    held = isinstance(lead, str) and lead != "" and lead in reason
+        return reason, ""
     hold = "\x00lead\x00"
-    masked = reason.replace(lead, hold) if held else reason
-    mark = re.compile(_clause_pattern(MERGED_INTO_FORMAT.replace("{}", "%s"), r"[^()]*") + r"\Z")
+    while hold in reason:
+        hold = "\x00" + hold
+    held = isinstance(lead, str) and lead != ""
+    masked = re.sub(r"(?:^|(?<=; ))" + re.escape(lead) + r"(?=; | \(|$)", lambda _: hold, reason) if held else reason
     kept, carry = [], ""
     for part in masked.split("; "):
         core, run = part, ""
@@ -2079,10 +2081,10 @@ def _without_stale_clauses(reason, lead=None):
             if core.endswith(CARRIED):
                 core, run = core[:-len(CARRIED)], CARRIED + run
                 continue
-            found = mark.search(core)
-            if found is None or found.start() == 0:
+            at = merge_mark_start(core)
+            if at is None:
                 break
-            core, run = core[:found.start()], found.group(0) + run
+            core, run = core[:at], core[at:] + run
         if not _STALE_CLAUSE.fullmatch(core):
             kept.append(part + carry)
             carry = ""
@@ -2091,7 +2093,28 @@ def _without_stale_clauses(reason, lead=None):
         else:
             carry += run
     out = "; ".join(kept)
-    return out.replace(hold, lead) if held else out
+    return (out.replace(hold, lead) if held else out), carry
+
+
+def _without_stale_clauses(reason, lead=None):
+    """``reason`` without its stale "not on record" clauses (see `_strip_stale`); when every part went, the marks left."""
+    out, rest = _strip_stale(reason, lead)
+    return out or rest if isinstance(out, str) else out
+
+
+def _with_earlier(note, old, lead):
+    """``note`` followed by the earlier reason ``old`` (as `; earlier: <old>`) without its stale clauses, each copy of
+    the citation ``lead`` held whole; when nothing of ``old`` is left but its marks, the marks follow ``note``."""
+    clean, rest = _strip_stale(old, lead)
+    if isinstance(old, str) and clean:
+        return f"{note}; earlier: {clean}"
+    return note + rest if isinstance(old, str) else note
+
+
+def _leads_with(reason, citation):
+    """Whether ``reason`` starts with ``citation`` as a whole part, never as the prefix of a longer one."""
+    return isinstance(reason, str) and (reason == citation or reason.startswith(citation + "; ")
+                                        or reason.startswith(citation + " ("))
 
 
 def _recheck_decisions(findings, sources):
@@ -2111,10 +2134,10 @@ def _recheck_decisions(findings, sources):
             # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
             ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
             if ok:
-                # axis: a finding that ends ruling carries no stale not-on-record clause, and one that held only clauses reads the citation text
-                clean = _without_stale_clauses(reason, lead=text)
-                if isinstance(reason, str) and reason and clean != reason:
-                    stale_only, reason = clean == "", clean or text
+                # axis: a finding that ends ruling carries no stale not-on-record clause, and one that held only clauses reads the citation text with their marks
+                clean, rest = _strip_stale(reason, lead=text)
+                if isinstance(reason, str) and reason and (clean, rest) != (reason, ""):
+                    stale_only, reason = clean == "", clean or text + rest
                     f = dict(f, reason=reason)
             if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, _DEMOTED_CLAUSE % text
@@ -2138,7 +2161,7 @@ def _recheck_decisions(findings, sources):
             out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
             continue
         # axis: a promoted reason that already leads with its citation (a ruling demoted and then resolved again) is not given it twice
-        lead_again = new == _RULING and isinstance(reason, str) and reason.startswith(why)
+        lead_again = new == _RULING and _leads_with(reason, why)
         out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason and not stale_only and not lead_again else reason))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
     return out, changes
@@ -2311,9 +2334,8 @@ def _follow_repeats(findings, checks, sources=None):
                 by = copy.deepcopy(g["decidedBy"])
                 # axis: the reason leads with the citation text exactly, so the refresh on a later write never prepends it twice — see bite-proof record i2479_repeat_follows_ruling
                 reason = f"{text}; {REPEAT_FOLLOWS_RULING.format(name=_name(g))}"
-                earlier = _without_stale_clauses(old, lead=text)
                 changed = dict(f, outcome=_RULING, decidedBy=by, repeatOf=dict(mark, **{
-                    REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {earlier}" if isinstance(old, str) and earlier else reason)
+                    REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=_with_earlier(reason, old, text))
                 moved = True
                 for j in members_to_follow(i, kept):
                     h = out[j]
@@ -2321,13 +2343,12 @@ def _follow_repeats(findings, checks, sources=None):
                     held, held_text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), h))
                     if not held:
                         continue
-                    was = _without_stale_clauses(h.get("reason"), lead=held_text)
                     handled.add(j)
                     note = f"{held_text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
                     # axis: every member moved to ruling carries its own copy of the decidedBy, never an uncited ruling — see bite-proof record i2479_repeat_follows_ruling
                     out[j] = by_key[_key(h)] = dict(
                         h, outcome=_RULING, decidedBy=copy.deepcopy(g["decidedBy"]),
-                        reason=f"{note}; earlier: {was}" if isinstance(was, str) and was else note)
+                        reason=_with_earlier(note, h.get("reason"), held_text))
                 out[i] = by_key[_key(f)] = changed
                 continue
             handled.add(i)

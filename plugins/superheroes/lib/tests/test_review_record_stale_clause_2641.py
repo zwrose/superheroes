@@ -134,10 +134,11 @@ def test_t8_a_repeat_inheriting_a_ruling_writes_its_earlier_text_without_the_cla
     ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(BY)}
     given = repeat(repeatOf=mark(kept={**kept(), "members": [MEMBER_RAW]}), reason=f"{OLD}; {A_L2}")
     member = {**X, "id": "f-3", "title": "Merged one", "line": 30, "findingKey": MEMBER_RAW, "outcome": LFO,
-              "reason": f"merged note; {A_L2}"}
+              "reason": f"merged note; {A_L2}" + rs.MERGED_INTO_FORMAT.format("f-2")}
     out = rr._follow_repeats([ruled, given, member], [], lambda: RESOLVES)
     assert out[1]["reason"] == f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + "; earlier: " + OLD
-    assert out[2]["reason"] == f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + "; earlier: merged note"
+    assert out[2]["reason"] == (f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + "; earlier: merged note"
+                                + rs.MERGED_INTO_FORMAT.format("f-2"))
     assert out[1]["outcome"] == out[2]["outcome"] == "ruling"
     bare = repeat(reason=A_L2)
     assert rr._follow_repeats([ruled, bare], [], lambda: RESOLVES)[1]["reason"] == (
@@ -157,14 +158,36 @@ def _failure_returns():
     return tails
 
 
+def _failure_kind(tail):
+    """How one failure return's second element is written: a named WHY_ text, the formatted WHY_ text, a text
+    forwarded from a leg (`why`), no text (None), or anything else, which is a text with no home."""
+    if isinstance(tail, ast.Name) and tail.id.startswith("WHY_"):
+        return "named"
+    if (isinstance(tail, ast.BinOp) and isinstance(tail.op, ast.Mod) and isinstance(tail.left, ast.Name)
+            and tail.left.id.startswith("WHY_")):
+        return "formatted"
+    if isinstance(tail, ast.Name) and tail.id == "why":
+        return "forwarded"
+    if isinstance(tail, ast.Constant) and tail.value is None:
+        return "none"
+    return "unhomed"
+
+
+def test_t9_the_classifier_refuses_every_inline_text_shape():
+    # Axis: a literal, an f-string and an inline percent format each read as a text with no home.
+    for src in ('"some failure"', 'f"some {x}"', '"unregistered failure %s" % (value,)', '"a" + b', "WHY_X + 'y'"):
+        assert _failure_kind(ast.parse(src, mode="eval").body) == "unhomed", src
+    assert _failure_kind(ast.parse("WHY_FEWER_ROUNDS % (a, b)", mode="eval").body) == "formatted"
+
+
 def test_t9_every_failure_text_has_one_home_and_the_cleanup_reads_it():
-    # Axis: every failure return names a WHY_ constant (no literal copy), the list holds exactly those, and each one,
-    # stamped as the settle clause, is a stale clause the cleanup removes.
+    # Axis: every failure return is classified, none carries a text with no home, the list holds exactly the named
+    # texts, and each one, stamped as the settle clause, is a stale clause the cleanup removes.
     tails = _failure_returns()
-    literal = [t for t in tails if isinstance(t, ast.JoinedStr) or (isinstance(t, ast.Constant) and isinstance(t.value, str))]
-    assert [ast.unparse(t) for t in literal] == []
-    named = {t.id for t in tails if isinstance(t, ast.Name) and t.id.startswith("WHY_")}
-    formatted = {t.left.id for t in tails if isinstance(t, ast.BinOp) and isinstance(t.left, ast.Name)}
+    kinds = [_failure_kind(t) for t in tails]
+    assert [ast.unparse(t) for t, k in zip(tails, kinds) if k == "unhomed"] == []
+    named = {t.id for t, k in zip(tails, kinds) if k == "named"}
+    formatted = {t.left.id for t, k in zip(tails, kinds) if k == "formatted"}
     assert formatted == {"WHY_FEWER_ROUNDS"}
     assert {getattr(fo, n) for n in named} == set(fo.UNRESOLVED_WHY_TEXTS) and len(fo.UNRESOLVED_WHY_TEXTS) == len(named)
     for why in fo.UNRESOLVED_WHY_TEXTS + tuple(fo.WHY_FEWER_ROUNDS % pair for pair in ((-1, 2), (0, 2), (12, 40))):
@@ -190,7 +213,7 @@ def test_t13_a_bound_that_fell_short_on_a_negative_count_resolves_without_its_cl
 
     demoted = build(ruled, -1)
     assert demoted["outcome"] == "left-for-owner"
-    assert demoted["reason"].startswith("the cited decision is not on record (the review ran -1 rounds, fewer than the bound's 2)")
+    assert demoted["reason"].startswith(rr._DEMOTED_CLAUSE % (fo.WHY_FEWER_ROUNDS % (-1, 2)))
     restored = build(demoted, 2)
     assert restored["outcome"] == "ruling"
     assert restored["reason"] == f'advisor\'s bound "{words}" ({url}); the advisor bounded it'
@@ -199,7 +222,8 @@ def test_t13_a_bound_that_fell_short_on_a_negative_count_resolves_without_its_cl
 
 @pytest.mark.parametrize("reason, expected", [
     pytest.param(A_L2 + rs.CARRIED + "; open", "open" + rs.CARRIED, id="a-leading-clause-hands-its-suffix-to-the-next-part"),
-    pytest.param(A_L2 + rs.CARRIED, "", id="every-part-dropped-is-empty"),
+    pytest.param(A_L2 + rs.CARRIED, rs.CARRIED, id="every-part-dropped-leaves-its-marks"),
+    pytest.param(A_L2, "", id="every-part-dropped-with-no-marks-is-empty"),
     pytest.param(f"a (merged into b); {C_L3}{rs.CARRIED}{rs.CARRIED}; c", f"a (merged into b){rs.CARRIED}{rs.CARRIED}; c",
                  id="a-run-of-suffixes-moves-whole"),
     pytest.param("the cited decision is not on record: some other reason", "the cited decision is not on record: some other reason",
@@ -227,3 +251,62 @@ def test_t11_the_same_holds_for_a_non_linked_ruling():
     ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "canon", "ref": STANDING},
              "reason": "the cited decision is not on record: the cited Canon entry is not on record"}
     assert the_finding(record(ruled, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}"
+
+
+PAREN_REP = "app/(auth)/page.tsx::unchecked-index@L3"
+
+
+@pytest.mark.parametrize("rep", [pytest.param("rep-1", id="plain-id"), pytest.param(PAREN_REP, id="id-with-parentheses")])
+def test_t14_a_merge_mark_after_the_clause_is_kept_whatever_its_id_holds(rep):
+    # Axis: the merge mark is read as the session writer reads it, so an id with parentheses is peeled too.
+    mark = rs.MERGED_INTO_FORMAT.format(rep)
+    f = the_finding(record(stamped(reason="waits for the owner; " + A_L2 + mark)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
+    assert rs.merged_into(f["reason"]) == rep
+
+
+@pytest.mark.parametrize("over", [pytest.param({}, id="promotion"), pytest.param({"outcome": "ruling"}, id="linked-refresh")])
+def test_t15_a_reason_that_is_only_a_clause_and_its_mark_keeps_the_mark(over):
+    # Axis: all-stale with a merge mark, the citation text replaces the clause and the mark stays, so the member
+    # is still read as merged.
+    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
+    f = the_finding(record(stamped(reason=A_L2 + mark, **over)))
+    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark and rs.merged_into(f["reason"]) == "rep-1"
+
+
+def test_t16_a_promotion_is_not_mistaken_for_a_longer_canon_id_it_starts_like():
+    # Axis: the reason leads with the citation only as a whole part, so entry -1 is still named before a note on -10.
+    left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}0 was considered earlier"}
+    f = the_finding(record(left, fake=Fake(sources=CANON_SOURCES)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"canon {STANDING}; canon {STANDING}0 was considered earlier"
+    again = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}; waits"}
+    assert the_finding(record(again, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}; waits"
+
+
+def test_t17_the_citation_is_held_whole_only_at_a_part_boundary_and_a_placeholder_in_the_text_survives():
+    # Axis: masking never reaches text the citation merely appears inside, and text that already holds the
+    # placeholder's characters comes back unchanged.
+    inside = f"see {CITE} for more; {A_L2}"
+    assert rr._strip_stale(inside, lead=CITE) == (f"see {CITE} for more", "")
+    odd = "x\x00lead\x00y"
+    assert rr._strip_stale(f"{odd}; {CITE}; {A_L2}", lead=CITE) == (f"{odd}; {CITE}", "")
+
+
+def test_t18_a_repeat_and_its_member_hold_the_inherited_citation_whole_in_their_earlier_text():
+    # Axis: the repeat and the merged member each pass the citation they inherit, so clause-shaped owner words in
+    # an earlier reason that carried it are never cut, and a merge mark after a stale clause is kept.
+    words = "keep it; " + A_L2 + "; and more"
+    cite = f'owner ruling "{words}" ({U})'
+    by = {"kind": "owner-ruling", "ref": {"url": U, "words": words}}
+    ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(by)}
+    given = repeat(repeatOf=mark(kept={**kept(), "members": [MEMBER_RAW]}), reason=f"{OLD}; {cite}; {A_L2}")
+    member = {**X, "id": "f-3", "title": "Merged one", "line": 30, "findingKey": MEMBER_RAW, "outcome": LFO,
+              "reason": f"{cite}; merged note; {A_L2}" + rs.MERGED_INTO_FORMAT.format("f-2")}
+    resolves = {"repo": "o/r", "ownerRulings": {U: doc_for(words)}}
+    out = rr._follow_repeats([ruled, given, member], [], lambda: resolves)
+    assert out[1]["reason"] == f"{cite}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {cite}"
+    assert out[2]["reason"] == (f"{cite}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2")
+                                + f"; earlier: {cite}; merged note" + rs.MERGED_INTO_FORMAT.format("f-2"))
+    bare_member = dict(member, reason=A_L2 + rs.MERGED_INTO_FORMAT.format("f-2"))
+    out = rr._follow_repeats([ruled, given, bare_member], [], lambda: resolves)
+    assert out[2]["reason"] == f"{cite}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + rs.MERGED_INTO_FORMAT.format("f-2")
