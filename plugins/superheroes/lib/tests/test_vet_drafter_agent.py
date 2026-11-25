@@ -102,6 +102,24 @@ def test_vet_drafter_forbids_posting_and_the_slot_write():
         assert phrase in body, f"vet-drafter body no longer carries {phrase!r}"
 
 
+def test_vet_drafter_never_deletes_and_names_its_two_clean_up_moves():
+    _, body = _agent()
+    body = _collapse(body)
+    # axis: the never-delete rule stands as its bold sentence (#2644) — see bite-proof record i2644_vet_drafter_no_delete (D-rule)
+    assert "**You never delete a file.**" in body, "vet-drafter body no longer states the never-delete rule"
+    # axis: the first clean-up move, a move into the scratch folder, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-move)
+    assert "into `<draft directory>/scratch/` with `mv`" in body, (
+        "vet-drafter body no longer names the move into its scratch folder as a clean-up"
+    )
+    # axis: the second clean-up move, a plain worktree removal, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-remove)
+    assert "`git worktree remove <draft directory>/wt-<ordinal>`, without `--force`" in body, (
+        "vet-drafter body no longer names the plain `git worktree remove` without `--force`"
+    )
+    # axis: no forced worktree removal is ever offered, in either flag form — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    forced = re.findall(r"git worktree remove (?:--force|-f)\b", body)
+    assert forced == [], f"vet-drafter body offers a forced worktree removal: {forced!r}"
+
+
 def test_vetting_reference_and_duty_4_point_at_the_drafter():
     vetting = _read(VETTING)
     skill = _read(SKILL)

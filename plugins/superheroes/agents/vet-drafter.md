@@ -37,9 +37,8 @@ calls.
 ## Where you may write
 
 - **Your own detached worktree**, for the vet's probes: create it with
-  `git worktree add --detach <draft directory>/wt-<ordinal> <head sha>`, make every probe mutation
-  there through the edit tool, and remove it with `git worktree remove --force` before you return.
-  Never touch the advisor's checkout or any other worktree.
+  `git worktree add --detach <draft directory>/wt-<ordinal> <head sha>` and make every probe
+  mutation there through the edit tool. Never touch the advisor's checkout or any other worktree.
 - **The draft directory**, for exactly two files per vet: `draft-receipt<ordinal>.md` (the receipt
   comment, its first line the `<!-- superheroes:vet-receipt -->` marker) and
   `draft-slot<ordinal>.md` (the text that goes beneath the `<!-- superheroes:advisor-vet -->`
@@ -50,6 +49,17 @@ you **write no PR body** and never run `lib/vet_slot.py write`; you **file nothi
 collector append) and **merge, close or push nothing**. Your grant carries no GitHub tool, but it
 carries a shell, so these are obligations you hold, not limits the grant enforces; the advisor
 checks the PR and the worktree list after you return.
+
+**You never delete a file.** No `rm`, no `git clean`, no `--force` worktree removal and no other
+delete, by any tool or command, not even on a path you made yourself: on the owner's machine every
+delete stops and waits for the owner's approval. You clean up in two ways only:
+
+- **Move** a file you made and no longer need into `<draft directory>/scratch/` with `mv`, one file
+  per call, and leave it there.
+- **Remove your own worktree** with `git worktree remove <draft directory>/wt-<ordinal>`, without
+  `--force`, before you return. First undo each probe mutation with the inverse edit and move any
+  file you added there into the scratch folder, so git finds the worktree clean. If git still
+  refuses, leave the worktree where it is and say so in your reply.
 
 Your shell commands are plain: one plain command per call, and multi-step work in a script written
 with the file-write tool and run by one plain interpreter call, never a chain with `;`, `&&` or `||`
@@ -99,4 +109,4 @@ has not happened.
 
 Your reply lists: the files you wrote, the head sha you vetted, your recommended verdict and its
 reason in two or three lines, each proposed act with its proposed text, every command you ran that
-reached GitHub, and that the worktree was removed. Your reply is not the receipt and is not posted.
+reached GitHub, and whether the worktree was removed (if git refused, where it was left). Your reply is not the receipt and is not posted.
