@@ -675,7 +675,8 @@ catch-up reviewed as a returning review; `vet_slot.py handback --pr <n> --repo <
 When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
 composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
 `skills/review-code/reference/review-record.md` says, so the PR sheet files it as already decided. A ruling with no resolvable link stays a card.
-**A ruling that orders a fix goes to the build as a fix, never to `ownerRulings`.** While a `review-code`
+A ruling that accepts this change with the fix deferred to a follow-up accepts the finding as it stands.
+**A ruling that orders a fix in this change goes to the build as a fix, never to `ownerRulings`.** While a `review-code`
 loop runs, record it as the loop's `guidance` ruling with no `decidedBy` of any kind
 (`skills/review-code/reference/round-driver.md` § Owner and advisor rulings), so a fix that fails leaves
 the finding open; otherwise (a light-lane seat, or after the review) make the fix and have it reviewed
