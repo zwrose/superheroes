@@ -225,6 +225,29 @@ FAILED plugins/superheroes/lib/tests/test_review_record_owner_choice_settled_264
 1 passed, 37 deselected in 2.43s
 ```
 
+## (S-ruled, two choices) the once-waiting leg read on the session's own account (review round 2)
+
+The same S-ruled neutralization, run by the builder in a detached probe worktree at `26ee412`, against T4 after T4 was
+made to read the guard on the session's real account against the rewritten record.
+
+- Guarding test: `test_t4_one_of_two_waiting_findings_ruled_keeps_the_old_path_awaits_owner`.
+- Raw red (the long repr of the two lists is elided):
+
+```
+E       AssertionError: assert True is False
+E        +  where True = <function _owner_choices_settled at 0x...>([...], [...])
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_choice_settled_2640.py::test_t4_one_of_two_waiting_findings_ruled_keeps_the_old_path_awaits_owner
+1 failed, 37 deselected in 15.61s
+```
+
+- Restore: inverse edit; `git status --porcelain` on the probe worktree printed nothing.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.40s
+```
+
 ## Not covered by a neutralization here
 
 The `isinstance(...)`/length guard at the top of `_owner_choices_settled`, the `LISTED_SEVERITIES` leg (a Minor or Nit with
