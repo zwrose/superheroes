@@ -11,6 +11,8 @@ pointers that tell the advisor when to use the drafter.
 import os
 import re
 
+import worktree_guard as wg
+
 PLUGIN_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 
 AGENT = os.path.join("agents", "vet-drafter.md")
@@ -100,6 +102,39 @@ def test_vet_drafter_forbids_posting_and_the_slot_write():
         "draft-slot<ordinal>.md",
     ):
         assert phrase in body, f"vet-drafter body no longer carries {phrase!r}"
+
+
+def test_vet_drafter_never_deletes_and_names_its_two_clean_up_moves():
+    _, body = _agent()
+    body = _collapse(body)
+    # axis: the never-delete rule stands as its bold sentence (#2644) — see bite-proof record i2644_vet_drafter_no_delete (D-rule)
+    assert "**You never delete a file.**" in body, "vet-drafter body no longer states the never-delete rule"
+    # axis: the first clean-up move, a move into the scratch folder, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-move)
+    assert "into `<draft directory>/scratch/` with `mv -n`" in body, (
+        "vet-drafter body no longer names the move into its scratch folder as a clean-up"
+    )
+    # axis: the scratch folder is listed inside the write allowlist, so the move has a destination — see bite-proof record i2644_vet_drafter_no_delete (D-scratch)
+    allowlist = body.partition("## Where you may write")[2].partition("Nothing else.")[0]
+    assert "**The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p`" in allowlist, (
+        "vet-drafter's `Where you may write` list no longer names the scratch folder"
+    )
+    # axis: the second clean-up move, a plain worktree removal, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-remove)
+    assert "`git worktree remove <draft directory>/wt-<ordinal>`, without `--force`" in body, (
+        "vet-drafter body no longer names the plain `git worktree remove` without `--force`"
+    )
+    # axis: ignored files are listed and kept ones moved before the plain removal, which removes them unasked — see bite-proof record i2644_vet_drafter_no_delete (D-ignored)
+    assert (
+        "run `git status --porcelain --untracked-files=all --ignored` in it first and move anything listed "
+        "that you want kept"
+    ) in body, "vet-drafter body no longer has the drafter list and keep ignored files before removing its worktree"
+    # axis: the guard's own classifier still names a forced removal, so the span check below cannot pass vacuously — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    assert wg.destructive_discard_actions("git worktree remove --force wt") == ["worktree-remove-force"]
+    # axis: no inline command offers a forced worktree removal, in any spelling the worktree guard reads — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    forced = [
+        span for span in re.findall(r"`([^`]+)`", body)
+        if "worktree-remove-force" in wg.destructive_discard_actions(span)
+    ]
+    assert forced == [], f"vet-drafter body offers a forced worktree removal: {forced!r}"
 
 
 def test_vetting_reference_and_duty_4_point_at_the_drafter():
