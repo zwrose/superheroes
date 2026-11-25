@@ -1609,13 +1609,15 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         for n, f in enumerate(r["findings"]):
             if (r["pr"], n) in carrier:
                 carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
-    copied = []  # each carried section the build writes from record titles; the list-item pointer check never reads them
+    copied = []  # each section the build writes from the record, not from the advisor's input; the list-item pointer check never reads them
     titled = []  # each leftover card, whose question is its record finding's title; the pointer check never reads that question
 
-    def carried_section(lines):
-        section = _section(words["carriedTitle"], "bullets", [line for _, line in lines])
+    def from_record(section):
         copied.append(section)
         return section
+
+    def carried_section(lines):
+        return from_record(_section(words["carriedTitle"], "bullets", [line for _, line in lines]))
 
     for r in recs:
         for n, f in enumerate(r["findings"]):
@@ -1642,8 +1644,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                [_section(words["whyYours"], "paragraph", call["why"]),
                                 _section(words["whatHappened"], "paragraph", call["context"]),
                                 # axis: the card shows what the bounded pass tried from the record finding's evidence, never from the advisor's text — see bite-proof record i2554_bounded_pass_record (E-card)
-                                *_loop_tried(words, f),
-                                _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),
+                                *(from_record(s) for s in _loop_tried(words, f)),
+                                # The If left is the advisor's when the leftovers entry gives one, else the record finding's consequence.
+                                (_section(words["ifLeft"], "paragraph", call["ifLeft"]) if "ifLeft" in call
+                                 else from_record(_section(words["ifLeft"], "paragraph", f["consequence"]))),
                                 *([carried_section(lines)] if lines else [])],
                                options, call.get("recommendation")))
             titled.append(cards[-1])
@@ -1690,12 +1694,14 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         places.append("closesSpec")
         owners.append(None)
     def authored(card):
-        """The card as the advisor wrote it: no carried section copied from record titles, and no leftover card's record title."""
+        """The card as the advisor wrote it. Left out: a leftover card's question (its finding's title), and every section written from
+        the record (a carried section of finding titles, a leftover's What the loop tried, and a leftover's If left when its leftovers
+        entry gives none, which is then the finding's consequence). Kept: everything from the advisor's input, the closure receipt included."""
         return {**card, "question": "" if any(card is c for c in titled) else card["question"],
                 "context": [s for s in card["context"] if not any(s is c for c in copied)]}
 
-    # Axis: the pointer check reads what the advisor wrote for the card, never text copied from the record (a carried section, or a
-    # leftover card's question, which is its finding's title). See bite-proof record i2636_collector_cards (F12).
+    # Axis: the pointer check reads only what the advisor wrote for the card (see authored), never text the build copies from the
+    # record. See bite-proof record i2636_collector_cards (F12).
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"]

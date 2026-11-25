@@ -3,9 +3,10 @@
 A leftovers value {"carriedBy": <reference>} names its carrier by a list-item number (a collectorItems card), {"item": "<id>"} (an Accept or
 option card from items) or {"finding": "<leftovers key>"} (the card of another left-for-owner finding). The finding is then no card and no
 decided-for-you entry; the carrying card lists it as its last section. A carrier is never itself carried.
-Row ids and test names carry the guarded element (f01 to f10, f12 and f13), so a bite-proof run selects one element with -k. Row f11 is the
-existing byte-identity test, test_e13 in test_pr_sheet_collector_2636.py: it compares an input that uses none of these shapes with the base
-capture, and has no test here. The pointer check's carried-title row is the break-it test in test_pr_sheet_carried_title_pointer_2636.py.
+Test names carry the guarded element (f01 to f10, and f12 to f15); a bite-proof run selects a detector by its exact node id, which the
+bite-proof record names. Row f11 is the existing byte-identity test, test_e13 in test_pr_sheet_collector_2636.py: it compares an input that
+uses none of these shapes with the base capture, and has no test here. The pointer check's carried-title row is the break-it test in
+test_pr_sheet_carried_title_pointer_2636.py.
 """
 import pytest
 
@@ -104,6 +105,32 @@ def test_f13_a_leftover_cards_question_copied_from_its_finding_title_is_not_read
     total = {**TOTAL, "title": "Decision item 9191 left the thank-you line as it was"}
     sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
     assert [c["question"] for c in leftover_cards(sheet)] == [total["title"]]
+
+
+POINTING_PAST = "Decision item 9191 settled the receipt wording"
+
+
+def test_f14_a_leftovers_what_the_loop_tried_from_the_record_is_not_read_by_the_pointer_check():
+    # Axis: a leftover card's What the loop tried section is rendered from the record's bounded-pass evidence; an audit reason that
+    # names a past list decision builds, and the card shows it.
+    # Bites on: the pointer check reading the loop-tried section. See bite-proof record i2636_collector_cards (F12).
+    evidence = {"fixCommit": "abc1234def", "audit": {"ruling": "not-discharged", "reasonKind": "wrong", "reason": POINTING_PAST}}
+    total = {**TOTAL, pr_sheet.review_record.session_contract.BOUNDED_PASS_EVIDENCE_FIELD: evidence}
+    sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
+    assert POINTING_PAST in str(leftover_card(sheet, total)["context"])
+
+
+def test_f15_a_leftovers_if_left_taken_from_its_finding_is_not_read_but_the_advisors_own_is():
+    # Axis: a leftover whose leftovers entry gives no ifLeft shows the record finding's consequence, which the pointer check does not
+    # read; an ifLeft the advisor writes is the card's own text and is still refused when it names a list item.
+    # Bites on: the pointer check reading the consequence copied from the record, or skipping the advisor's own If left.
+    # See bite-proof record i2636_collector_cards (F12).
+    total = {**TOTAL, "consequence": POINTING_PAST}
+    sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
+    assert leftover_card(sheet, total)["context"][-1] == {"title": WORDS["ifLeft"], "blocks": [{"paragraph": POINTING_PAST}]}
+    records, advisor = small((2273, 1501), [TOTAL], {TOTAL["findingKey"]: {**CALL, "ifLeft": POINTING_PAST}})
+    problems = problems_of(records, advisor)
+    assert len(problems) == 1 and problems[0].startswith(f"leftovers {TOTAL['findingKey']}: card {TOTAL['title']!r} sends the owner to a list item")
 
 
 def test_f03_a_finding_reference_naming_two_findings_is_refused():
