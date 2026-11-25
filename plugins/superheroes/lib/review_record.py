@@ -2070,23 +2070,25 @@ _REPEAT_HISTORY = tuple(("; " + fmt.split("{name}")[0], fmt.split("{name}")[1] +
                         for fmt in (REPEAT_FOLLOWS_RULING, REPEAT_MEMBER_FOLLOWS_RULING))
 
 
-def _holds_repeat_history(reason, citation):
-    """Whether ``reason`` is the history `_follow_repeats` wrote: ``citation``, then one of its two follow notes (its
-    fixed lead, a name, its fixed words and `; earlier: `). Ordinary prose that happens to hold `; earlier: ` is not."""
-    if not (isinstance(citation, str) and citation and reason.startswith(citation)):
-        return False
-    rest = reason[len(citation):]
-    return any(rest.startswith(lead) and mark in rest[len(lead):] for lead, mark in _REPEAT_HISTORY)
+def _holds_repeat_history(reason):
+    """Whether ``reason`` holds the history `_follow_repeats` wrote: one of its two follow notes (its fixed lead, a
+    name, then its fixed words and `; earlier: `), whatever citation leads it, so a citation replaced or re-worded
+    since never hides it. Ordinary prose that happens to hold `; earlier: ` is not history."""
+    for lead, mark in _REPEAT_HISTORY:
+        at = reason.find(lead)
+        if at >= 0 and mark in reason[at + len(lead):]:
+            return True
+    return False
 
 
-def _drop_legacy_tail(reason, citation):
+def _drop_legacy_tail(reason):
     """``reason`` without the one whole literal tail the old `settle` wrote (`finding_outcomes.LEGACY_UNRESOLVED_TAILS`),
-    matched exactly at its end, or at its end before a carried suffix, which stays at the end. A reason that is a
-    repeat's recorded history (`_holds_repeat_history`, led by ``citation``, the citation that now resolves) is
-    history, not the old `settle`'s own reason, and is returned as it is, as is any other reason, a non-string
-    included. One tail, once; nothing else is read out of a reason."""
-    # axis: a repeat's recorded earlier text is history and is never trimmed, whatever it ends with; ordinary prose holding the same separator still loses the old tail
-    if not isinstance(reason, str) or _holds_repeat_history(reason, citation):
+    matched exactly at its end, or at its end before a carried suffix, which stays at the end. A reason that holds a
+    repeat's recorded history (`_holds_repeat_history`) is history, not the old `settle`'s own reason, and is
+    returned as it is, as is any other reason, a non-string included. One tail, once; nothing else is read out of a
+    reason."""
+    # axis: a repeat's recorded earlier text is history and is never trimmed, whatever citation leads it; ordinary prose holding the same separator still loses the old tail
+    if not isinstance(reason, str) or _holds_repeat_history(reason):
         return reason
     from review_record_session import CARRIED  # lazy: that module imports this one
     for tail in finding_outcomes.LEGACY_UNRESOLVED_TAILS:
@@ -2100,19 +2102,18 @@ def _drop_legacy_tail(reason, citation):
 def _leads_with_citation(reason, citation):
     """Whether ``reason`` already leads with ``citation``. The whole rest of the reason after the citation is compared,
     as literal strings, with: nothing, a "; "-led continuation, the exact carried suffix, the exact merge mark the
-    reason names (`review_record_session.merged_into`), or that mark followed by the carried suffix. Nothing is split
-    or scanned for clauses."""
-    from review_record_session import CARRIED, MERGED_INTO_FORMAT, merged_into  # lazy: that module imports this one
+    reason names (`review_record_session.MERGED_INTO_FORMAT` around any representative id), or that mark followed by
+    the carried suffix. Nothing is split or scanned for clauses."""
+    from review_record_session import CARRIED, MERGED_INTO_FORMAT  # lazy: that module imports this one
     if not (isinstance(reason, str) and reason.startswith(citation)):
         return False
     rest = reason[len(citation):]
     if rest in ("", CARRIED) or rest.startswith("; "):
         return True
     mark = rest[:-len(CARRIED)] if rest.endswith(CARRIED) else rest
-    # axis: the merge mark is read from the rest after the citation only, so words inside the citation that look like a mark never count
-    rep = merged_into(mark)
-    # axis: a citation followed only by its exact merge mark, with or without the carried suffix, is not given twice
-    return rep is not None and mark == MERGED_INTO_FORMAT.format(rep)
+    opener, closer = MERGED_INTO_FORMAT.split("{}")
+    # axis: the merge mark is the whole rest after the citation, the format's own opener and closer around the id, so neither words inside the citation nor an id holding the carried text count against it
+    return len(mark) > len(opener) + len(closer) and mark.startswith(opener) and mark.endswith(closer)
 
 
 def _recheck_decisions(findings, sources):
@@ -2133,9 +2134,9 @@ def _recheck_decisions(findings, sources):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
             ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
-            if ok and _drop_legacy_tail(reason, text) != reason:
+            if ok and _drop_legacy_tail(reason) != reason:
                 # axis: the one whole tail the old `settle` wrote is dropped by exact match when the citation resolves, and no other text of the reason is read
-                reason = _drop_legacy_tail(reason, text)
+                reason = _drop_legacy_tail(reason)
                 f = dict(f, reason=reason)
             if outcome == _RULING and not ok:
                 new, why, failed = _LEFT_FOR_OWNER, _DEMOTED_CLAUSE % text, text
