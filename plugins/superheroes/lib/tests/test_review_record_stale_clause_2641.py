@@ -18,7 +18,7 @@ import review_record as rr
 import review_record_session as rs
 from test_review_record_owner_ruling import ADVISOR, DOC, L2, L3, U, W, WORDS, X, account, readers, the_finding
 from test_review_record_repeat_follows_2438 import LFO, OLD, kept, mark, repeat
-from test_review_record_session import STANDING, Fake
+from test_review_record_session import HEAD, STANDING, Fake
 
 FIELD = rr.NOT_ON_RECORD_FIELD
 BY = {"kind": "owner-ruling", "ref": {"url": U, "words": W}}
@@ -314,6 +314,23 @@ def test_n9_a_repeat_and_its_member_write_their_earlier_text_byte_for_byte_with_
     empty = repeat(reason="")
     assert rr._follow_repeats([ruled, empty], [], lambda: RESOLVES)[1]["reason"] == (
         f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1"))
+
+
+def test_n11_the_field_never_outlives_a_left_for_owner_outcome():
+    # Axis: `_drop_stale_open_marker` is the last chokepoint, so a finding whose outcome is not left-for-owner loses the field.
+    left = {**X, "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": W}}, FIELD: L3}
+    for outcome in ("fixed", "ruling"):
+        (got,) = rr._drop_stale_open_marker([{**left, "outcome": outcome}])
+        assert FIELD not in got and got["outcome"] == outcome, outcome
+    (kept_field,) = rr._drop_stale_open_marker([copy.deepcopy(left)])
+    assert kept_field == left
+    # the record-level path: the carried re-check moves a demoted, field-carrying leftover to fixed
+    fake = {**readers(doc=None, fake=Fake(head=HEAD)), "is_ancestor": lambda root, commit, to: True}
+    check = {"key": rr._key(X), "settled": "fixed", "commit": "d" * 40, "checkedHead": HEAD, "evidence": "ran the test; it passes"}
+    prior = {"findings": [dict(X, findingKey=rr._key(X))]}
+    rec = rr.build_record({**account([], [{**X, "decidedBy": copy.deepcopy(BY)}]), "carriedChecks": [check]}, fake, prior=prior)
+    f = the_finding(rec)
+    assert f["outcome"] == "fixed" and FIELD not in f
 
 
 def _failure_returns():

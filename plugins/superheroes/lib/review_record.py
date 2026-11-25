@@ -2136,7 +2136,8 @@ def _recheck_decisions(findings, sources):
 def _drop_stale_open_marker(findings):
     """Each finding without the `openAtLoopEnd` marker it can no longer hold: the marker stays only on a finding that
     is still left for the owner with no cited decision. A carried re-check that moved a marked finding to fixed, or an
-    owner-ruling citation set on it, ends the reason the marker stood for. Every other finding is returned as it is."""
+    owner-ruling citation set on it, ends the reason the marker stood for. The not-on-record field goes the same way
+    from any finding whose outcome is not left-for-owner. Every other finding is returned as it is."""
     out = []
     for f in findings:
         # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
@@ -2144,7 +2145,10 @@ def _drop_stale_open_marker(findings):
                  and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
         # axis: the bounded pass's evidence stays only on a finding still left for the owner, so a finding the owner later decides never carries it into the validator
         moved = session_contract.BOUNDED_PASS_EVIDENCE_FIELD in f and f.get("outcome") != _LEFT_FOR_OWNER
-        gone = ((session_contract.OPEN_AT_LOOP_END_FIELD,) if stale else ()) + ((session_contract.BOUNDED_PASS_EVIDENCE_FIELD,) if moved else ())
+        # axis: the not-on-record field stays only while the outcome is left-for-owner, so a leftover a later step moved to fixed never keeps it
+        unrecorded = NOT_ON_RECORD_FIELD in f and f.get("outcome") != _LEFT_FOR_OWNER
+        gone = (((session_contract.OPEN_AT_LOOP_END_FIELD,) if stale else ()) + ((session_contract.BOUNDED_PASS_EVIDENCE_FIELD,) if moved else ())
+                + ((NOT_ON_RECORD_FIELD,) if unrecorded else ()))
         out.append({k: v for k, v in f.items() if k not in gone} if gone else f)
     return out
 
