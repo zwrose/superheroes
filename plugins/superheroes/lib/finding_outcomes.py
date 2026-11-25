@@ -390,6 +390,21 @@ def _scope_or_bound_on_record(kind, ref, sources):
     return True, 'scope ruling "%s" (%s)' % (words, url)
 
 
+# The texts on_record returns when a decision is not on record, each as a regular-expression source.
+UNRESOLVED_WHYS = tuple(re.escape(t) for t in (
+    "the ruling's link is not a comment permalink", "the ruling's link is not in this repository",
+    "the ruling names no link or words", "the ruling's comment could not be read",
+    "the ruling's comment is not a chat-ruling record", "the ruling's comment does not hold the owner's words",
+    "a Critical finding is never settled by a scope ruling or the advisor's bound",
+    "the ruling's comment is neither a chat-ruling record nor a vet receipt", "the bound's words state no number of rounds",
+    "the vet receipt is not on this pull request", "the vet receipt records no scope ruling for this finding with these words",
+    "the vet receipt records no advisor's bound with these words", "the review's round count is unknown",
+    "no decision was cited", "the cited decision kind is not recognised", "the cited decision names no reference",
+    "no Canon text was available", "the cited Canon entry is not on record", "no residual text was available",
+    "the cited residual is not recorded", "no sheet answers were available", "the sheet answer is not settled",
+)) + (r"the review ran \d+ rounds, fewer than the bound's \d+",)
+
+
 def on_record(decided_by, sources):
     """Decide whether a cited owner decision is on record: (True, what) or (False, why).
 

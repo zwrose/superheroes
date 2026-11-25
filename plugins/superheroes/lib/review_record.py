@@ -2034,6 +2034,40 @@ def _finding_sources(base, f):
 # How an unmet linked decision is named in the reason of the finding that cites it.
 _LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
                  finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
+_WHY = "|".join(finding_outcomes.UNRESOLVED_WHYS)
+_LABELS = "|".join(re.escape(label) for label in _LINKED_LABEL.values())
+# The three clauses an unresolved read stamps: A (settle), B (a demoted ruling), C (a linked leftover).
+_STALE_CLAUSE = re.compile(rf"the cited decision is not on record: (?:{_WHY})|the cited decision is not on record \((?:{_WHY})\)"
+                           rf"|the (?:{_LABELS}) it cites is not on record \((?:{_WHY})\)")
+
+
+def _without_stale_clauses(reason, lead=None):
+    """``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else kept byte for byte.
+
+    The reason reads as parts split at "; ". A part goes only when, less a trailing run of carried suffixes, it is
+    clause A, B or C of a failure text in `finding_outcomes.UNRESOLVED_WHYS`; its suffix run joins the part before it
+    (the first kept part after it when none is kept before). ``lead``, when the reason starts with it, is one part kept
+    whole, for it holds the owner's quoted words. A non-string or empty reason is returned as it is; all parts gone gives ""."""
+    from review_record_session import CARRIED  # lazy: that module imports this one
+    if not isinstance(reason, str) or not reason:
+        return reason
+    parts, held = reason.split("; "), False
+    if isinstance(lead, str) and lead and reason.startswith(lead):
+        first, sep, tail = reason[len(lead):].partition("; ")
+        parts, held = [lead + first] + (tail.split("; ") if sep else []), True
+    kept, carry = [], ""
+    for at, part in enumerate(parts):
+        core, run = part, ""
+        while core.endswith(CARRIED):
+            core, run = core[:-len(CARRIED)], run + CARRIED
+        if (held and at == 0) or not _STALE_CLAUSE.fullmatch(core):
+            kept.append(part + carry)
+            carry = ""
+        elif kept:
+            kept[-1] += run
+        else:
+            carry += run
+    return "; ".join(kept)
 
 
 def _recheck_decisions(findings, sources):
@@ -2041,16 +2075,23 @@ def _recheck_decisions(findings, sources):
     goes to the owner; a finding left for the owner whose cited decision is on record becomes the ruling. A ruling
     with no cited decision names its basis in prose, which the record cannot check, so it stays as it is. A
     ruling whose cited owner ruling resolves stays a ruling and its reason leads with the citation, once. A
-    finding with no reason keeps none (its missing reason still counts against the record), except that one.
+    finding with no reason keeps none (its missing reason still counts against the record), except that one. A
+    finding that ends `ruling` loses the stale "not on record" clauses an earlier read stamped (see `_without_stale_clauses`).
     Returns the findings and one entry per change."""
     out, changes = [], []
     for f in findings:
         by, outcome, reason = f.get("decidedBy"), f.get("outcome"), f.get("reason")
-        new, unmet, refreshed = None, None, None
+        new, unmet, refreshed, stale_only = None, None, None, False
         if isinstance(by, dict) and outcome in (_RULING, _LEFT_FOR_OWNER):
             # axis: a ruling stands only while the decision it cites is on record now, checked at write time — see bite-proof record c7l3_wo1_record_writer
             # axis: a scope ruling or an advisor's bound is checked against the finding's own key and severity, so another finding's receipt line or a Critical never settles it — see bite-proof record i2532_scope_bound (E-recheck-sources)
             ok, text = finding_outcomes.on_record(by, _finding_sources(sources(), f))
+            if ok:
+                # axis: a finding that ends ruling carries no stale not-on-record clause, and one that held only clauses reads the citation text
+                clean = _without_stale_clauses(reason, lead=text)
+                if isinstance(reason, str) and reason and clean != reason:
+                    stale_only, reason = clean == "", clean or text
+                    f = dict(f, reason=reason)
             if outcome == _RULING and not ok:
                 new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
             elif outcome == _LEFT_FOR_OWNER and ok:
@@ -2072,7 +2113,7 @@ def _recheck_decisions(findings, sources):
                 continue
             out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
             continue
-        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))
+        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason and not stale_only else reason))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
     return out, changes
 
@@ -2244,11 +2285,12 @@ def _follow_repeats(findings, checks, sources=None):
                 by = copy.deepcopy(g["decidedBy"])
                 # axis: the reason leads with the citation text exactly, so the refresh on a later write never prepends it twice — see bite-proof record i2479_repeat_follows_ruling
                 reason = f"{text}; {REPEAT_FOLLOWS_RULING.format(name=_name(g))}"
+                earlier = _without_stale_clauses(old)
                 changed = dict(f, outcome=_RULING, decidedBy=by, repeatOf=dict(mark, **{
-                    REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {old}" if isinstance(old, str) and old else reason)
+                    REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {earlier}" if isinstance(old, str) and earlier else reason)
                 moved = True
                 for j in members_to_follow(i, kept):
-                    h, was = out[j], out[j].get("reason")
+                    h, was = out[j], _without_stale_clauses(out[j].get("reason"))
                     # axis: each merged member is checked with its own key and severity, and one whose check fails keeps its outcome — see bite-proof record i2532_scope_bound (E-repeat-member)
                     held, held_text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), h))
                     if not held:
