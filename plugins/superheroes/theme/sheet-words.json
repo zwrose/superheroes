@@ -48,6 +48,7 @@
     "collectorKind": "From your list · item {number}",
     "collectorOption": "{letter}. {label}",
     "collectorRecommendation": "{letter} — {text}",
+    "carriedTitle": "The review findings this decides",
     "nothingToAccept": "Nothing. The review left nothing for you.",
     "acceptingUnchecked": "This sheet was not checked against the PR body's What we're accepting. Read that section on the PR before you merge.",
     "acceptingUncheckedCount": "Not checked against the PR body",
