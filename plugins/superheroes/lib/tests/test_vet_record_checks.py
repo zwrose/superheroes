@@ -33,7 +33,8 @@ _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha",
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
-               "outcome": "findings", "reason": "findings", "source": "provenCopies"}
+               "outcome": "findings", "reason": "findings", "decisionNotOnRecord": "findings",
+               "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
 _ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
               "The proven copies match their source", "A merged finding's fix is its own",
@@ -111,10 +112,14 @@ def _rebuild(name):
 
 
 def _rebuild_with_proven_copies():
-    """pr-d's record with the optional `provenCopies` the writer builds only when the account carries it."""
+    """pr-d's record with the optional `provenCopies` and `decisionNotOnRecord` the writer builds only when the account carries them."""
     acct, rd, _ = _scenarios()["pr-d"]
-    acct = {**acct, "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
-                                      "sha256": "a" * 64}]}
+    # axis: the census resolves decisionNotOnRecord only from a record that carries it — see bite-proof record i2641_not_on_record_field (E-census-field)
+    cited = finding("code-cited-ruling", title="A cited ruling is not on record", outcome="left-for-owner",
+                    reason="needs the owner's call", decidedBy={"kind": "canon", "ref": "2026-01-01-aaaaaaaa-1"})
+    acct = {**acct, "findings": [*acct["findings"], cited],
+            "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
+                              "sha256": "a" * 64}]}
     return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
 
 

@@ -18,7 +18,7 @@ the worktree path) are elided. Nothing in them is a secret, token, private URL o
 capture is the fixture link `https://github.com/o/r/...`.
 
 Guarded-element set: (E-settle), (E-set), (E-clear), (E-demote), (E-shown), (E-sheet), (E-once), (E-once-B1), (E-drop),
-(E-valid). No equivalence class is used; each element has its own neutralization and its own red.
+(E-valid), (E-census-field). No equivalence class is used; each element has its own neutralization and its own red.
 
 Disclosure, (E-clear): the order named `test_n4_...` as the expected red, and as ported from the reference it stayed
 green under the neutralization (`_drop_stale_open_marker`, (E-drop), also drops the field from a finding the re-check
@@ -362,6 +362,37 @@ FAILED ...::test_n5_a_field_that_is_not_a_non_blank_string_refuses_the_account[l
 ```
 .....                                                                    [100%]
 5 passed in 0.70s
+```
+
+## (E-census-field) the vet census reads the field from a built record
+
+- Guarded element and axis: `plugins/superheroes/lib/tests/test_vet_record_checks.py`, `_rebuild_with_proven_copies`, the new
+  finding's `decidedBy`. Axis: the census resolves `decisionNotOnRecord` only because the built record carries it.
+- Neutralization (the target occurred once; the edit tool refuses a non-unique `old_string`): `decidedBy={"kind": "canon", "ref": "2026-01-01-aaaaaaaa-1"})`
+  became `decidedBy=None)`.
+- Guarding test: `test_vet_record_checks.py::test_record_checks_section_names_real_record_fields`. Command:
+  `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-2641-pyc -m pytest plugins/superheroes/lib/tests/test_vet_record_checks.py::test_record_checks_section_names_real_record_fields -q`
+- Raw red (trimmed to the assertion and the summary; the `UV_NATIVE_TLS` warning, the echoed test source and the worktree path are elided):
+
+```
+E           AssertionError: a row names `decisionNotOnRecord`, which is not a field of a record the writer builds
+E           assert False
+FAILED plugins/superheroes/lib/tests/test_vet_record_checks.py::test_record_checks_section_names_real_record_fields
+1 failed in 1.15s
+```
+
+- Restore: inverse edit, `decidedBy=None)` back to the citing `decidedBy`.
+- Restore receipt (read back from the file, `test_vet_record_checks.py:119`):
+
+```
+                    reason="needs the owner's call", decidedBy={"kind": "canon", "ref": "2026-01-01-aaaaaaaa-1"})
+```
+
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 1.46s
 ```
 
 ## After all ten restores
