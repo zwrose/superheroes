@@ -69,9 +69,9 @@ Give every Bash call an explicit `timeout` (`timeout: 600000` for a long run).
 2. **A stack layer is not held NOT-READY for review leftovers its own PR body does not name when
    the stack's sheet carries them as cards.** A leftover the stack's sheet shows the owner as a card,
    or as a line under the card on that sheet that carries it when that card asks exactly the decision
-   the finding asks (read the finding's consequence against what the card asks the owner, its options
-   or, on an Accept card, its If left, as the vet receipt's leftover row says), has reached the owner;
-   grade the layer on what is its own.
+   the finding asks (read the finding's consequence against what the card asks the owner: a choice
+   card's question and options, an Accept card's question and If left, as the vet receipt's leftover
+   row says), has reached the owner; grade the layer on what is its own.
 3. **Write the receipt as the advisor's own.** The advisor posts your text as its receipt, so
    neither file says "draft", "drafter", "drafting", "posting seat" or anything else that reads
    wrong once the advisor posts it.
