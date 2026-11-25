@@ -373,9 +373,11 @@ note left empty.
   shows them after **If left**, as a last context section titled by the `carriedTitle` word, one bullet
   per finding (each starting `#<pr>: ` on a stack). Both words are in the `pr` block of
   `sheet-words.json`. The input's exact shape is in `lib/pr_sheet.py`'s docstring.
-- An item with no real choice offers **Accept** and **Discuss** and shows no options list. An Accept or
-  option item may carry a left-for-owner finding that asks the same decision, listed as its last section.
-- When the merge closes a spec's last open piece, the spec's closure receipt is one of the items.
+- An item with no real choice offers **Accept** and **Discuss** and shows no options list. A card may
+  carry a left-for-owner finding that asks the same decision, listed as its last section; which cards can
+  carry is as § Decided for you says.
+- When the merge closes a spec's last open piece, the spec's closure receipt is one of the cards, built
+  from the input's `closesSpec`.
 
 ### The four answer patterns
 

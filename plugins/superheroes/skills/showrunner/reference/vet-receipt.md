@@ -303,8 +303,8 @@ outcome `fixed` or `shown-wrong` needs no owner, and the row does not hold on it
 **A left-for-owner finding is shown** under `## What we're accepting` only when a line there carries
 the finding's id and its title. On a PR sheet it is also shown as an entry of the sheet's decided-for-you
 list, which [the review template](../../../theme/review-template.md#decided-for-you) describes, or as a line
-under the card on the sheet that carries it (a leftover, item or list-item card, named by the finding's
-`leftovers` entry in a form the docstring of `lib/pr_sheet.py` defines) when that card asks exactly the decision the finding asks (the row above says how the vet reads it); the card's answer and the
+under the card on the sheet that carries it (named by the finding's `leftovers` entry; which cards can
+carry, and the forms that name them, are in the docstring of `lib/pr_sheet.py`) when that card asks exactly the decision the finding asks (the row above says how the vet reads it); the card's answer and the
 merge verdict then cover it. The advisor
 never re-grades a finding the owner already answered as a card on this PR, or took back with "Make this
 mine" on this PR, so an entry for either holds the PR.

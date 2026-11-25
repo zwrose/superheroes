@@ -72,8 +72,10 @@ Give every Bash call an explicit `timeout` (`timeout: 600000` for a long run).
    the finding asks (judged as the vet receipt's "No leftover skipped the owner's review" row says),
    has reached the owner; grade the layer on what is its own. This governs the grade only. A READY
    receipt and the READY write both need the layer's own PR body to name every leftover under What
-   we're accepting (the write checks it): when a line is missing, put it on the draft's fix list as a
-   builder fix and say the receipt is not to be posted as READY until the body names it.
+   we're accepting, by the rule the write applies (`lib/leftover_accepting.py`: each acceptance line
+   counts for one leftover only, so two findings that share a card need a line each): when a leftover
+   has no line of its own, put it on the draft's fix list as a builder fix and say the receipt is not to
+   be posted as READY until the body names it.
 3. **Write the receipt as the advisor's own.** The advisor posts your text as its receipt, so
    neither file says "draft", "drafter", "drafting", "posting seat" or anything else that reads
    wrong once the advisor posts it.
