@@ -51,8 +51,9 @@ that layer is not read here: the vet checks it.
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
 craft in "craft", ruling in "alreadyDecided", shown-wrong in "history", left-for-owner as a card (one with a craft
-determination lands in "decidedForYou" instead, and is no card; one its body marks `fixed-above #<PR> <commit>`, on a
-stack sheet covering that higher PR, lands in "caught" as fixed above and takes neither). The words
+determination lands in "decidedForYou" instead, and is no card; one carried by a list-item card (leftovers
+{"carriedBy": <number>}) lands as a line on that card, and is no card of its own; one its body marks
+`fixed-above #<PR> <commit>`, on a stack sheet covering that higher PR, lands in "caught" as fixed above and takes neither). The words
 come from the "pr" block of theme/sheet-words.json.
 
 The advisor's input is one JSON object; any key not listed is refused.
