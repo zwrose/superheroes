@@ -11820,13 +11820,13 @@ def _stack_layers_above(session_dir):
              "headRefOid": m.get("headRefOid")} for m in above], None
 
 
-def _break_it_kept_step(state, config, session_dir=None):
-    """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
-    final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
-    parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
-    check; a finding with any other disposition besides fixed or out-of-scope owes none either; a
-    finding with no disposition that was never fix-bound and ends as craft or left for the owner owes
-    none (a `not-required` row)."""
+def _break_it_kept_gap(state, config, session_dir=None, *, record=True):
+    """The kept check itself: the detail string naming why a fixed break-it finding's test is not kept
+    (the text `_break_it_kept_step` parks on), or None when nothing withholds certification. With
+    `record` True it writes the `breakItKept` round rows and the `break-it-kept` decision exactly
+    where the converge gate always has; with `record` False it writes neither (no round row, no
+    decision, the exempt rows included), so a caller that only needs the answer leaves the session
+    as it found it. The kept check, the stack reads and every other read run the same either way."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: a per-area (or kind-less) break-it run that compile dropped and that did not pass withholds certification; an attached test's dropped run stays recorded and parks nothing, as its dropped finding would without a test; a run whose finding went to the "Outside this PR" list parks nothing either, as the list is no block on the review
@@ -11834,16 +11834,12 @@ def _break_it_kept_step(state, config, session_dir=None):
                     and run.get("routedOutside") is not True
                     and run.get("outcome") != break_it.OUTCOME_PASSED
                     and run.get("kind") != break_it.KIND_ATTACHED):
-                _park_cannot_certify(
-                    state, "break-it run dropped at compile: %s (%s)"
-                    % (run.get("path"), run.get("outcome")))
-                return True
+                return ("break-it run dropped at compile: %s (%s)"
+                        % (run.get("path"), run.get("outcome")))
             # axis: a break-it run whose working-copy restore failed withholds certification whatever the finding's disposition and whatever later run replaced it, because the session's repository may be left altered
             if isinstance(run, dict) and run.get("reason") == "working-copy-restore-failed":
-                _park_cannot_certify(
-                    state, "break-it working copy not restored: %s (%s)"
-                    % (run.get("path"), str(run.get("output") or "")[-200:]))
-                return True
+                return ("break-it working copy not restored: %s (%s)"
+                        % (run.get("path"), str(run.get("output") or "")[-200:]))
     # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
     # axis: a carried lost-test finding the owner ruled out of scope with an audit-cleared, attributed ruling owes no park; every other one still parks — see bite-proof record c1l11b_wo_k_carried_lost_test
     lost, exempt_rows = [], []
@@ -11858,23 +11854,21 @@ def _break_it_kept_step(state, config, session_dir=None):
                             "ruledAt": ruled["provenance"]["ruledAt"]})
     if lost:
         # axis: the exempt rows are persisted before a mixed-case park, so the record reports the owner's ruling for the waived finding whatever happens next — see bite-proof record c1l11b_wo_k_carried_lost_test
-        if exempt_rows:
+        if record and exempt_rows:
             _record_round(state, "breakItKept", exempt_rows)
-        _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
-        return True
+        return "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0]
     seen = []
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             if isinstance(run, dict) and isinstance(run.get("findingKey"), str) and run.get("findingKey"):
                 seen.append((run["findingKey"], run, _round_number(rkey)))
     if not seen:
-        if exempt_rows:
+        if record and exempt_rows:
             _record_round(state, "breakItKept", exempt_rows)
-        return False
+        return None
     _, by_key, fault = _fixed_ledger_rows(state)
     if fault is not None:
-        _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
-        return True
+        return "break-it test not kept: disposition ledger fault (%s)" % fault
     latest, latest_round, skipped = {}, {}, {}
     for key, run, run_round in seen:
         held = by_key.get(key)
@@ -11966,14 +11960,15 @@ def _break_it_kept_step(state, config, session_dir=None):
         # axis: a fixed break-it finding whose test is not kept parks, it never certifies
         if row.get("outcome") != break_it.KEPT:
             failed.append(row)
-    _record_round(state, "breakItKept", rows)
-    unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
-    ruled_out = sum(1 for r in rows if r["outcome"] == "ruled-out-of-scope")
-    _decision(state, "break-it-kept",
-              "%d checked: %d kept, %d not kept, %d not required, %d ruled out of scope"
-              % (len(rows) - unchecked - ruled_out,
-                 sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
-                 unchecked, ruled_out))
+    if record:
+        _record_round(state, "breakItKept", rows)
+        unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
+        ruled_out = sum(1 for r in rows if r["outcome"] == "ruled-out-of-scope")
+        _decision(state, "break-it-kept",
+                  "%d checked: %d kept, %d not kept, %d not required, %d ruled out of scope"
+                  % (len(rows) - unchecked - ruled_out,
+                     sum(1 for r in rows if r["outcome"] == break_it.KEPT), len(failed),
+                     unchecked, ruled_out))
     if failed:
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         stack = failed[0].get("stack")
@@ -11991,9 +11986,21 @@ def _break_it_kept_step(state, config, session_dir=None):
                           % (held.get("position"), held.get("pr"),
                              "did not pass" if held.get("outcome") == break_it.KEPT_FAILING else "could not run",
                              held.get("reason") or held.get("runOutcome") or "failed"))
-        _park_cannot_certify(
-            state, "break-it test not kept: %s (%s%s)%s"
-            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else "", suffix))
+        return ("break-it test not kept: %s (%s%s)%s"
+                % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else "", suffix))
+    return None
+
+
+def _break_it_kept_step(state, config, session_dir=None):
+    """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
+    final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
+    parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
+    check; a finding with any other disposition besides fixed or out-of-scope owes none either; a
+    finding with no disposition that was never fix-bound and ends as craft or left for the owner owes
+    none (a `not-required` row)."""
+    detail = _break_it_kept_gap(state, config, session_dir=session_dir)
+    if isinstance(detail, str):
+        _park_cannot_certify(state, detail)
         return True
     return False
 
@@ -12013,13 +12020,31 @@ def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
 
     This is the ONE convergence chokepoint (round 1, delta rounds, the recovery tail all route
     here), so it is also where a finding held for the owner's choice stops a converge: while any
-    held finding is unsettled the PR is handed back open instead."""
+    held finding is unsettled the PR is handed back open instead. That owner-choice hand-back is
+    stamped `certification.ownerChoiceOnly` when nothing but the owner's choices stands between the
+    session and a converge (no owner ruling unsent to a fixer, no incomplete panel, the break-it kept
+    check clear after the settle), else `certification.ownerChoiceGap` names why."""
     # axis: no path converges over a finding held for the owner's choice — see bite-proof record c1l4_wo_a
     unsettled = _unsettled_owner_choices(state)
     if unsettled:
+        gap = None
+        pending = _pending_owner_rulings(state)
+        if pending:
+            gap = "owner ruling(s) recorded but never sent to a fixer: " + "; ".join(pending)
+        elif state.get("_incompletePanel"):
+            gap = ("panel incomplete: a configured lens never ran and no complete panel has since "
+                   "recovered the coverage")
         _hand_back(state, "owner-choice-open",
                    "%d finding(s) need the owner's choice and are still open: %s"
                    % (len(unsettled), "; ".join(title for _key, title in unsettled)), cap=False)
+        if gap is None:
+            # the settle inside the hand-back gave a held owner choice its left-for-owner disposition, so its attached test reads not-required
+            gap = _break_it_kept_gap(state, config, session_dir=session_dir, record=False)
+        if gap is None:
+            # axis: the owner-choice hand-back is stamped ownerChoiceOnly only with no pending owner ruling, no incomplete panel and a clear post-settle kept check; any one leg failing leaves the gap string instead — see bite-proof record i2638_owner_choice_only
+            state["certification"]["ownerChoiceOnly"] = True
+        else:
+            state["certification"]["ownerChoiceGap"] = gap
         return
     # An OUTSTANDING incomplete panel (a configured lens never ran, never recovered by a later
     # complete panel) cannot certify clean — a zero-finding finish over a coverage gap is "we did not
