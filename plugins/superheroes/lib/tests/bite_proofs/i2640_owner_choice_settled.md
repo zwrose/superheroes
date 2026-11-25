@@ -168,6 +168,63 @@ FAILED plugins/superheroes/lib/tests/test_review_record_owner_choice_settled_264
 1 passed, 32 deselected in 2.24s
 ```
 
+## (S-listed) the listed-for-merge exemption (added with the review's round 1 fix)
+
+Run by the builder in a detached probe worktree at `c081f3e`, with the same command and `-k` on the named test. Captures
+trimmed to the assertion and summary lines; the `UV_NATIVE_TLS` warning line is elided.
+
+- Guarded element and axis: `listed_as_left = listed_for_merge(f) and f.get("outcome") == s.get("outcome")` in
+  `_owner_choices_settled`. Axis: a Minor or Nit the session left for the owner that the record lists for the merge verdict,
+  unchanged, holds no card, so it needs no ruling and counts as kept.
+- Neutralization: the line became `listed_as_left = False`.
+- Guarding test: `test_t7_c_a_listed_minor_left_as_it_was_does_not_hold_the_line_once_the_owner_rules`.
+- Raw red:
+
+```
+E         - reviewed
+E         + not-reviewed
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_choice_settled_2640.py::test_t7_c_a_listed_minor_left_as_it_was_does_not_hold_the_line_once_the_owner_rules
+1 failed, 37 deselected in 2.27s
+```
+
+- Restore: inverse edit, `listed_as_left = False` back to the line above.
+- Restore receipt: the restored line read back, then `git status --porcelain` on the probe worktree printed nothing.
+
+```
+        listed_as_left = listed_for_merge(f) and f.get("outcome") == s.get("outcome")
+```
+
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.40s
+```
+
+## (S-ruled, public path) the once-waiting leg through a real rewrite
+
+The same S-ruled neutralization (`if not (...)` became `if False:`) run against the public write path, in the same probe
+worktree at `c081f3e`.
+
+- Guarding test: `test_t7_b_a_ruling_on_the_first_choice_does_not_clear_a_second_choice_a_carried_check_fixes` (two
+  choices, the first ruled, the second settled fixed by a carried check at write time).
+- Raw red:
+
+```
+E         - not-reviewed
+E         + reviewed)
+FAILED plugins/superheroes/lib/tests/test_review_record_owner_choice_settled_2640.py::test_t7_b_a_ruling_on_the_first_choice_does_not_clear_a_second_choice_a_carried_check_fixes
+1 failed, 37 deselected in 3.35s
+```
+
+- Restore: inverse edit; `git status --porcelain` on the probe worktree printed nothing.
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 37 deselected in 2.43s
+```
+
 ## Not covered by a neutralization here
 
 The `isinstance(...)`/length guard at the top of `_owner_choices_settled`, the `LISTED_SEVERITIES` leg (a Minor or Nit with
