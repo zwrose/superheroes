@@ -176,11 +176,13 @@ def _loaded_name(node):
 
 
 _TEMPLATES = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE"}
-# The only places review_record may read a clause template: (enclosing function, the names its assignment binds).
-# `shown_reason` builds the owner's text in its two `clause =` assignments; `_recheck_decisions` builds the
-# demotion row's text in its `new, why, failed =` tuple. Each read must be the left side of the `%` that is that
-# assignment's value, or one element of its tuple value.
-_ALLOWED_SITES = {("shown_reason", ("clause",)): 2, ("_recheck_decisions", ("new", "why", "failed")): 1}
+# The only places review_record may read a clause template: (enclosing function, the names its assignment binds,
+# the name the formatted clause itself is bound to). `shown_reason` builds the owner's text in its two `clause =`
+# assignments, each formatted clause the whole value of its own assignment (annotated or not); `_recheck_decisions`
+# builds the demotion row's text as the `why` element of its `new, why, failed =` tuple. Each read must be the left
+# side of the `%` that is that value or that element.
+_ALLOWED_SITES = {("shown_reason", ("clause",), "clause"): 2,
+                  ("_recheck_decisions", ("new", "why", "failed"), "why"): 1}
 
 
 def _template_misreads(tree):
@@ -196,21 +198,24 @@ def _template_misreads(tree):
     for node in ast.walk(tree):
         if _loaded_name(node) not in _TEMPLATES:
             continue
-        fmt, func, holder = parents.get(node), node, None
+        fmt, func = parents.get(node), node
         while func is not None and not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
             func = parents.get(func)
+        names, bound = None, None
         if isinstance(fmt, ast.BinOp) and isinstance(fmt.op, ast.Mod) and fmt.left is node:
             up = parents.get(fmt)
-            holder = parents.get(up) if isinstance(up, ast.Tuple) else up
-            if not (isinstance(holder, ast.Assign) and (holder.value is fmt or holder.value is up) and len(holder.targets) == 1):
-                holder = None
-        names = None
-        if holder is not None:
-            target = holder.targets[0]
-            elts = target.elts if isinstance(target, ast.Tuple) else [target]
-            if all(isinstance(e, ast.Name) for e in elts):
-                names = tuple(e.id for e in elts)
-        site = (func.name if func is not None else None, names)
+            if isinstance(up, (ast.Assign, ast.AnnAssign)) and up.value is fmt:
+                target = up.targets[0] if isinstance(up, ast.Assign) and len(up.targets) == 1 else getattr(up, "target", None)
+                if isinstance(target, ast.Name):  # the formatted clause is the whole value of its own assignment
+                    names, bound = (target.id,), target.id
+            elif isinstance(up, ast.Tuple) and isinstance(parents.get(up), ast.Assign):
+                holder = parents[up]
+                target = holder.targets[0] if len(holder.targets) == 1 else None
+                if (holder.value is up and isinstance(target, ast.Tuple) and len(target.elts) == len(up.elts)
+                        and all(isinstance(e, ast.Name) for e in target.elts)):
+                    names = tuple(e.id for e in target.elts)
+                    bound = names[up.elts.index(fmt)]  # the one name this element is bound to
+        site = (func.name if func is not None else None, names, bound)
         if site in _ALLOWED_SITES:
             found[site] = found.get(site, 0) + 1
         else:
@@ -232,8 +237,9 @@ def test_n7_a_clause_template_is_read_only_at_its_named_build_sites():
     pytest.param("parts = reason.split(_DEMOTED_CLAUSE)\n", id="bare-read"),
     pytest.param("def other(r, w):\n    x = _DEMOTED_CLAUSE % w\n    return x in r\n", id="through-a-variable"),
     pytest.param("def shown_reason(f):\n    x = _DEMOTED_CLAUSE % w\n", id="named-function-other-name"),
-    pytest.param("def shown_reason(f):\n    clause: str = _DEMOTED_CLAUSE % w\n", id="named-function-annotated"),
     pytest.param("def _recheck_decisions(fs):\n    if (_DEMOTED_CLAUSE % t) in r:\n        pass\n", id="named-function-compare"),
+    pytest.param("def _recheck_decisions(fs):\n    new, why, failed = left, text, _DEMOTED_CLAUSE % text\n",
+                 id="demotion-tuple-other-element"),
 ])
 def test_n7_the_census_refuses_a_template_read_outside_its_named_sites(src):
     # Axis: the census bites on any read of a clause template that is not one of its named build sites.
@@ -241,13 +247,22 @@ def test_n7_the_census_refuses_a_template_read_outside_its_named_sites(src):
     assert found == {} and len(bad) == 1, (src, found, bad)
 
 
+def test_n7_one_tuple_cannot_stand_for_both_display_assignments():
+    # Axis: each display clause must be the whole value of its own assignment, so one tuple holding both fails.
+    src = "def shown_reason(f):\n    clause = (_UNMET_CLAUSE % (label, why), _DEMOTED_CLAUSE % why)\n"
+    found, bad = _template_misreads(ast.parse(src))
+    assert found == {} and len(bad) == 2, (found, bad)
+
+
+_SHOWN = ("shown_reason", ("clause",), "clause")
+
+
 @pytest.mark.parametrize("src, site", [
-    pytest.param("def shown_reason(f):\n    clause = _UNMET_CLAUSE % (label, why)\n", ("shown_reason", ("clause",)),
-                 id="shown-reason-linked"),
-    pytest.param("def shown_reason(f):\n    clause = _DEMOTED_CLAUSE % why\n", ("shown_reason", ("clause",)),
-                 id="shown-reason-plain"),
+    pytest.param("def shown_reason(f):\n    clause = _UNMET_CLAUSE % (label, why)\n", _SHOWN, id="shown-reason-linked"),
+    pytest.param("def shown_reason(f):\n    clause = _DEMOTED_CLAUSE % why\n", _SHOWN, id="shown-reason-plain"),
+    pytest.param("def shown_reason(f):\n    clause: str = _DEMOTED_CLAUSE % why\n", _SHOWN, id="shown-reason-annotated"),
     pytest.param("def _recheck_decisions(fs):\n    new, why, failed = left, _DEMOTED_CLAUSE % text, text\n",
-                 ("_recheck_decisions", ("new", "why", "failed")), id="recheck-demotion-tuple"),
+                 ("_recheck_decisions", ("new", "why", "failed"), "why"), id="recheck-demotion-tuple"),
 ])
 def test_n7_the_census_allows_each_named_build_site(src, site):
     # Axis: each named build site passes, so the census never forces a change to the code it names.
