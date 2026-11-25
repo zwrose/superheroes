@@ -956,10 +956,12 @@ def _validate(a):
     ab = a.get("abandoned")
     chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
     unc = a.get("uncertified")
-    # axis: the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, and its keys are only terminal, reason and note, so no free text or stray key enters the record as a driver's word — see bite-proof record i2395_uncertified_record
-    chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note"}
+    # axis: the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, and its keys are only terminal, reason and note, so no free text or stray key enters the record as a driver's word; the one added key, ownerChoiceOnly, passes only as exactly true on a handed-back entry, so a false, a string, a number, null or a cannot-certify entry is refused — see bite-proof records i2395_uncertified_record and i2638_owner_choice_only
+    chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note", "ownerChoiceOnly"}
                         and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
-                        and sn(unc.get("reason")) and sn(unc.get("note"))), "uncertified")
+                        and sn(unc.get("reason")) and sn(unc.get("note"))
+                        and ("ownerChoiceOnly" not in unc
+                             or (unc["ownerChoiceOnly"] is True and unc["terminal"] == "handed-back"))), "uncertified")
     _validate_reviewers(a, ab)
     _validate_carried_review(a)
     makers = _validate_makers(a)
@@ -1937,6 +1939,18 @@ def uncertified_line(u):
     return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
 
 
+def owner_choice_only(rec):
+    """True when the record leaves out the withheld-certificate line: the session wrote its own `handed-back` entry with the
+    driver's `ownerChoiceOnly`, every finding has an outcome and at least one waits for the owner (the withheld-certificate
+    bullet of skills/review-code/reference/review-record.md, under "A record whose session ended on any terminal but")."""
+    u, findings = rec.get("uncertified"), rec.get("findings")
+    if not (isinstance(u, dict) and u.get("ownerChoiceOnly") is True and u.get("terminal") == "handed-back"
+            and u.get("source") == "session" and isinstance(findings, list)):
+        return False
+    return (all(isinstance(f, dict) and f.get("outcome") in rfs.OUTCOMES for f in findings)
+            and any(waits_for_owner(f, findings) for f in findings))
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, lines = rec["finalCommit"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -1966,7 +1980,8 @@ def _status(rec, unread=(), finding_lines=()):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
     # axis: a session that did not converge never reads reviewed, whatever else is clear — see bite-proof record i2395_uncertified_record
-    if rec.get("uncertified"):
+    # axis: a hand-back for the owner's choices alone leaves the line out only when the session's own entry carries ownerChoiceOnly, every finding has an outcome and one waits for the owner; any other record keeps it — see bite-proof record i2638_owner_choice_only
+    if rec.get("uncertified") and not owner_choice_only(rec):
         lines.append(uncertified_line(rec["uncertified"]))
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
