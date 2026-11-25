@@ -1609,6 +1609,13 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         for n, f in enumerate(r["findings"]):
             if (r["pr"], n) in carrier:
                 carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
+    copied = []  # each carried section the build writes from record titles; the list-item pointer check never reads them
+
+    def carried_section(lines):
+        section = _section(words["carriedTitle"], "bullets", [line for _, line in lines])
+        copied.append(section)
+        return section
+
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
@@ -1636,7 +1643,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                 # axis: the card shows what the bounded pass tried from the record finding's evidence, never from the advisor's text — see bite-proof record i2554_bounded_pass_record (E-card)
                                 *_loop_tried(words, f),
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),
-                                *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
+                                *([carried_section(lines)] if lines else [])],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
             owners.append(None)
@@ -1652,7 +1659,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         # Axis: an Accept or option item is a carrier: a finding carried by it lands as a last section, and its id changes with what it carries; an item that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (F2).
         cards.append(_card("i-", number, [it["id"], [k for k, _ in lines]] if lines else it["id"], it["kind"], it["title"],
                            [_section(words["ifLeft"], block, it["ifLeft"]),
-                            *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
+                            *([carried_section(lines)] if lines else [])],
                            _options(it["options"], words, False), it.get("recommendation")))
         places.append(f"items {it['id']}")
         owners.append(None)
@@ -1666,7 +1673,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                            [_section(words["whyYours"], "paragraph", it["why"]),
                             _section(words["whatHappened"], "paragraph", it["context"]),
                             _section(words["ifLeft"], "paragraph", it["ifLeft"]),
-                            *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
+                            *([carried_section(lines)] if lines else [])],
                            [{**o, "label": _fill(words["collectorOption"], letter=o["id"], label=o["label"])} for o in it["options"]],
                            {"text": _fill(words["collectorRecommendation"], letter=rec["optionId"], text=rec["text"]),
                             "reason": rec["reason"], "optionId": rec["optionId"]}))
@@ -1680,9 +1687,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
         places.append("closesSpec")
         owners.append(None)
+    # Axis: the pointer check reads what the advisor wrote for the card, never a carried section copied from record titles. See bite-proof record i2636_collector_cards (F12).
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
-                for where, card in zip(places, cards) if where is not None and not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
+                for where, card in zip(places, cards) if where is not None and not card["options"]
+                for text in _shown({**card, "context": [s for s in card["context"] if not any(s is c for c in copied)]})
+                for found in _POINTER.finditer(text)]
     numbers = {_list_key(it["number"]) for it in advisor.get("collectorItems", [])}
     dependent = [f"dependent-question: {where or 'breakdown'}: card {card['question']!r} {field} depends on another question ({found!r}); "
                  "a question must be answerable on its own: ask the two as one card whose options name each combination, "

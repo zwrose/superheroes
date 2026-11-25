@@ -3,9 +3,9 @@
 A leftovers value {"carriedBy": <reference>} names its carrier by a list-item number (a collectorItems card), {"item": "<id>"} (an Accept or
 option card from items) or {"finding": "<leftovers key>"} (the card of another left-for-owner finding). The finding is then no card and no
 decided-for-you entry; the carrying card lists it as its last section. A carrier is never itself carried.
-Row ids and test names carry the guarded element (f01 to f10), so a bite-proof run selects one element with -k. Row f11 is the existing
-byte-identity test, test_e13 in test_pr_sheet_collector_2636.py: it compares an input that uses none of these shapes with the base capture,
-and has no test here.
+Row ids and test names carry the guarded element (f01 to f10, and f12), so a bite-proof run selects one element with -k. Row f11 is the
+existing byte-identity test, test_e13 in test_pr_sheet_collector_2636.py: it compares an input that uses none of these shapes with the base
+capture, and has no test here. The pointer check's carried-title row is the break-it test in test_pr_sheet_carried_title_pointer_2636.py.
 """
 import pytest
 
@@ -66,11 +66,46 @@ def test_f02_a_finding_is_carried_by_an_accept_item_card():
     assert titles_in_decided(sheet) == []
 
 
+def test_f02_the_item_cards_id_changes_with_the_finding_it_carries():
+    # Axis: an item card's id changes with the finding it carries (its key, not only its title) and is stable across builds, so a republish
+    # whose item now carries a different finding of the same title never reuses the owner's saved answer.
+    # Bites on: the item card's identity left as the item id alone when it carries. See bite-proof record i2636_collector_cards (F2).
+    def sheet_carrying(f):
+        return build(*with_item(*small((2273, 1501), [f], {f["findingKey"]: {"carriedBy": {"item": ITEM["id"]}}})))
+    gift, twin, again = sheet_carrying(GIFT), sheet_carrying(GIFT_TWIN), sheet_carrying(GIFT)
+    assert item_card(gift)["context"] == item_card(twin)["context"]
+    assert item_card(gift)["id"] != item_card(twin)["id"]
+    assert item_card(gift)["id"] == item_card(again)["id"]
+
+
 def test_f03_a_finding_reference_naming_no_finding_is_refused():
     # Axis: {"finding": key} must name a left-for-owner finding on this sheet; a key that names none is refused, never dropped.
     # Bites on: the unresolved key accepted, so the carried finding is listed on no card. See bite-proof record i2636_collector_cards (F3).
     records, advisor = small((2273, 1501), [GIFT], {GIFT["findingKey"]: {"carriedBy": {"finding": "shop/no-such-finding"}}})
     assert problems_of(records, advisor) == [f"leftovers {GIFT['findingKey']}: carriedBy finding shop/no-such-finding names no card on this sheet"]
+
+
+def test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check():
+    # Axis: leaving the copied carried section out of the list-item pointer check never leaves out the carrier's own text: an Accept item
+    # that carries a finding and whose own If left sends the owner to a list item is still refused.
+    # Bites on: the whole context of a carrying card skipped by the pointer check. The carried title itself is the break-it test in
+    # test_pr_sheet_carried_title_pointer_2636.py. See bite-proof record i2636_collector_cards (F12).
+    records, advisor = with_item(*small((2273, 1501), [GIFT], {GIFT["findingKey"]: {"carriedBy": {"item": ITEM["id"]}}}))
+    advisor["items"][0]["ifLeft"] = "See decision item 9191 for the wording."
+    problems = problems_of(records, advisor)
+    assert len(problems) == 1 and problems[0].startswith(f"items {ITEM['id']}: card {ITEM['title']!r} sends the owner to a list item ('decision item 9191')")
+
+
+def test_f03_a_finding_reference_naming_two_findings_is_refused():
+    # Axis: {"finding": key} must name exactly one left-for-owner finding; a reviewer id two findings share is refused, never resolved to the
+    # first of them, even when each of the two has its own card by its findingKey.
+    # Bites on: the target count checked only for zero, so the finding is listed under whichever matching card comes first in the record.
+    # See bite-proof record i2636_collector_cards (F3).
+    total, font = {**TOTAL, "id": "A2"}, {**FONT, "id": "A2"}
+    records, advisor = small((2273, 1501), [total, font, GIFT],
+                             {total["findingKey"]: CALL, font["findingKey"]: CALL, GIFT["findingKey"]: {"carriedBy": {"finding": "A2"}}})
+    assert problems_of(records, advisor) == [
+        f"leftovers {GIFT['findingKey']}: carriedBy finding A2 names no card on this sheet; the key names 2 findings, use a findingKey"]
 
 
 def test_f04_a_finding_reference_naming_a_craft_determined_finding_is_refused():

@@ -885,3 +885,27 @@ FAILED ...::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_ca
 - Row f11 is the existing `test_e13` (byte identity with the base capture); it has no new element and was not edited.
 - No test pins a leftover card's id captured at `99bb98cd`: the base capture fixture holds only list-item cards. F10 pins the base identity formula by recomputing `card_id` with the finding's key as the identity; a base-captured constant would need a run at base.
 - The item reference's names-no-item refusal is raised by `_check_input` (which `build` runs first), not by a second check in `build`'s disposition loop.
+
+## Returning review fixes: F2 identity, F3 two matches, F12 the pointer check
+These entries cover the fixes of the review session over head `8d06a7d0`. The detector files were left unedited between each red and its green. Every neutralization was one Edit-tool edit in `plugins/superheroes/lib/pr_sheet.py`, undone by the inverse Edit before the next. After the last restore, `git diff plugins/superheroes/lib/pr_sheet.py` showed only the fix. Each run used `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest test_pr_sheet_carry_any_card_2636.py test_pr_sheet_collector_2636.py test_pr_sheet_carried_title_pointer_2636.py -q -p no:cacheprovider --tb=line -k <selector>` from `plugins/superheroes/lib/tests/`. Captures are the last lines of output, and uv's deprecation warning line is dropped.
+
+### F2 (identity): the item card's id changes with the finding it carries
+- **Guarded element / axis:** the identity passed to `_card` for an items card, `[it["id"], [carried keys]] if lines else it["id"]`. Axis: two builds that differ only in which same-titled finding the item carries (GIFT and GIFT_TWIN) give equal contexts but different card ids. The same input built twice gives the same id. Detector: `test_f02_the_item_cards_id_changes_with_the_finding_it_carries`.
+- **Neutralization:** the identity became the bare `it["id"]`.
+- **Raw red** (`-k "f02 or f12 or optionless"`): `AssertionError: assert 'i-89056b157e68' != 'i-89056b157e68'` (test line 77). Result: `1 failed, 4 passed, 97 deselected in 1.86s`.
+- **Restore and raw green:** after the inverse Edit, the same run gave `0 failed` for f02. The later `-k "f02 or f03"` run showed f02 passing while F3 was neutralized.
+
+### F3 (two matches): a finding reference naming two findings is refused
+- **Guarded element / axis:** `build`'s carrier resolution, `elif len(target) != 1:`. Axis: TOTAL and FONT share the reviewer id `A2`, and each has its own card by its findingKey. GIFT's `{"finding": "A2"}` is refused with the two-findings text. It never lands on the first match. Detector: `test_f03_a_finding_reference_naming_two_findings_is_refused`.
+- **Neutralization:** `elif len(target) != 1:` became `elif not target:`.
+- **Raw red** (`-k "f02 or f03"`): `Failed: DID NOT RAISE Refusal`. Result: `1 failed, 3 passed, 98 deselected in 1.94s`.
+- **Restore and raw green** (`-k f03`): `2 passed, 100 deselected in 1.89s`.
+
+### F12: the pointer check reads the card's own text, never its carried section
+- **Guarded element / axis:** the list-item pointer check in `build`. It reads `_shown` of the card with every carried section the build wrote (the `copied` list, filled by `carried_section`) left out. Axis: a carried finding title that names a list item never refuses an option-less carrier, whether an Accept item or a leftover card. Detector: the break-it test `test_pr_sheet_carried_title_pointer_2636.py`, committed byte for byte. The carrier's own text is still read: an Accept item whose own If left names a list item is refused. Detector: `test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check`. Two arms.
+- **Neutralization A:** the filtered card became `_shown(card)`, which reads the carried section.
+- **Raw red A** (`-k optionless`): both rows failed with `pr_sheet.Refusal: ["leftovers shop/total-line: card 'Gift receipts keep one wording' sends the owner to a list item ('Decision item 9191') ..."]`. Result: `2 failed, 99 deselected in 1.91s`.
+- **Restore A and raw green A:** after the inverse Edit, the run gave `2 passed, 99 deselected in 2.31s`.
+- **Neutralization B:** the whole context of a carrying card was skipped: `[] if any(s is c for s in card["context"] for c in copied) else card["context"]`.
+- **Raw red B** (`-k "f12 or optionless"`): `Failed: DID NOT RAISE Refusal` for `test_f12_...`. Result: `1 failed, 2 passed, 99 deselected in 1.92s`.
+- **Restore B and raw green B:** after the inverse Edit, the next run (`-k "f02 or f12 or optionless"`) showed f12 and both optionless rows passing.
