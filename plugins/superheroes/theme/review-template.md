@@ -340,9 +340,9 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   refuses an option-less card whose text sends the owner to a list item ("decision item 1435", "item 1435
   on your list", a collector number, each plain or dashed) instead of carrying that decision's options. It is a best-effort
   pattern scan, so the rule binds the advisor whether or not the scan catches a wording. The item's
-  number may be dashed (`2273-1`, a string `N-M`) and is shown on the card exactly as written. Any card
-  on the sheet that asks a left-for-owner finding's decision may carry it (a leftover card, an Accept
-  or option item, or a list-item card). A card that carries left-for-owner findings (below) shows them
+  number may be dashed (`2273-1`, a string `N-M`) and is shown on the card exactly as written. Another
+  card on the sheet that asks a left-for-owner finding's decision may carry it, as § Decided for you
+  says. A card that carries left-for-owner findings (below) shows them
   as its last section, titled by the `carriedTitle` word.
 - A question stands on its own (`skills/showrunner/reference/owner-decisions.md` § The per-item
   spine). The builder refuses, with the token `dependent-question`, a card whose option or
@@ -431,10 +431,10 @@ writes each one in the `craftDeterminations` key of its input, whose shape is in
 fixed above is not a decided-for-you entry; it is in caught.
 
 A left-for-owner finding that asks exactly the decision another card on the same sheet asks is not a
-decided-for-you entry. Another leftover's card, an Accept or option item from the input's `items` (never
-the closure card the build adds), or a list-item card may carry it. Its `leftovers` entry names the
-carrier, in the reference forms the docstring of `lib/pr_sheet.py` defines, which also says which cards
-each form can name. The finding is listed on that card and covered by its answer and the merge verdict.
+decided-for-you entry. Another card on that sheet that asks the same decision may carry it: its
+`leftovers` entry names the carrier, and which cards can carry, and the reference forms that name them,
+are in the docstring of `lib/pr_sheet.py` and nowhere else. The finding is listed on that card and
+covered by its answer and the merge verdict.
 A card that carries is never itself carried. A finding that is the owner's call never goes under Decided
 for you.
 

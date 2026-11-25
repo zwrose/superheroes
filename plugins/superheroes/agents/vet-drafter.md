@@ -70,10 +70,10 @@ Give every Bash call an explicit `timeout` (`timeout: 600000` for a long run).
    the stack's sheet carries them as cards.** A leftover the stack's sheet shows the owner as a card,
    or as a line under the card on that sheet that carries it when that card asks exactly the decision
    the finding asks (judged as the vet receipt's "No leftover skipped the owner's review" row says),
-   has reached the owner; grade the layer on what is its own. This governs the grade only: the READY
-   write still checks that the layer's own PR body names every leftover under What we're accepting,
-   so a layer whose body leaves one out is not written READY until its builder adds the line; say so
-   in the draft's fix list rather than grading the layer NOT-READY for it.
+   has reached the owner; grade the layer on what is its own. This governs the grade only. A READY
+   receipt and the READY write both need the layer's own PR body to name every leftover under What
+   we're accepting (the write checks it): when a line is missing, put it on the draft's fix list as a
+   builder fix and say the receipt is not to be posted as READY until the body names it.
 3. **Write the receipt as the advisor's own.** The advisor posts your text as its receipt, so
    neither file says "draft", "drafter", "drafting", "posting seat" or anything else that reads
    wrong once the advisor posts it.
