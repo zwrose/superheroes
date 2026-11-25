@@ -144,31 +144,57 @@ def test_t8_a_repeat_inheriting_a_ruling_writes_its_earlier_text_without_the_cla
         f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1"))
 
 
-def _failure_texts():
-    """Every string the module returns as the second element of `return False, ...` or `return None, ...`."""
+def _failure_returns():
+    """The second element of every `return False, ...` or `return None, ...` in finding_outcomes, as AST nodes."""
     tree = ast.parse((Path(fo.__file__)).read_text(encoding="utf-8"))
-    texts = []
+    tails = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple) and len(node.value.elts) == 2):
             continue
         head, tail = node.value.elts
-        if not (isinstance(head, ast.Constant) and (head.value is False or head.value is None)):
-            continue
-        if isinstance(tail, ast.Constant) and isinstance(tail.value, str):
-            texts.append(tail.value)
-        elif (isinstance(tail, ast.BinOp) and isinstance(tail.op, ast.Mod) and isinstance(tail.left, ast.Constant)
-              and isinstance(tail.left.value, str) and isinstance(tail.right, ast.Tuple)):
-            texts.append(tail.left.value % tuple(range(3, 3 + len(tail.right.elts))))
-    return texts
+        if isinstance(head, ast.Constant) and (head.value is False or head.value is None):
+            tails.append(tail)
+    return tails
 
 
-def test_t9_census_every_failure_text_on_record_returns_is_in_the_list_and_nothing_in_it_is_dead():
-    # Axis: the list and the module's failure returns agree both ways, so a new text cannot slip past the cleanup.
-    texts = _failure_texts()
-    assert len(texts) == 24 and "the review ran 3 rounds, fewer than the bound's 4" in texts
-    patterns = [re.compile(p) for p in fo.UNRESOLVED_WHYS]
-    assert [t for t in texts if not any(p.fullmatch(t) for p in patterns)] == []
-    assert [p.pattern for p in patterns if not any(p.fullmatch(t) for t in texts)] == []
+def test_t9_every_failure_text_has_one_home_and_the_cleanup_reads_it():
+    # Axis: every failure return names a WHY_ constant (no literal copy), the list holds exactly those, and each one,
+    # stamped as the settle clause, is a stale clause the cleanup removes.
+    tails = _failure_returns()
+    literal = [t for t in tails if isinstance(t, ast.JoinedStr) or (isinstance(t, ast.Constant) and isinstance(t.value, str))]
+    assert [ast.unparse(t) for t in literal] == []
+    named = {t.id for t in tails if isinstance(t, ast.Name) and t.id.startswith("WHY_")}
+    formatted = {t.left.id for t in tails if isinstance(t, ast.BinOp) and isinstance(t.left, ast.Name)}
+    assert formatted == {"WHY_FEWER_ROUNDS"}
+    assert {getattr(fo, n) for n in named} == set(fo.UNRESOLVED_WHY_TEXTS) and len(fo.UNRESOLVED_WHY_TEXTS) == len(named)
+    for why in fo.UNRESOLVED_WHY_TEXTS + tuple(fo.WHY_FEWER_ROUNDS % pair for pair in ((-1, 2), (0, 2), (12, 40))):
+        assert rr._without_stale_clauses("open; " + fo.UNRESOLVED_CLAUSE % why) == "open", why
+
+
+def test_t13_a_bound_that_fell_short_on_a_negative_count_resolves_without_its_clause():
+    # Axis: a real advisor-bound failure, rendered by the module from a count the account accepts, is removed once the
+    # bound resolves on a later write; its unresolved twin keeps it.
+    words = "bound the review at two rounds"
+    body = "\n".join([fo.VET_RECEIPT_MARKER, "## Vet receipt", "", "**Decisions.**", "- " + words,
+                      "<!-- superheroes:advisor-bound rounds=2 -->", ""])
+    url = "https://github.com/o/r/issues/7#issuecomment-777"
+    doc = {"id": 777, "issue_url": "https://api.github.com/repos/o/r/issues/7", "html_url": url, "body": body,
+           "author_association": "MEMBER", "user": {"login": "o"}}
+    by = {"kind": fo.ADVISOR_BOUND, "ref": {"url": url, "words": words}}
+    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(by), "reason": "the advisor bounded it"}
+
+    def build(finding, count):
+        a = account([], [finding])
+        a["rounds"] = {"count": count, "cap": 3, "stoppedAtCap": False}
+        return the_finding(rr.build_record(a, readers(doc=doc)))
+
+    demoted = build(ruled, -1)
+    assert demoted["outcome"] == "left-for-owner"
+    assert demoted["reason"].startswith("the cited decision is not on record (the review ran -1 rounds, fewer than the bound's 2)")
+    restored = build(demoted, 2)
+    assert restored["outcome"] == "ruling"
+    assert restored["reason"] == f'advisor\'s bound "{words}" ({url}); the advisor bounded it'
+    assert build(demoted, 1)["outcome"] == "left-for-owner"
 
 
 @pytest.mark.parametrize("reason, expected", [

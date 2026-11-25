@@ -2034,40 +2034,64 @@ def _finding_sources(base, f):
 # How an unmet linked decision is named in the reason of the finding that cites it.
 _LINKED_LABEL = {finding_outcomes.OWNER_RULING: "owner ruling", finding_outcomes.SCOPE_RULING: "scope ruling",
                  finding_outcomes.ADVISOR_BOUND: "advisor's bound"}
+# The clause a ruling the record demotes leads with, and the clause a leftover whose linked decision does not resolve
+# ends with (label, failure text); with `finding_outcomes.UNRESOLVED_CLAUSE` these are the three clauses an unresolved
+# read stamps, and _STALE_CLAUSE is built from all three.
+_DEMOTED_CLAUSE = "the cited decision is not on record (%s)"
+_UNMET_CLAUSE = "the %s it cites is not on record (%s)"
+
+
+def _clause_pattern(template, *alternatives):
+    """The regular-expression source of ``template`` with its %s slots, in order, matching any of ``alternatives``."""
+    pieces = re.escape(template).split("%s")
+    out = pieces[0]
+    for alt, piece in zip(alternatives, pieces[1:]):
+        out += f"(?:{alt}){piece}"
+    return out
+
+
 _WHY = "|".join(finding_outcomes.UNRESOLVED_WHYS)
 _LABELS = "|".join(re.escape(label) for label in _LINKED_LABEL.values())
-# The three clauses an unresolved read stamps: A (settle), B (a demoted ruling), C (a linked leftover).
-_STALE_CLAUSE = re.compile(rf"the cited decision is not on record: (?:{_WHY})|the cited decision is not on record \((?:{_WHY})\)"
-                           rf"|the (?:{_LABELS}) it cites is not on record \((?:{_WHY})\)")
+_STALE_CLAUSE = re.compile("|".join((_clause_pattern(finding_outcomes.UNRESOLVED_CLAUSE, _WHY),
+                                     _clause_pattern(_DEMOTED_CLAUSE, _WHY),
+                                     _clause_pattern(_UNMET_CLAUSE, _LABELS, _WHY))))
 
 
 def _without_stale_clauses(reason, lead=None):
     """``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else kept byte for byte.
 
-    The reason reads as parts split at "; ". A part goes only when, less a trailing run of carried suffixes, it is
-    clause A, B or C of a failure text in `finding_outcomes.UNRESOLVED_WHYS`; its suffix run joins the part before it
-    (the first kept part after it when none is kept before). ``lead``, when the reason starts with it, is one part kept
-    whole, for it holds the owner's quoted words. A non-string or empty reason is returned as it is; all parts gone gives ""."""
-    from review_record_session import CARRIED  # lazy: that module imports this one
+    The reason reads as parts split at "; ". Every copy of ``lead`` (the resolved citation, which holds the owner's
+    quoted words) is held whole first, wherever it sits, so no quoted text is split or matched. A part goes only when,
+    less a trailing run of carried suffixes and merge marks, it is a clause of `_STALE_CLAUSE`; that run joins the part
+    before it (the first kept part after it when none is kept before). A non-string or empty reason is returned as it
+    is; all parts gone gives ""."""
+    from review_record_session import CARRIED, MERGED_INTO_FORMAT  # lazy: that module imports this one
     if not isinstance(reason, str) or not reason:
         return reason
-    parts, held = reason.split("; "), False
-    if isinstance(lead, str) and lead and reason.startswith(lead):
-        first, sep, tail = reason[len(lead):].partition("; ")
-        parts, held = [lead + first] + (tail.split("; ") if sep else []), True
+    held = isinstance(lead, str) and lead != "" and lead in reason
+    hold = "\x00lead\x00"
+    masked = reason.replace(lead, hold) if held else reason
+    mark = re.compile(_clause_pattern(MERGED_INTO_FORMAT.replace("{}", "%s"), r"[^()]*") + r"\Z")
     kept, carry = [], ""
-    for at, part in enumerate(parts):
+    for part in masked.split("; "):
         core, run = part, ""
-        while core.endswith(CARRIED):
-            core, run = core[:-len(CARRIED)], run + CARRIED
-        if (held and at == 0) or not _STALE_CLAUSE.fullmatch(core):
+        while True:
+            if core.endswith(CARRIED):
+                core, run = core[:-len(CARRIED)], CARRIED + run
+                continue
+            found = mark.search(core)
+            if found is None or found.start() == 0:
+                break
+            core, run = core[:found.start()], found.group(0) + run
+        if not _STALE_CLAUSE.fullmatch(core):
             kept.append(part + carry)
             carry = ""
         elif kept:
             kept[-1] += run
         else:
             carry += run
-    return "; ".join(kept)
+    out = "; ".join(kept)
+    return out.replace(hold, lead) if held else out
 
 
 def _recheck_decisions(findings, sources):
@@ -2093,7 +2117,7 @@ def _recheck_decisions(findings, sources):
                     stale_only, reason = clean == "", clean or text
                     f = dict(f, reason=reason)
             if outcome == _RULING and not ok:
-                new, why = _LEFT_FOR_OWNER, f"the cited decision is not on record ({text})"
+                new, why = _LEFT_FOR_OWNER, _DEMOTED_CLAUSE % text
             elif outcome == _LEFT_FOR_OWNER and ok:
                 new, why = _RULING, text
             elif outcome == _RULING and ok and by.get("kind") in finding_outcomes.LINKED_KINDS:
@@ -2101,7 +2125,7 @@ def _recheck_decisions(findings, sources):
             elif outcome == _LEFT_FOR_OWNER and by.get("kind") in finding_outcomes.LINKED_KINDS and not ok:
                 # axis: a finding whose owner ruling does not resolve says so in its reason, and stays for the owner — see bite-proof record wo_a_1958_owner_ruling
                 # axis: the same for a scope ruling and an advisor's bound, each named by its own words — see bite-proof record i2532_scope_bound (E-recheck)
-                unmet = f"the {_LINKED_LABEL[by.get('kind')]} it cites is not on record ({text})"
+                unmet = _UNMET_CLAUSE % (_LINKED_LABEL[by.get('kind')], text)
         if new is None:
             if refreshed:
                 # axis: an already-ruling finding whose owner-ruling citation resolves shows the citation as its reason, once, and keeps its outcome — see bite-proof record wo_a_1958_owner_ruling
@@ -2113,7 +2137,9 @@ def _recheck_decisions(findings, sources):
                 continue
             out.append(dict(f, reason=f"{reason}; {unmet}") if unmet and reason else f)
             continue
-        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason and not stale_only else reason))
+        # axis: a promoted reason that already leads with its citation (a ruling demoted and then resolved again) is not given it twice
+        lead_again = new == _RULING and isinstance(reason, str) and reason.startswith(why)
+        out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason and not stale_only and not lead_again else reason))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
     return out, changes
 
@@ -2285,16 +2311,17 @@ def _follow_repeats(findings, checks, sources=None):
                 by = copy.deepcopy(g["decidedBy"])
                 # axis: the reason leads with the citation text exactly, so the refresh on a later write never prepends it twice — see bite-proof record i2479_repeat_follows_ruling
                 reason = f"{text}; {REPEAT_FOLLOWS_RULING.format(name=_name(g))}"
-                earlier = _without_stale_clauses(old)
+                earlier = _without_stale_clauses(old, lead=text)
                 changed = dict(f, outcome=_RULING, decidedBy=by, repeatOf=dict(mark, **{
                     REPEAT_KEPT_FIELD: dict(kept, outcome=_RULING)}), reason=f"{reason}; earlier: {earlier}" if isinstance(old, str) and earlier else reason)
                 moved = True
                 for j in members_to_follow(i, kept):
-                    h, was = out[j], _without_stale_clauses(out[j].get("reason"))
+                    h = out[j]
                     # axis: each merged member is checked with its own key and severity, and one whose check fails keeps its outcome — see bite-proof record i2532_scope_bound (E-repeat-member)
                     held, held_text = finding_outcomes.on_record(g["decidedBy"], _finding_sources(sources(), h))
                     if not held:
                         continue
+                    was = _without_stale_clauses(h.get("reason"), lead=held_text)
                     handled.add(j)
                     note = f"{held_text}; {REPEAT_MEMBER_FOLLOWS_RULING.format(name=_name(f))}"
                     # axis: every member moved to ruling carries its own copy of the decidedBy, never an uncited ruling — see bite-proof record i2479_repeat_follows_ruling

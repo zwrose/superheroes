@@ -255,11 +255,11 @@ def comment_permalink(url, repo):
     # axis: a pull request comment's /pull/ link names the same comment and is accepted for every linked kind — see bite-proof record i2532_scope_bound (E-pull-link)
     found = _COMMENT_PERMALINK.fullmatch(url) if isinstance(url, str) else None
     if found is None:
-        return None, "the ruling's link is not a comment permalink"
+        return None, WHY_NOT_A_PERMALINK
     owner, name, number, comment = found.groups()
     # axis: the link must be in the pull request's own repository — see bite-proof record wo_a_1958_owner_ruling
     if not (isinstance(repo, str) and repo.lower() == f"{owner}/{name}".lower()):
-        return None, "the ruling's link is not in this repository"
+        return None, WHY_ANOTHER_REPOSITORY
     return (owner, name, number, int(comment)), None
 
 
@@ -270,7 +270,7 @@ def _linked_comment(ref, sources):
     pull request's own repository, and the comment read (sources["ownerRulings"][url]) is that comment on that issue."""
     url, words = (ref.get("url"), ref.get("words")) if isinstance(ref, dict) else (None, None)
     if not (isinstance(url, str) and url.strip() and isinstance(words, str) and words.strip()):
-        return None, "the ruling names no link or words"
+        return None, WHY_NO_LINK_OR_WORDS
     parts, why = comment_permalink(url, sources.get("repo"))
     if parts is None:
         return None, why
@@ -281,7 +281,7 @@ def _linked_comment(ref, sources):
     # axis: the same holds for a scope ruling and an advisor's bound, whose comment is read the same way — see bite-proof record i2532_scope_bound (E-link)
     if not (isinstance(doc, dict) and _is_int(doc.get("id")) and doc["id"] == comment_id and isinstance(doc.get("issue_url"), str)
             and doc["issue_url"].lower().endswith(f"/repos/{owner}/{name}/issues/{number}".lower())):
-        return None, "the ruling's comment could not be read"
+        return None, WHY_COMMENT_UNREAD
     return (url, words, int(number), doc.get("body")), None
 
 
@@ -294,10 +294,10 @@ def _owner_ruling_on_record(ref, sources):
     quoted = canon.ruling_record_words(body)
     # axis: only a standard chat-ruling record is a ruling, since every session posts as the owner — see bite-proof record wo_a_1958_owner_ruling
     if quoted is None:
-        return False, "the ruling's comment is not a chat-ruling record"
+        return False, WHY_NOT_A_RULING_RECORD
     # axis: the quoted block of that record must hold the owner's words, and nothing else in the body counts — see bite-proof record wo_a_1958_owner_ruling
     if _squash(words) not in _squash(quoted):
-        return False, "the ruling's comment does not hold the owner's words"
+        return False, WHY_WORDS_ABSENT
     return True, 'owner ruling "%s" (%s)' % (words, url)
 
 
@@ -348,7 +348,7 @@ def _scope_or_bound_on_record(kind, ref, sources):
     is refused. A bound also needs the review's round count to be at least the rounds it states."""
     # axis: a Critical finding is never settled by a scope ruling or the advisor's bound, checked before the comment is read — see bite-proof record i2532_scope_bound (E-critical)
     if sources.get("findingSeverity") == "Critical":
-        return False, "a Critical finding is never settled by a scope ruling or the advisor's bound"
+        return False, WHY_CRITICAL
     got, why = _linked_comment(ref, sources)
     if got is None:
         return False, why
@@ -358,51 +358,75 @@ def _scope_or_bound_on_record(kind, ref, sources):
     receipt = quoted is None and bool(lines) and lines[0].rstrip() == VET_RECEIPT_MARKER
     # axis: a body that is neither a chat-ruling record nor a vet receipt is no ruling or bound — see bite-proof record i2532_scope_bound (E-neither)
     if quoted is None and not receipt:
-        return False, "the ruling's comment is neither a chat-ruling record nor a vet receipt"
+        return False, WHY_NEITHER_RECORD_NOR_RECEIPT
     stated = None
     if quoted is not None:
         # axis: the quoted block of the chat-ruling record must hold the words — see bite-proof record i2532_scope_bound (E-chat)
         if _squash(words) not in _squash(quoted):
-            return False, "the ruling's comment does not hold the owner's words"
+            return False, WHY_WORDS_ABSENT
         if kind == ADVISOR_BOUND:
             stated = _stated_rounds(words)
             # axis: a bound's words must state a number of rounds — see bite-proof record i2532_scope_bound (E-chat-rounds)
             if stated is None:
-                return False, "the bound's words state no number of rounds"
+                return False, WHY_BOUND_STATES_NO_ROUNDS
     else:
         pr = sources.get("reviewPr")
         # axis: a vet receipt counts only on the pull request under review — see bite-proof record i2532_scope_bound (E-receipt-pr)
         if not (_is_int(pr) and number == pr):
-            return False, "the vet receipt is not on this pull request"
+            return False, WHY_RECEIPT_ELSEWHERE
         found, stated = _receipt_decision(kind, lines, words, sources.get("findingKey"))
         if not found:
             if kind == SCOPE_RULING:
-                return False, "the vet receipt records no scope ruling for this finding with these words"
-            return False, "the vet receipt records no advisor's bound with these words"
+                return False, WHY_RECEIPT_NO_SCOPE_RULING
+            return False, WHY_RECEIPT_NO_BOUND
     if kind == ADVISOR_BOUND:
         count = sources.get("reviewRounds")
         if not _is_int(count):
-            return False, "the review's round count is unknown"
+            return False, WHY_ROUNDS_UNKNOWN
         # axis: the review must have run at least the rounds the bound states — see bite-proof record i2532_scope_bound (E-bound-rounds)
         if count < stated:
-            return False, "the review ran %d rounds, fewer than the bound's %d" % (count, stated)
+            return False, WHY_FEWER_ROUNDS % (count, stated)
         return True, 'advisor\'s bound "%s" (%s)' % (words, url)
     return True, 'scope ruling "%s" (%s)' % (words, url)
 
 
-# The texts on_record returns when a decision is not on record, each as a regular-expression source.
-UNRESOLVED_WHYS = tuple(re.escape(t) for t in (
-    "the ruling's link is not a comment permalink", "the ruling's link is not in this repository",
-    "the ruling names no link or words", "the ruling's comment could not be read",
-    "the ruling's comment is not a chat-ruling record", "the ruling's comment does not hold the owner's words",
-    "a Critical finding is never settled by a scope ruling or the advisor's bound",
-    "the ruling's comment is neither a chat-ruling record nor a vet receipt", "the bound's words state no number of rounds",
-    "the vet receipt is not on this pull request", "the vet receipt records no scope ruling for this finding with these words",
-    "the vet receipt records no advisor's bound with these words", "the review's round count is unknown",
-    "no decision was cited", "the cited decision kind is not recognised", "the cited decision names no reference",
-    "no Canon text was available", "the cited Canon entry is not on record", "no residual text was available",
-    "the cited residual is not recorded", "no sheet answers were available", "the sheet answer is not settled",
-)) + (r"the review ran \d+ rounds, fewer than the bound's \d+",)
+# The texts on_record and its legs return when a decision is not on record. Each text has this one home: the
+# returns name it, and UNRESOLVED_WHYS is built from it, so a reader that recognises a stale clause copies none.
+WHY_NOT_A_PERMALINK = "the ruling's link is not a comment permalink"
+WHY_ANOTHER_REPOSITORY = "the ruling's link is not in this repository"
+WHY_NO_LINK_OR_WORDS = "the ruling names no link or words"
+WHY_COMMENT_UNREAD = "the ruling's comment could not be read"
+WHY_NOT_A_RULING_RECORD = "the ruling's comment is not a chat-ruling record"
+WHY_WORDS_ABSENT = "the ruling's comment does not hold the owner's words"
+WHY_CRITICAL = "a Critical finding is never settled by a scope ruling or the advisor's bound"
+WHY_NEITHER_RECORD_NOR_RECEIPT = "the ruling's comment is neither a chat-ruling record nor a vet receipt"
+WHY_BOUND_STATES_NO_ROUNDS = "the bound's words state no number of rounds"
+WHY_RECEIPT_ELSEWHERE = "the vet receipt is not on this pull request"
+WHY_RECEIPT_NO_SCOPE_RULING = "the vet receipt records no scope ruling for this finding with these words"
+WHY_RECEIPT_NO_BOUND = "the vet receipt records no advisor's bound with these words"
+WHY_ROUNDS_UNKNOWN = "the review's round count is unknown"
+WHY_NO_DECISION = "no decision was cited"
+WHY_KIND_UNKNOWN = "the cited decision kind is not recognised"
+WHY_NO_REFERENCE = "the cited decision names no reference"
+WHY_NO_CANON_TEXT = "no Canon text was available"
+WHY_CANON_ENTRY_ABSENT = "the cited Canon entry is not on record"
+WHY_NO_RESIDUAL_TEXT = "no residual text was available"
+WHY_RESIDUAL_ABSENT = "the cited residual is not recorded"
+WHY_NO_SHEET_ANSWERS = "no sheet answers were available"
+WHY_SHEET_ANSWER_OPEN = "the sheet answer is not settled"
+WHY_FEWER_ROUNDS = "the review ran %d rounds, fewer than the bound's %d"
+# The plain failure texts; WHY_FEWER_ROUNDS is formatted with the counts and is listed apart.
+UNRESOLVED_WHY_TEXTS = (
+    WHY_NOT_A_PERMALINK, WHY_ANOTHER_REPOSITORY, WHY_NO_LINK_OR_WORDS, WHY_COMMENT_UNREAD, WHY_NOT_A_RULING_RECORD,
+    WHY_WORDS_ABSENT, WHY_CRITICAL, WHY_NEITHER_RECORD_NOR_RECEIPT, WHY_BOUND_STATES_NO_ROUNDS, WHY_RECEIPT_ELSEWHERE,
+    WHY_RECEIPT_NO_SCOPE_RULING, WHY_RECEIPT_NO_BOUND, WHY_ROUNDS_UNKNOWN, WHY_NO_DECISION, WHY_KIND_UNKNOWN,
+    WHY_NO_REFERENCE, WHY_NO_CANON_TEXT, WHY_CANON_ENTRY_ABSENT, WHY_NO_RESIDUAL_TEXT, WHY_RESIDUAL_ABSENT,
+    WHY_NO_SHEET_ANSWERS, WHY_SHEET_ANSWER_OPEN)
+# The clause `settle` stamps on a leftover whose cited decision is not on record, with the failure text in %s.
+UNRESOLVED_CLAUSE = "the cited decision is not on record: %s"
+# Each failure text as a regular-expression source; the formatted one takes any integer where it writes %d.
+UNRESOLVED_WHYS = tuple(re.escape(t) for t in UNRESOLVED_WHY_TEXTS) + (
+    re.escape(WHY_FEWER_ROUNDS).replace("%d", r"-?\d+"),)
 
 
 def on_record(decided_by, sources):
@@ -423,15 +447,15 @@ def on_record(decided_by, sources):
     organisation-owned repository the owner's own comment reads MEMBER. Never raises.
     """
     if not isinstance(decided_by, dict):
-        return False, "no decision was cited"
+        return False, WHY_NO_DECISION
     if not isinstance(sources, dict):
         sources = {}
     kind = decided_by.get("kind")
     ref = decided_by.get("ref")
     if kind not in DECISION_KINDS:
-        return False, "the cited decision kind is not recognised"
+        return False, WHY_KIND_UNKNOWN
     if ref is None or (isinstance(ref, str) and ref.strip() == ""):
-        return False, "the cited decision names no reference"
+        return False, WHY_NO_REFERENCE
     if kind == OWNER_RULING:
         return _owner_ruling_on_record(ref, sources)
     if kind in (SCOPE_RULING, ADVISOR_BOUND):
@@ -439,24 +463,24 @@ def on_record(decided_by, sources):
     if kind == "canon":
         text = sources.get("canonText")
         if not isinstance(text, str):
-            return False, "no Canon text was available"
+            return False, WHY_NO_CANON_TEXT
         if not canon_decides(text, ref):
-            return False, "the cited Canon entry is not on record"
+            return False, WHY_CANON_ENTRY_ABSENT
         return True, "canon %s" % ref
     if kind == "residual":
         text = sources.get("residualText")
         if not isinstance(text, str):
-            return False, "no residual text was available"
+            return False, WHY_NO_RESIDUAL_TEXT
         if not residual_decides(text, ref):
-            return False, "the cited residual is not recorded"
+            return False, WHY_RESIDUAL_ABSENT
         origin = sources.get("residualSource")
         suffix = " (read from %s)" % origin if isinstance(origin, str) and origin.strip() else ""
         return True, "residual %s%s" % (ref, suffix)
     answers = sources.get("sheetAnswers")
     if not isinstance(answers, dict) or "pr" not in sources:
-        return False, "no sheet answers were available"
+        return False, WHY_NO_SHEET_ANSWERS
     if not sheet_answer_decides(answers, ref, sources.get("pr")):
-        return False, "the sheet answer is not settled"
+        return False, WHY_SHEET_ANSWER_OPEN
     return True, "sheet-answer %s" % _sheet_ref_text(ref)
 
 
@@ -484,7 +508,7 @@ def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False
         resolved, text = on_record(decided_by, sources)
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
-        why = "; the cited decision is not on record: " + text
+        why = "; " + UNRESOLVED_CLAUSE % text
     result = {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
     if open_at_end and decided_by is None:
         result[session_contract.OPEN_AT_LOOP_END_FIELD] = True
