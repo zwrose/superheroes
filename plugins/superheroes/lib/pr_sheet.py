@@ -1610,6 +1610,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             if (r["pr"], n) in carrier:
                 carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
     copied = []  # each carried section the build writes from record titles; the list-item pointer check never reads them
+    titled = []  # each leftover card, whose question is its record finding's title; the pointer check never reads that question
 
     def carried_section(lines):
         section = _section(words["carriedTitle"], "bullets", [line for _, line in lines])
@@ -1645,6 +1646,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),
                                 *([carried_section(lines)] if lines else [])],
                                options, call.get("recommendation")))
+            titled.append(cards[-1])
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
             owners.append(None)
     if breakdown is not None:
@@ -1687,11 +1689,17 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
         places.append("closesSpec")
         owners.append(None)
-    # Axis: the pointer check reads what the advisor wrote for the card, never a carried section copied from record titles. See bite-proof record i2636_collector_cards (F12).
+    def authored(card):
+        """The card as the advisor wrote it: no carried section copied from record titles, and no leftover card's record title."""
+        return {**card, "question": "" if any(card is c for c in titled) else card["question"],
+                "context": [s for s in card["context"] if not any(s is c for c in copied)]}
+
+    # Axis: the pointer check reads what the advisor wrote for the card, never text copied from the record (a carried section, or a
+    # leftover card's question, which is its finding's title). See bite-proof record i2636_collector_cards (F12).
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"]
-                for text in _shown({**card, "context": [s for s in card["context"] if not any(s is c for c in copied)]})
+                for text in _shown(authored(card))
                 for found in _POINTER.finditer(text)]
     numbers = {_list_key(it["number"]) for it in advisor.get("collectorItems", [])}
     dependent = [f"dependent-question: {where or 'breakdown'}: card {card['question']!r} {field} depends on another question ({found!r}); "

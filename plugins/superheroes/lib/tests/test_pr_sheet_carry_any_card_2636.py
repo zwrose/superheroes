@@ -3,7 +3,7 @@
 A leftovers value {"carriedBy": <reference>} names its carrier by a list-item number (a collectorItems card), {"item": "<id>"} (an Accept or
 option card from items) or {"finding": "<leftovers key>"} (the card of another left-for-owner finding). The finding is then no card and no
 decided-for-you entry; the carrying card lists it as its last section. A carrier is never itself carried.
-Row ids and test names carry the guarded element (f01 to f10, and f12), so a bite-proof run selects one element with -k. Row f11 is the
+Row ids and test names carry the guarded element (f01 to f10, f12 and f13), so a bite-proof run selects one element with -k. Row f11 is the
 existing byte-identity test, test_e13 in test_pr_sheet_collector_2636.py: it compares an input that uses none of these shapes with the base
 capture, and has no test here. The pointer check's carried-title row is the break-it test in test_pr_sheet_carried_title_pointer_2636.py.
 """
@@ -94,6 +94,16 @@ def test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check():
     advisor["items"][0]["ifLeft"] = "See decision item 9191 for the wording."
     problems = problems_of(records, advisor)
     assert len(problems) == 1 and problems[0].startswith(f"items {ITEM['id']}: card {ITEM['title']!r} sends the owner to a list item ('decision item 9191')")
+
+
+def test_f13_a_leftover_cards_question_copied_from_its_finding_title_is_not_read_by_the_pointer_check():
+    # Axis: an option-less leftover card's question is its record finding's title, which the advisor did not write; a title that names a
+    # past list decision builds, and the card shows it as written. The card's own text (its context) is still read: see
+    # test_a_leftover_with_no_options_that_points_away_is_refused_naming_its_key in test_pr_sheet.py.
+    # Bites on: the pointer check reading the leftover card's question. See bite-proof record i2636_collector_cards (F12).
+    total = {**TOTAL, "title": "Decision item 9191 left the thank-you line as it was"}
+    sheet = build(*small((2273, 1501), [total], {total["findingKey"]: CALL}))
+    assert [c["question"] for c in leftover_cards(sheet)] == [total["title"]]
 
 
 def test_f03_a_finding_reference_naming_two_findings_is_refused():
