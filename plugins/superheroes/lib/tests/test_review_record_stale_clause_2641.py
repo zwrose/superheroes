@@ -221,10 +221,12 @@ def test_t13_a_bound_that_fell_short_on_a_negative_count_resolves_without_its_cl
 
 
 @pytest.mark.parametrize("reason, expected", [
-    pytest.param(A_L2 + rs.CARRIED + "; open", "open" + rs.CARRIED, id="a-leading-clause-hands-its-suffix-to-the-next-part"),
+    pytest.param(A_L2 + rs.CARRIED + "; open", A_L2 + rs.CARRIED + "; open", id="a-clause-no-writer-puts-mid-reason-stays"),
+    pytest.param(f"open; {A_L2} (merged into b); {C_L3}", "open (merged into b)", id="a-clause-after-the-mark-then-the-one-before-it"),
+    pytest.param(f"{B_L3}; open; {A_L2}{rs.CARRIED}", "open" + rs.CARRIED, id="a-demotion-at-the-start-and-a-clause-at-the-end"),
     pytest.param(A_L2 + rs.CARRIED, rs.CARRIED, id="every-part-dropped-leaves-its-marks"),
     pytest.param(A_L2, "", id="every-part-dropped-with-no-marks-is-empty"),
-    pytest.param(f"a (merged into b); {C_L3}{rs.CARRIED}{rs.CARRIED}; c", f"a (merged into b){rs.CARRIED}{rs.CARRIED}; c",
+    pytest.param(f"a; {C_L3} (merged into b){rs.CARRIED}{rs.CARRIED}", f"a (merged into b){rs.CARRIED}{rs.CARRIED}",
                  id="a-run-of-suffixes-moves-whole"),
     pytest.param("the cited decision is not on record: some other reason", "the cited decision is not on record: some other reason",
                  id="a-why-outside-the-list-is-prose"),
@@ -358,3 +360,36 @@ def test_t21_a_promotion_is_not_mistaken_for_a_citation_followed_by_bracketed_pr
     assert f["outcome"] == "ruling" and f["reason"] == f"canon {STANDING}; {note}"
     marked = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}" + rs.CARRIED}
     assert the_finding(record(marked, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}" + rs.CARRIED
+
+
+def test_t22_a_citation_followed_only_by_a_merge_mark_is_not_given_twice():
+    # Axis: the leading-citation check reads the merge mark on the whole reason, so a promotion skips it.
+    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
+    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": CITE + mark}))
+    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark
+    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": f"{B_L3}; {CITE}{mark}"}))
+    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark
+
+
+def test_t23_a_clause_appended_after_the_merge_mark_and_the_one_before_it_both_go():
+    # Axis: a failed recheck appends the unmet clause after the merge mark; a later resolve removes it, then the
+    # clause before the mark, and the mark stays at the end.
+    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
+    f = the_finding(record(stamped(reason=f"waits for the owner; {A_L2}{mark}; {C_L3}")))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
+
+
+def test_t24_a_short_citation_never_hides_a_clause_and_a_quote_ending_like_a_mark_is_left_whole():
+    # Axis: nothing is masked, so a citation whose text a failure text holds hides no clause, and a citation whose
+    # quoted words hold the merge mark's opening is never cut.
+    residual = "open; " + fo.UNRESOLVED_CLAUSE % fo.WHY_RESIDUAL_ABSENT
+    assert rr._strip_stale(residual, lead="residual is not recorded") == ("open", "")
+    words = "keep it" + rs.MERGED_INTO_FORMAT.split("{}")[0] + "x; " + A_L2
+    cite = f'owner ruling "{words}" ({U})'
+    assert rr._strip_stale(f"open; {cite}", lead=cite) == (f"open; {cite}", "")
+    words = "keep it; " + A_L2 + "; compare" + rs.MERGED_INTO_FORMAT.format("f-2")
+    cite = f'owner ruling "{words}" ({U})'
+    ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": words}}, "reason": cite}
+    assert the_finding(record(ruled, doc=doc_for(words)))["reason"] == cite
+    nul = "\x00lead"
+    assert rr._strip_stale(f"{nul}{CITE}; {A_L2}", lead=CITE) == (f"{nul}{CITE}", "")

@@ -2072,37 +2072,42 @@ def _peel_marks(text):
         core, run = core[:at], core[at:] + run
 
 
+# Where the writers put each stale clause: `settle`'s and the unmet-citation clause at the end of a reason (before
+# its marks), the demotion clause at the start, or right after a citation an earlier writer put in front of it.
+_STALE_AT_END = re.compile("(?:^|; )(?:%s)\\Z" % _STALE_CLAUSE.pattern)
+_STALE_AT_START = re.compile("(?:%s)(?:; |\\Z)" % _clause_pattern(_DEMOTED_CLAUSE, _WHY))
+
+
 def _strip_stale(reason, lead=None):
     """(kept, rest): ``reason`` without the stale "not on record" clauses an earlier unresolved read stamped, all else
-    kept byte for byte, and the trailing marks of the dropped parts that no kept part took ("" unless every part went).
+    kept byte for byte, and the marks those clauses carried when nothing else is left ("" otherwise).
 
-    Every copy of ``lead`` (the resolved citation, which holds the owner's quoted words) is held whole first, wherever
-    the writer put it (`decided by `, `earlier: `, a leading citation), so no quoted text is split or matched; a
-    citation that overlapped a clause would keep that clause, the safe side. The reason's own trailing marks are set
-    aside before it is split, so a mark whose id holds "; " stays whole. The rest reads as parts split at "; ". A part
-    goes only when, less a trailing run of marks, it is a clause of `_STALE_CLAUSE`; that run joins the part before
-    it, or the first kept part after it when none is kept before. A non-string or empty reason is returned as it is."""
+    A clause is removed only where a writer puts one, never by splitting the reason: each clause at the end (less the
+    carried suffixes and merge marks after it, which stay, in order, at the end), and each demotion clause at the start
+    or right after a leading ``lead`` (the resolved citation). Text anywhere else, the owner's quoted words in every
+    citation included, is never read as a clause. A non-string or empty reason is returned as it is."""
     if not isinstance(reason, str) or not reason:
         return reason, ""
-    hold = "\x00lead\x00"
-    while hold in reason:
-        hold = "\x00" + hold
-    held = isinstance(lead, str) and lead != ""
-    body, trail = _peel_marks(reason)
-    masked = body.replace(lead, hold) if held else body
-    kept, carry = [], ""
-    for part in masked.split("; "):
-        core, run = _peel_marks(part)
-        if not _STALE_CLAUSE.fullmatch(core):
-            kept.append(part + carry)
-            carry = ""
-        elif kept:
-            kept[-1] += run
-        else:
-            carry += run
-    out = "; ".join(kept)
-    out = out.replace(hold, lead) if held else out
-    return (out + trail, "") if out else ("", carry + trail)
+    body, marks = reason, ""
+    while True:
+        # a clause written after the marks (a failed recheck appends one) goes first, then one before them
+        core, run = body, ""
+        found = _STALE_AT_END.search(core)
+        if found is None:
+            core, run = _peel_marks(body)
+            found = _STALE_AT_END.search(core)
+        if found is None:
+            break
+        body, marks = core[:found.start()], run + marks
+    head = lead + "; " if isinstance(lead, str) and lead and body.startswith(lead + "; ") else ""
+    rest = body[len(head):]
+    while True:
+        found = _STALE_AT_START.match(rest)
+        if found is None or found.end() == 0:
+            break
+        rest = rest[found.end():]
+    out = head + rest if rest else head[:-2]
+    return (out + marks, "") if out else ("", marks)
 
 
 def _without_stale_clauses(reason, lead=None):
@@ -2125,8 +2130,7 @@ def _leads_with(reason, citation):
     carried suffixes and merge marks; never as the prefix of a longer citation or of prose."""
     if not (isinstance(reason, str) and reason.startswith(citation)):
         return False
-    after = reason[len(citation):]
-    return after.startswith("; ") or _peel_marks(after)[0] == ""
+    return reason[len(citation):].startswith("; ") or _peel_marks(reason)[0] == citation
 
 
 def _recheck_decisions(findings, sources):
