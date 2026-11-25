@@ -591,3 +591,296 @@ Added after vet 1028, by the build session, with the same rules as above (one Ed
 - **Neutralization:** `_list_key(call["carriedBy"])` became `call["carriedBy"]` (the raw spelling).
 - **Raw red** (`-k e08`): `e08-string-card` failed. The card's last section was `{'title': 'If left'}`, not `{'title': 'The review findings this decides'}`. Result: `1 failed, 2 passed, 77 deselected in 1.67s`. The `e08-int-card` row (an integer card with `carriedBy` `"2273"`) stays green under it, because the raw string already equals that card's canonical key.
 - **Restore receipt:** the inverse Edit, then `git diff --stat` showed only the test file. **Raw green:** `3 passed, 77 deselected in 9.52s`.
+
+## WO-B: carriedBy names any card (F1 to F10)
+
+Detector under proof: `plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py` (new; unedited between the red and the green of every entry). Guarded code: `plugins/superheroes/lib/pr_sheet.py` (`_reference`, `_check_input`'s leftovers loop, `build`'s disposition loop and its carrier resolution, and the card loops). Base head `99bb98cd`.
+Every neutralization was one targeted Edit-tool edit, undone by the inverse Edit before the next element. No `git checkout`, `restore`, `reset`, `stash` or `sed` was used. Restore receipts are the restored lines, quoted back by a Grep-tool read after each inverse Edit.
+Command prefix for every run (worktree root), `-k` as per entry: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2636b -m pytest plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py -q -p no:cacheprovider --tb=short -k <selector>` (F8 ran with `--tb=line`).
+Guarded-element set (declared by the order): F1 a leftover card carries a finding; F2 an Accept or option item card carries a finding; F3 a finding key that names no finding is refused; F4 a finding with no card of its own (craft-determined) cannot carry; F5 an item id that names no item is refused; F6 a finding cannot carry itself; F7 a chain is refused; F8 a malformed reference is refused; F9 the carried findings are collected before any card is built; F10 the carrying card's id changes with what it carries and a card that carries nothing keeps its id. Row f11 is the existing `test_e13` and adds no element. A fixed-above target takes the F4 branch and has no row of its own. Rows and tests carry the tags `f01` to `f10`.
+Disclosures: captures are the runner's output with uv's one `UV_NATIVE_TLS` deprecation warning line dropped; the raw tracebacks are trimmed to the decisive lines where noted; nothing was redacted; every capture is far under the 32 KiB ceiling. Red runs exit 1 by design.
+
+### F1: a leftover card carries a finding
+
+- **Guarded element / axis:** `pr_sheet.py:1639`, the carried section of the leftover card (`*([_section(words["carriedTitle"], ...)] if lines else [])` after If left). Axis: a finding carried by `{"finding": key}` is listed as the last section of the named finding's leftover card, and is no card of its own.
+- **Neutralization:** `if lines else []` became `if False else []` on that line.
+- **Raw red** (`-k f01`):
+
+```
+F                                                                        [100%]
+_______ test_f01_a_finding_is_carried_by_another_findings_leftover_card ________
+test_pr_sheet_carry_any_card_2636.py:53: in test_f01_a_finding_is_carried_by_another_findings_leftover_card
+    assert leftover_card(sheet, TOTAL)["context"][-1] == carried_section(GIFT["title"])
+E   AssertionError: assert {'title': 'If...ay notice.'}]} == {'title': 'Th...the buyer']}]}
+E     {'blocks': [{'paragraph': 'A customer may notice.'}]} != {'blocks': [{'bullets': ['Gift receipts read oddly to the buyer']}]}
+E     {'title': 'If left'} != {'title': 'The review findings this decides'}
+FAILED ...::test_f01_a_finding_is_carried_by_another_findings_leftover_card
+1 failed, 16 deselected in 1.79s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1639:                                *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],` under `1638: _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.70s
+```
+
+### F2: an Accept or option item card carries a finding
+
+- **Guarded element / axis:** `pr_sheet.py:1655`, the carried section of the items card. Axis: a finding carried by `{"item": id}` is listed as the last section (after If left) of that items card, and has no leftover card.
+- **Neutralization:** `if lines else []` became `if False else []` on that line.
+- **Raw red** (`-k f02`):
+
+```
+F                                                                        [100%]
+_____________ test_f02_a_finding_is_carried_by_an_accept_item_card _____________
+test_pr_sheet_carry_any_card_2636.py:64: in test_f02_a_finding_is_carried_by_an_accept_item_card
+    assert item_card(sheet)["context"] == [{"title": WORDS["ifLeft"], "blocks": [{"paragraph": ITEM["ifLeft"]}]}, carried_section(GIFT["title"])]
+E   AssertionError: assert [{'title': 'I... wording.'}]}] == [{'title': 'I...he buyer']}]}]
+E     Right contains one more item: {'title': 'The review findings this decides', 'blocks': [{'bullets': ['Gift receipts read oddly to the buyer']}]}
+FAILED ...::test_f02_a_finding_is_carried_by_an_accept_item_card
+1 failed, 16 deselected in 1.75s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1654:                           [_section(words["ifLeft"], block, it["ifLeft"]),` and `1655:                            *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.85s
+```
+
+### F3: a finding key that names no finding is refused
+
+- **Guarded element / axis:** `pr_sheet.py:1575`, `elif len(target) != 1:`. Axis: a `{"finding": key}` reference needs exactly one left-for-owner finding; a key that names none (or an ambiguous one) is refused with `names no card on this sheet`.
+- **Neutralization:** `elif len(target) != 1:` became `elif False:`. The red is a crash, not a missing refusal: the next branch indexes `target[0]` of an empty list.
+- **Raw red** (`-k f03`; the traceback's source-echo and caret lines are trimmed):
+
+```
+F                                                                        [100%]
+__________ test_f03_a_finding_reference_naming_no_finding_is_refused ___________
+test_pr_sheet_carry_any_card_2636.py:73: in test_f03_a_finding_reference_naming_no_finding_is_refused
+    assert problems_of(records, advisor) == [f"leftovers {GIFT['findingKey']}: carriedBy finding shop/no-such-finding names no card on this sheet"]
+test_pr_sheet.py:58: in problems_of
+    build(records, advisor, previous)
+pr_sheet.py:1579: in build
+    elif disposition.get(target[0]) == "carried":
+E   IndexError: list index out of range
+FAILED ...::test_f03_a_finding_reference_naming_no_finding_is_refused
+1 failed, 16 deselected in 1.80s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1575:        elif len(target) != 1:`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.82s
+```
+
+### F4: a finding with no card of its own cannot carry
+
+- **Guarded element / axis:** `pr_sheet.py:1582`, `elif disposition.get(target[0]) != "card":`. Axis: the finding a reference names must have a card of its own; a craft-determined finding is a decided-for-you entry and no card. A finding fixed above, or one with no entry, takes the same branch (no row of its own).
+- **Neutralization:** the condition became `elif False:`.
+- **Raw red** (`-k f04`; source-echo lines trimmed):
+
+```
+F                                                                        [100%]
+__ test_f04_a_finding_reference_naming_a_craft_determined_finding_is_refused ___
+test_pr_sheet_carry_any_card_2636.py:80: in test_f04_a_finding_reference_naming_a_craft_determined_finding_is_refused
+    assert problems_of(records, advisor) == [f"leftovers {GIFT['findingKey']}: carriedBy finding {TOTAL['findingKey']} names no card on this sheet"]
+test_pr_sheet.py:57: in problems_of
+    with pytest.raises(pr_sheet.Refusal) as caught:
+E   Failed: DID NOT RAISE Refusal
+FAILED ...::test_f04_a_finding_reference_naming_a_craft_determined_finding_is_refused
+1 failed, 16 deselected in 1.98s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1579:        elif disposition.get(target[0]) == "carried":` and `1582:        elif disposition.get(target[0]) != "card":`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.77s
+```
+
+### F5: an item id that names no item is refused
+
+- **Guarded element / axis:** `pr_sheet.py:875`, `... and call["carriedBy"]["item"] not in item_ids:` in `_check_input`. Axis: `{"item": id}` must name an items entry on this input.
+- **Neutralization:** `not in item_ids:` became `in ():`.
+- **Raw red** (`-k f05`; source-echo lines trimmed):
+
+```
+F                                                                        [100%]
+_____________ test_f05_an_item_reference_naming_no_item_is_refused _____________
+test_pr_sheet_carry_any_card_2636.py:87: in test_f05_an_item_reference_naming_no_item_is_refused
+    assert problems_of(records, advisor) == [f"leftovers {GIFT['findingKey']}: carriedBy item no-such-item names no card on this sheet"]
+test_pr_sheet.py:57: in problems_of
+    with pytest.raises(pr_sheet.Refusal) as caught:
+E   Failed: DID NOT RAISE Refusal
+FAILED ...::test_f05_an_item_reference_naming_no_item_is_refused
+1 failed, 16 deselected in 1.90s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `875:            elif isinstance(call["carriedBy"], dict) and _reference(call["carriedBy"])[0] == "item" and call["carriedBy"]["item"] not in item_ids:`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.66s
+```
+
+### F6: a finding cannot carry itself
+
+- **Guarded element / axis:** `pr_sheet.py:1572`, `if me in target:`. Axis: the target key is compared by the finding it resolves to, so a finding's findingKey and its id are one finding (rows: key by key, key by id, id by key).
+- **Neutralization:** `if me in target:` became `if False:`. With the check off, a self reference falls to the chain branch, so each row gets the wrong refusal.
+- **Raw red** (`-k f06`; the three rows' `Use -v` lines trimmed):
+
+```
+FFF                                                                      [100%]
+________ test_f06_a_finding_carrying_itself_is_refused[f06-key-by-key] _________
+E   At index 0 diff: 'leftovers shop/gift-tone: carriedBy finding shop/gift-tone is itself carried; carry both on the card that carries it' != 'leftovers shop/gift-tone: carriedBy names this finding itself; a finding cannot carry itself'
+________ test_f06_a_finding_carrying_itself_is_refused[f06-key-by-id] _________
+E   At index 0 diff: 'leftovers shop/gift-tone: carriedBy finding A1 is itself carried; carry both on the card that carries it' != 'leftovers shop/gift-tone: carriedBy names this finding itself; a finding cannot carry itself'
+________ test_f06_a_finding_carrying_itself_is_refused[f06-id-by-key] _________
+E   At index 0 diff: 'leftovers A1: carriedBy finding shop/gift-tone is itself carried; carry both on the card that carries it' != 'leftovers A1: carriedBy names this finding itself; a finding cannot carry itself'
+3 failed, 14 deselected in 1.85s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1572:        if me in target:` and `1573:            problems.append(f"leftovers {at}: carriedBy names this finding itself; a finding cannot carry itself")`.
+- **Raw green** (same `-k`):
+
+```
+...                                                                      [100%]
+3 passed, 14 deselected in 1.74s
+```
+
+### F7: a chain is refused
+
+- **Guarded element / axis:** `pr_sheet.py:1579`, `elif disposition.get(target[0]) == "carried":`. Axis: a carrier is never itself carried; a finding carried by a finding that is carried by a list-item card is refused with `is itself carried`, not as `names no card`.
+- **Neutralization:** the condition became `elif False:` (the chain then falls to the F4 branch and gets the `names no card` text).
+- **Raw red** (`-k f07`):
+
+```
+F                                                                        [100%]
+_________________________ test_f07_a_chain_is_refused __________________________
+test_pr_sheet_carry_any_card_2636.py:104: in test_f07_a_chain_is_refused
+    assert problems_of(records, advisor) == [
+E   At index 0 diff: 'leftovers shop/gift-tone: carriedBy finding shop/total-line names no card on this sheet' != 'leftovers shop/gift-tone: carriedBy finding shop/total-line is itself carried; carry both on the card that carries it'
+FAILED ...::test_f07_a_chain_is_refused
+1 failed, 16 deselected in 2.04s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1579:        elif disposition.get(target[0]) == "carried":` and `1582:        elif disposition.get(target[0]) != "card":`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.77s
+```
+
+### F8: a malformed reference is refused
+
+- **Guarded element / axis:** `pr_sheet.py:871`, `elif isinstance(call["carriedBy"], dict) and _reference(call["carriedBy"]) is None:`. Axis: a carriedBy object has exactly one key, `item` or `finding`, with a non-empty string; rows: two keys, an unknown key, an empty object, a blank id, a non-string finding key, a null id.
+- **Neutralization:** the condition became `elif False:`. The red is a crash, not a missing refusal: the next branch reads `_reference(...)[0]` of `None`.
+- **Raw red** (`-k f08`, `--tb=line`; the six identical failure bodies are quoted once):
+
+```
+FFFFFF                                                                   [100%]
+E   TypeError: 'NoneType' object is not subscriptable
+pr_sheet.py:875: TypeError: 'NoneType' object is not subscriptable        (x6, one per row)
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-two-keys]
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-unknown-key]
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-empty]
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-blank-id]
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-non-string-key]
+FAILED ...::test_f08_a_malformed_reference_is_refused[f08-null-id]
+6 failed, 11 deselected in 1.89s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `871:            elif isinstance(call["carriedBy"], dict) and _reference(call["carriedBy"]) is None:`.
+- **Raw green** (same `-k`, `--tb=line`):
+
+```
+......                                                                   [100%]
+6 passed, 11 deselected in 1.85s
+```
+
+### F9: the carried findings are collected before any card is built
+
+- **Guarded element / axis:** `pr_sheet.py:1610`, the collecting pass `if (r["pr"], n) in carrier:` that runs before the card loop. Axis: a finding carried by a finding that comes later in the record lands on that card, with its lines in record order.
+- **Neutralization:** the condition became `if (r["pr"], n) in carrier and not (carrier[(r["pr"], n)][0] == "finding" and carrier[(r["pr"], n)][1] > (r["pr"], n)):`, which drops the lines whose carrier is later in record order (what collecting as the cards are built would do).
+- **Raw red** (`-k f09`):
+
+```
+F                                                                        [100%]
+__________ test_f09_a_finding_carried_by_a_later_findings_card_lands ___________
+test_pr_sheet_carry_any_card_2636.py:126: in test_f09_a_finding_carried_by_a_later_findings_card_lands
+    assert leftover_card(sheet, TOTAL)["context"][-1] == carried_section(GIFT["title"], FONT["title"])
+E   Differing items:
+E   {'title': 'If left'} != {'title': 'The review findings this decides'}
+E   {'blocks': [{'paragraph': 'A customer may notice.'}]} != {'blocks': [{'bullets': ['Gift receipts read oddly to the buyer', 'The receipt font changes between pages']}]}
+FAILED ...::test_f09_a_finding_carried_by_a_later_findings_card_lands
+1 failed, 16 deselected in 1.95s
+```
+
+- **Restore:** the inverse Edit.
+- **Restore receipt:** a Grep read printed `1610:            if (r["pr"], n) in carrier:` and `1611:                carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))`.
+- **Raw green** (same `-k`):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 1.88s
+```
+
+### F10: the carrying card's id changes with what it carries; a card carrying nothing keeps its id
+
+- **Guarded element / axis:** `pr_sheet.py:1632`, the identity passed to `_card` for a leftover card, `[key, [carried keys]] if lines else key`. Axis: a carrying card's id changes with the carried finding's key (not only its title) and is stable across builds; a card that carries nothing has the id the base formula gives (`card_id("f-", pr, <finding key>, <card>)`), checked in the test by recomputing it rather than by comparing two new builds. Two arms, two neutralizations, one green after both restores.
+- **Neutralization A:** `if lines else` became `if False else` (the identity is always the bare key).
+- **Raw red A** (`-k f10`):
+
+```
+F                                                                        [100%]
+test_pr_sheet_carry_any_card_2636.py:137: in test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id
+    assert leftover_card(gift, TOTAL)["id"] != leftover_card(twin, TOTAL)["id"]
+E   AssertionError: assert 'f-bb4a7a758da3' != 'f-bb4a7a758da3'
+FAILED ...::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id
+1 failed, 16 deselected in 1.81s
+```
+
+- **Restore A:** the inverse Edit; a Grep read printed `1632:            cards.append(_card("f-", r["pr"], [f.get("findingKey") or f["id"], [k for k, _ in lines]] if lines else f.get("findingKey") or f["id"],`.
+- **Neutralization B:** `if lines else` became `if True else` (the carried identity is on every leftover card, a card that carries nothing included).
+- **Raw red B** (`-k f10`):
+
+```
+F                                                                        [100%]
+test_pr_sheet_carry_any_card_2636.py:142: in test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id
+    assert leftover_card(plain, TOTAL)["id"] == pr_sheet.card_id("f-", 211, TOTAL["findingKey"], card) != leftover_card(gift, TOTAL)["id"]
+E   AssertionError: assert 'f-8a2e62476554' == 'f-300b1e870249'
+FAILED ...::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id
+1 failed, 16 deselected in 1.88s
+```
+
+- **Restore B:** the inverse Edit; a Grep read printed `1632:            cards.append(_card("f-", r["pr"], [f.get("findingKey") or f["id"], [k for k, _ in lines]] if lines else f.get("findingKey") or f["id"],`.
+- **Raw green** (same `-k`, after both restores):
+
+```
+.                                                                        [100%]
+1 passed, 16 deselected in 2.18s
+```
+
+### WO-B disclosures
+
+- F3, F8 reds are crashes (`IndexError`, `TypeError`) and F4, F5 reds are missing refusals (`DID NOT RAISE Refusal`); F6 and F7 reds are a refusal with the wrong text. Each is red on its own axis.
+- Row f11 is the existing `test_e13` (byte identity with the base capture); it has no new element and was not edited.
+- No test pins a leftover card's id captured at `99bb98cd`: the base capture fixture holds only list-item cards. F10 pins the base identity formula by recomputing `card_id` with the finding's key as the identity; a base-captured constant would need a run at base.
+- The item reference's names-no-item refusal is raised by `_check_input` (which `build` runs first), not by a second check in `build`'s disposition loop.

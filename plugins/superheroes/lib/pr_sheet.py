@@ -51,8 +51,9 @@ that layer is not read here: the vet checks it.
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
 craft in "craft", ruling in "alreadyDecided", shown-wrong in "history", left-for-owner as a card (one with a craft
-determination lands in "decidedForYou" instead, and is no card; one carried by a list-item card (leftovers
-{"carriedBy": <number>}) lands as a line on that card, and is no card of its own; one its body marks
+determination lands in "decidedForYou" instead, and is no card; one carried by another card on the sheet (leftovers
+{"carriedBy": <reference>}: a list-item number, {"item": <items id>} or {"finding": <leftovers key>}) lands as a line on that
+card, and is no card of its own; one its body marks
 `fixed-above #<PR> <commit>`, on a stack sheet covering that higher PR, lands in "caught" as fixed above and takes neither). The words
 come from the "pr" block of theme/sheet-words.json.
 
@@ -92,11 +93,18 @@ The advisor's input is one JSON object; any key not listed is refused.
                  order. options is "none" (nothing is left to decide: the page's Accept and Discuss), a list of options, or
                  an object giving each of keep-it, fix-in-a-follow-up and fix-before-merge, and no other key, a non-empty
                  string: this finding's consequence for that option (the words' three options carry them). The bare string
-                 "leftover" is refused. A value has a third shape, {"carriedBy": <list-item number>}: the finding gets no card
+                 "leftover" is refused. A value has a third shape, {"carriedBy": <reference>}: the finding gets no card
                  of its own and no decided-for-you entry. It is listed under the named card's carriedTitle section, whose
-                 answer and the merge verdict cover it. A carriedBy that names no card is refused, and so is one beside
-                 another key or beside a second alias entry for the same finding. Accounting to its key with
-                 {"leftover": key} stays allowed.
+                 answer and the merge verdict cover it. The reference is one of three: a list-item number (an integer, or a
+                 string N or N-M) naming the collectorItems card with that number; {"item": "<id>"} naming the items entry
+                 with that id (an Accept or option card); or {"finding": "<leftovers key>"} naming the card of another
+                 left-for-owner finding, which must have a card of its own (a conventional leftovers call: not carried, not a
+                 craft determination, not fixed above). Any other reference, an object with another key or with more than one
+                 key, is refused. A carriedBy that names no card is refused (an item id that is no item; a finding key that
+                 names no finding or one with no card of its own), and so is one beside another key or beside a second
+                 alias entry for the same finding, a finding that names itself, and a chain: a finding carried by a finding
+                 that is itself carried (carry both on the card that carries it). A card that carries nothing keeps its
+                 sections and id. Accounting to a key with {"leftover": key} stays allowed.
   craftDeterminations
                  Optional. An object that re-grades left-for-owner findings as craft: a key names a finding as a leftovers key
                  does, and a value is {ground, reason}, both non-empty strings (the owner-vs-craft line's ground, and one line
@@ -341,8 +349,21 @@ def _carries(call):
 
 
 def _carried(call):
-    """True for a leftovers value that is exactly {"carriedBy": number}: the finding is listed on that list-item card."""
+    """True for a leftovers value that is exactly {"carriedBy": <reference>}: the finding is listed on the card that reference names."""
     return isinstance(call, dict) and set(call) == {"carriedBy"}
+
+
+def _reference(ref):
+    """(form, value) for a carriedBy reference, or None when it has no valid shape (the input check names the problem).
+
+    form is "list" (value: the list-item number as its canonical key), "item" (an items id) or "finding" (a leftovers key)."""
+    if isinstance(ref, dict):
+        if len(ref) == 1:
+            form, value = next(iter(ref.items()))
+            if form in ("item", "finding") and _text(value):
+                return form, value
+        return None
+    return ("list", _list_key(ref)) if _list_number(ref) else None
 
 
 def _commit(v):
@@ -839,11 +860,22 @@ def _check_input(adv, words, problems):
         problems.append("leftovers must be an object")
     entries = adv.get("collectorItems", [])
     on_sheet = {_list_key(e["number"]) for e in entries if isinstance(e, dict) and _list_number(e.get("number"))} if isinstance(entries, list) else set()
+    given_items = adv.get("items", [])
+    item_ids = {e["id"] for e in given_items if isinstance(e, dict) and isinstance(e.get("id"), str)} if isinstance(given_items, list) else set()
     for k, call in (leftovers.items() if isinstance(leftovers, dict) else ()):
         if _carries(call):
             # Axis: carriedBy stands alone in its entry; a key beside it is refused. See bite-proof record i2636_collector_cards (E6).
             if len(call) > 1:
                 problems.append(f"leftovers {k}: carriedBy takes no other key")
+            # Axis: a carriedBy object is exactly {"item": <id>} or {"finding": <leftovers key>}: any other key, a second key, or a blank or non-string value is refused. See bite-proof record i2636_collector_cards (F8).
+            elif isinstance(call["carriedBy"], dict) and _reference(call["carriedBy"]) is None:
+                problems.append(f"leftovers {k}: carriedBy must be a list-item number, {{\"item\": <items id>}} or {{\"finding\": <leftovers key>}}, "
+                                "an object with exactly that one key and a non-empty string")
+            # Axis: carriedBy {"item": id} must name an items entry on this input. See bite-proof record i2636_collector_cards (F5).
+            elif isinstance(call["carriedBy"], dict) and _reference(call["carriedBy"])[0] == "item" and call["carriedBy"]["item"] not in item_ids:
+                problems.append(f"leftovers {k}: carriedBy item {call['carriedBy']['item']} names no card on this sheet")
+            elif isinstance(call["carriedBy"], dict):
+                pass  # a finding reference names a finding, which only the build can resolve
             elif not _list_number(call["carriedBy"]):
                 problems.append(f"leftovers {k}: carriedBy must be a list-item number, an integer 1 or more or a string N or N-M")
             # Axis: carriedBy must name a collectorItems card on this sheet. See bite-proof record i2636_collector_cards (E5).
@@ -1472,7 +1504,10 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     named, decisions, listed_keys = {}, {}, {}  # listed_keys: each lookup key of a finding listed for the merge verdict, counted
     # Only with the bodies read: a bodies-less build makes no fixed-above reading, so its leftovers entry stays required.
     fixed, auto = _fixed_above(recs, bodies, kind, allowed, problems) if bodies_sound else ({}, set())
-    carrying = False  # True once a left-for-owner finding is carried by a list-item card
+    carrying = False  # True once a left-for-owner finding is carried by a card
+    holders = {}  # each lookup key of a left-for-owner finding to the (PR number, index) of every finding it names
+    disposition = {}  # (PR number, index) to "fixed", "craft", "carried" or "card" (a card of its own), for each finding a disposition reaches
+    carried_at = {}  # (PR number, index) of each carried finding to the leftovers key that carries it
     for r in recs:
         for n, f in enumerate(r["findings"]):
             if review_record.listed_for_merge(f):
@@ -1482,6 +1517,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                 keys = _lookups(kind, r["pr"], f)
                 for k in keys:
                     named[k] = named.get(k, 0) + 1
+                    holders.setdefault(k, []).append((r["pr"], n))
                 if not keys:
                     continue
                 call_at, det_at = next((k for k in keys if k in leftovers), None), next((k for k in keys if k in determined), None)
@@ -1500,6 +1536,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                     if prior is not None:
                         problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} was a decided-for-you entry on the earlier sheet and is "
                                         f"fixed above in #{claim['layer']}; a carried sheet cannot move a decided-for-you entry; republish unsigned")
+                    disposition[(r["pr"], n)] = "fixed"
                     continue
                 det = determined[det_at] if det_at is not None else prior if prior is not None and call_at is None else None
                 if earlier is not None and det_at is not None:
@@ -1511,6 +1548,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                     problems.append(f"leftovers {call_at}: a carried sheet cannot turn a decided-for-you entry back into a card; do that on an unsigned republish")
                 if call_at is not None and _carried(leftovers[call_at]):
                     carrying = True
+                    carried_at[(r["pr"], n)] = call_at
+                disposition[(r["pr"], n)] = "craft" if det is not None else "carried" if (r["pr"], n) in carried_at else "card" if call_at is not None else None
                 if det is not None:
                     decisions[(r["pr"], n)] = det
                 if det is not None and call_at is not None:
@@ -1518,9 +1557,35 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                 elif det is None and call_at is None:
                     problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} has no leftovers entry (key {keys[0]!r}); "
                                     "give it why, context and options, or a craft determination")
+    # Each carried finding's carrier, by the reference its leftovers entry gives: ("list", number key), ("item", items id) or ("finding", (PR number, index)).
+    # A list-item or item reference was checked with the input; a finding reference is resolved here, once every disposition is known.
+    carrier = {}
+    for me, at in carried_at.items():
+        form = _reference(leftovers[at]["carriedBy"])
+        if form is None:
+            continue  # malformed: the input check has named it
+        if form[0] != "finding":
+            carrier[me] = form
+            continue
+        target = holders.get(form[1], [])
+        # Axis: a finding cannot carry itself; the target key is compared by the finding it resolves to, so its id and its findingKey are the same finding. See bite-proof record i2636_collector_cards (F6).
+        if me in target:
+            problems.append(f"leftovers {at}: carriedBy names this finding itself; a finding cannot carry itself")
+        # Axis: a finding reference needs exactly one left-for-owner finding: a key that names no finding (or an ambiguous one) is refused. See bite-proof record i2636_collector_cards (F3).
+        elif len(target) != 1:
+            problems.append(f"leftovers {at}: carriedBy finding {form[1]} names no card on this sheet"
+                            + ("" if not target else f"; the key names {len(target)} findings, use a findingKey"))
+        # Axis: a carrier is never itself carried; a finding carried by a finding that is carried is refused. See bite-proof record i2636_collector_cards (F7).
+        elif disposition.get(target[0]) == "carried":
+            problems.append(f"leftovers {at}: carriedBy finding {form[1]} is itself carried; carry both on the card that carries it")
+        # Axis: the finding named must have a card of its own: a craft determination, a finding fixed above or one with no entry is refused. See bite-proof record i2636_collector_cards (F4).
+        elif disposition.get(target[0]) != "card":
+            problems.append(f"leftovers {at}: carriedBy finding {form[1]} names no card on this sheet")
+        else:
+            carrier[me] = ("finding", target[0])
     # Axis: a carried finding is shown under the card's carriedTitle; a words file with none (or a blank one) is refused, never a KeyError. See bite-proof record i2636_collector_cards (E12).
     if carrying and not _text(words.get("carriedTitle")):
-        problems.append("the words file needs carriedTitle, a non-blank string: a list-item card that carries a finding shows it under that title")
+        problems.append("the words file needs carriedTitle, a non-blank string: a card that carries a finding shows it under that title")
     for name, given in (("leftovers", leftovers), ("craftDeterminations", determined)):
         problems.extend(f"{name} key {k!r} names no left-for-owner finding" for k in given if k not in named)
         problems.extend(f"{name} key {k!r} names {named[k]} left-for-owner findings; use a finding's findingKey"
@@ -1538,7 +1603,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     recs = [by_pr[n] for n in allowed] if stack else recs
     top, tag = recs[-1], (lambda r: f"#{r['pr']}: " if stack else "")
     cards, decided_for_you, places, owners = [], [], [], []  # owners: each card's own collector number (canonical key), None for any other card
-    carried = {}  # a list-item card's canonical number to (the carried finding's first lookup key, its shown line), in record order
+    carried = {}  # a carrying card's reference to (the carried finding's first lookup key, its shown line), in record order
+    # Axis: every carried finding is collected before any card is built, so a finding carried by a card built later in record order still lands on it, and a card's lines keep record order. See bite-proof record i2636_collector_cards (F9).
+    for r in recs:
+        for n, f in enumerate(r["findings"]):
+            if (r["pr"], n) in carrier:
+                carried.setdefault(carrier[(r["pr"], n)], []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
@@ -1553,17 +1623,20 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                 continue
             call = _leftover_call(kind, r["pr"], f, leftovers)
             if _carried(call):
-                # Axis: a carried finding is no card and no decided-for-you entry; the list-item card that carries it lists it. See bite-proof record i2636_collector_cards (E8, E9).
-                carried.setdefault(_list_key(call["carriedBy"]), []).append((_lookups(kind, r["pr"], f)[0], tag(r) + _title(f)))
+                # Axis: a carried finding is no card and no decided-for-you entry; the card that carries it lists it (collected above). See bite-proof record i2636_collector_cards (E8, E9).
                 continue
             options = _options(call["options"], words, True)
-            cards.append(_card("f-", r["pr"], f.get("findingKey") or f["id"],
+            lines = carried.get(("finding", (r["pr"], n)), [])
+            # Axis: a leftover card that carries findings shows them as a last section and its id changes with what it carries; one that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (F10).
+            # Axis: a leftover card is a carrier: a finding carried by it lands as a line in its carried section, and is no card of its own. See bite-proof record i2636_collector_cards (F1).
+            cards.append(_card("f-", r["pr"], [f.get("findingKey") or f["id"], [k for k, _ in lines]] if lines else f.get("findingKey") or f["id"],
                                words["leftoverKind"] + (f" · #{r['pr']}" if stack else ""), _title(f),
                                [_section(words["whyYours"], "paragraph", call["why"]),
                                 _section(words["whatHappened"], "paragraph", call["context"]),
                                 # axis: the card shows what the bounded pass tried from the record finding's evidence, never from the advisor's text — see bite-proof record i2554_bounded_pass_record (E-card)
                                 *_loop_tried(words, f),
-                                _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
+                                _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"])),
+                                *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
             owners.append(None)
@@ -1575,13 +1648,17 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         owners.append(None)
     for it in advisor.get("items", []):
         block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
-        cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
+        lines = carried.get(("item", it["id"]), [])
+        # Axis: an Accept or option item is a carrier: a finding carried by it lands as a last section, and its id changes with what it carries; an item that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (F2).
+        cards.append(_card("i-", number, [it["id"], [k for k, _ in lines]] if lines else it["id"], it["kind"], it["title"],
+                           [_section(words["ifLeft"], block, it["ifLeft"]),
+                            *([_section(words["carriedTitle"], "bullets", [line for _, line in lines])] if lines else [])],
                            _options(it["options"], words, False), it.get("recommendation")))
         places.append(f"items {it['id']}")
         owners.append(None)
     for it in advisor.get("collectorItems", []):
         rec = it["recommendation"]
-        lines = carried.get(_list_key(it["number"]), [])
+        lines = carried.get(("list", _list_key(it["number"])), [])
         # Axis: the card that carries findings shows them as a last section and its id changes with what it carries; a card that carries none keeps its section list and id. See bite-proof record i2636_collector_cards (E10, E11).
         # Axis: a plain number's card id is the same for both spellings (1435 and "1435"), so a republish that changes only its JSON type keeps the saved answer. See bite-proof record i2636_collector_cards (E16).
         cards.append(_card("k-", number, [_card_number(it["number"]), [k for k, _ in lines]] if lines else _card_number(it["number"]),
