@@ -298,9 +298,9 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
 - A leftover goes to `craftDeterminations`, not to a card, only on one of the two grounds in
   § Decided for you, each of which means its real consequence needs no card of its own: a fix in
   another layer of the same stack, named in the ground, removed it; or a Canon entry, cited by id,
-  answers it. A leftover that asks exactly the decision another card on the same sheet asks (a leftover
-  card, an Accept or option item, or a list-item card) is carried by that card instead (`leftovers`
-  `{"carriedBy": <reference>}`), as § Decided for you says. Doubt keeps it a card, and a finding that is
+  answers it. A leftover that asks exactly the decision another card on the same sheet asks is carried
+  by that card instead, as § Decided for you says (which cards can carry, and how the `leftovers` entry
+  names one, are there). Doubt keeps it a card, and a finding that is
   the owner's call is never put under Decided for you.
 - A leftover whose PR body carries `fixed-above #<PR> <commit>` for it, on a stack sheet covering that
   higher PR, is shown in caught as fixed above by the build itself: give it no `leftovers` or
@@ -431,11 +431,12 @@ writes each one in the `craftDeterminations` key of its input, whose shape is in
 fixed above is not a decided-for-you entry; it is in caught.
 
 A left-for-owner finding that asks exactly the decision another card on the same sheet asks is not a
-decided-for-you entry. Any card on that sheet may carry it: a leftover card, an Accept or option item,
-or a list-item card. It is carried by that card (`leftovers` `{"carriedBy": <reference>}`: a list-item
-number, `{"item": "<id>"}` for an item, or `{"finding": "<leftovers key>"}` for another leftover's
-card), listed on it, and covered by its answer and the merge verdict. A card that carries is never itself
-carried. A finding that is the owner's call never goes under Decided for you.
+decided-for-you entry. Another leftover's card, an Accept or option item from the input's `items` (never
+the closure card the build adds), or a list-item card may carry it. Its `leftovers` entry names the
+carrier, in the reference forms the docstring of `lib/pr_sheet.py` defines, which also says which cards
+each form can name. The finding is listed on that card and covered by its answer and the merge verdict.
+A card that carries is never itself carried. A finding that is the owner's call never goes under Decided
+for you.
 
 A carried sheet keeps the earlier sheet's entries. The builder refuses a carry that adds a determination,
 changes one, or turns one back into a card, because each of those changes what the owner decides.
