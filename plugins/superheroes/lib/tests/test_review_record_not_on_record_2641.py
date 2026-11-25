@@ -176,73 +176,82 @@ def _loaded_name(node):
 
 
 _TEMPLATES = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE"}
+# The only places review_record may read a clause template: (enclosing function, the names its assignment binds).
+# `shown_reason` builds the owner's text in its two `clause =` assignments; `_recheck_decisions` builds the
+# demotion row's text in its `new, why, failed =` tuple. Each read must be the left side of the `%` that is that
+# assignment's value, or one element of its tuple value.
+_ALLOWED_SITES = {("shown_reason", ("clause",)): 2, ("_recheck_decisions", ("new", "why", "failed")): 1}
 
 
 def _template_misreads(tree):
-    """(count of template reads, the reads that do anything but build shown text).
+    """(reads per allowed site, the reads anywhere else).
 
-    The allowed shapes, and only these: the template is the left side of a `%` format; that formatted clause,
-    optionally joined with `+` into longer text, is then the whole value of an assignment or a return, or one
-    element of a tuple that is the whole value of an assignment or a return. Every other use reads the clause as
-    something other than shown text and fails: an operand of a comparison (`==`, `in`), an argument to a call
-    (`reason.split(...)`, `startswith(...)`), the receiver of a method, a subscript. No call that only assembles
-    shown text exists in review_record, so no call is allowed."""
+    The census names its allowed build sites (`_ALLOWED_SITES`) and fails every other read of a clause template in
+    the module, whatever it does: a comparison, a call, a method, a subscript, or an assignment in any other function
+    or to any other name. It does not trace a value after those named sites: what `shown_reason` does with `clause`,
+    or `_recheck_decisions` with `why`, is the review's to read, so a new use of a template anywhere needs a reviewed
+    change to this test."""
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    seen, bad = 0, []
+    found, bad = {}, []
     for node in ast.walk(tree):
         if _loaded_name(node) not in _TEMPLATES:
             continue
-        seen += 1
-        parent = parents.get(node)
-        if not (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mod) and parent.left is node):
-            bad.append((node.lineno, "not the left side of a % format"))
-            continue
-        built = parent
-        while isinstance(parents.get(built), ast.BinOp) and isinstance(parents[built].op, ast.Add):
-            built = parents[built]  # joined into longer text with `+`
-        holder = parents.get(built)
-        if isinstance(holder, ast.Tuple):
-            holder = parents.get(holder)
-            whole = isinstance(holder, (ast.Assign, ast.Return)) and isinstance(holder.value, ast.Tuple)
+        fmt, func, holder = parents.get(node), node, None
+        while func is not None and not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = parents.get(func)
+        if isinstance(fmt, ast.BinOp) and isinstance(fmt.op, ast.Mod) and fmt.left is node:
+            up = parents.get(fmt)
+            holder = parents.get(up) if isinstance(up, ast.Tuple) else up
+            if not (isinstance(holder, ast.Assign) and (holder.value is fmt or holder.value is up) and len(holder.targets) == 1):
+                holder = None
+        names = None
+        if holder is not None:
+            target = holder.targets[0]
+            elts = target.elts if isinstance(target, ast.Tuple) else [target]
+            if all(isinstance(e, ast.Name) for e in elts):
+                names = tuple(e.id for e in elts)
+        site = (func.name if func is not None else None, names)
+        if site in _ALLOWED_SITES:
+            found[site] = found.get(site, 0) + 1
         else:
-            whole = isinstance(holder, (ast.Assign, ast.AnnAssign, ast.Return)) and holder.value is built
-        if not whole:
-            bad.append((node.lineno, "formatted clause used other than to build shown text"))
-    return seen, bad
+            bad.append((node.lineno, site))
+    return found, bad
 
 
-def test_n7_no_clause_template_is_read_as_anything_but_the_left_side_of_a_percent_format():
-    # Axis: the no-reader census, a template is formatted to be shown and never searched, split or matched.
-    seen, bad = _template_misreads(_source_of(rr))
-    assert bad == [], f"review_record reads a clause template other than to build shown text: {bad}"
-    assert seen >= 3
+def test_n7_a_clause_template_is_read_only_at_its_named_build_sites():
+    # Axis: the no-reader census, review_record reads a clause template only at the build sites the census names, the expected number of times.
+    found, bad = _template_misreads(_source_of(rr))
+    assert bad == [], f"review_record reads a clause template outside its named build sites: {bad}"
+    assert found == _ALLOWED_SITES
 
 
 @pytest.mark.parametrize("src", [
     pytest.param("if (_DEMOTED_CLAUSE % x) in reason:\n    pass\n", id="membership"),
     pytest.param("ok = reason == _UNMET_CLAUSE % (a, b)\n", id="equality"),
-    pytest.param('if ("; " + _DEMOTED_CLAUSE % x) in reason:\n    pass\n', id="joined-then-membership"),
     pytest.param("parts = reason.split(_DEMOTED_CLAUSE % why)\n", id="call-argument"),
-    pytest.param("ok = reason.startswith(_UNMET_CLAUSE % (a, b))\n", id="string-method"),
-    pytest.param("at = (_DEMOTED_CLAUSE % why).find(x)\n", id="method-receiver"),
     pytest.param("parts = reason.split(_DEMOTED_CLAUSE)\n", id="bare-read"),
+    pytest.param("def other(r, w):\n    x = _DEMOTED_CLAUSE % w\n    return x in r\n", id="through-a-variable"),
+    pytest.param("def shown_reason(f):\n    x = _DEMOTED_CLAUSE % w\n", id="named-function-other-name"),
+    pytest.param("def shown_reason(f):\n    clause: str = _DEMOTED_CLAUSE % w\n", id="named-function-annotated"),
+    pytest.param("def _recheck_decisions(fs):\n    if (_DEMOTED_CLAUSE % t) in r:\n        pass\n", id="named-function-compare"),
 ])
-def test_n7_the_census_refuses_a_template_used_to_match(src):
-    # Axis: the census bites on every use of a clause template but building shown text.
-    seen, bad = _template_misreads(ast.parse(src))
-    assert seen == 1 and len(bad) == 1, (src, bad)
+def test_n7_the_census_refuses_a_template_read_outside_its_named_sites(src):
+    # Axis: the census bites on any read of a clause template that is not one of its named build sites.
+    found, bad = _template_misreads(ast.parse(src))
+    assert found == {} and len(bad) == 1, (src, found, bad)
 
 
-@pytest.mark.parametrize("src", [
-    pytest.param("clause = _DEMOTED_CLAUSE % why\n", id="assigned"),
-    pytest.param("clause = _UNMET_CLAUSE % (label, why)\n", id="assigned-two-values"),
-    pytest.param("new, why, failed = left, _DEMOTED_CLAUSE % text, text\n", id="tuple-assigned"),
-    pytest.param("shown = reason + '; ' + _DEMOTED_CLAUSE % why\n", id="joined-then-assigned"),
-    pytest.param("def f():\n    return _DEMOTED_CLAUSE % why\n", id="returned"),
+@pytest.mark.parametrize("src, site", [
+    pytest.param("def shown_reason(f):\n    clause = _UNMET_CLAUSE % (label, why)\n", ("shown_reason", ("clause",)),
+                 id="shown-reason-linked"),
+    pytest.param("def shown_reason(f):\n    clause = _DEMOTED_CLAUSE % why\n", ("shown_reason", ("clause",)),
+                 id="shown-reason-plain"),
+    pytest.param("def _recheck_decisions(fs):\n    new, why, failed = left, _DEMOTED_CLAUSE % text, text\n",
+                 ("_recheck_decisions", ("new", "why", "failed")), id="recheck-demotion-tuple"),
 ])
-def test_n7_the_census_allows_every_shape_that_only_builds_shown_text(src):
-    # Axis: the allowed shapes named in `_template_misreads` pass, so the census never forces a change to the code.
-    assert _template_misreads(ast.parse(src)) == (1, [])
+def test_n7_the_census_allows_each_named_build_site(src, site):
+    # Axis: each named build site passes, so the census never forces a change to the code it names.
+    assert _template_misreads(ast.parse(src)) == ({site: 1}, [])
 
 
 def test_n8_a_two_round_bound_demotes_with_the_field_and_recovers_with_no_clause():

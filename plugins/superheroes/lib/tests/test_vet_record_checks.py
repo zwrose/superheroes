@@ -231,8 +231,18 @@ def test_entry_keys_name_the_not_on_record_field_by_the_writers_constant():
     tree = ast.parse(open(os.path.abspath(__file__), encoding="utf-8").read())
     (entry,) = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == "_ENTRY_KEYS" for t in n.targets)]
-    literal_keys = [k.value for k in entry.keys if isinstance(k, ast.Constant)]
-    assert rr.NOT_ON_RECORD_FIELD not in literal_keys, "_ENTRY_KEYS spells the writer's field as a literal"
+    def is_writers_constant(k):
+        return (isinstance(k, ast.Attribute) and k.attr == "NOT_ON_RECORD_FIELD"
+                and isinstance(k.value, ast.Name) and k.value.id == "rr")
+
+    def spelled(k):  # what a key that is not the writer's constant evaluates to: a literal, or a module name
+        if isinstance(k, ast.Constant):
+            return k.value
+        return globals().get(k.id) if isinstance(k, ast.Name) else None
+
+    assert [is_writers_constant(k) for k in entry.keys].count(True) == 1, "_ENTRY_KEYS does not key the field by rr.NOT_ON_RECORD_FIELD"
+    copies = [ast.unparse(k) for k in entry.keys if not is_writers_constant(k) and spelled(k) == rr.NOT_ON_RECORD_FIELD]
+    assert copies == [], f"_ENTRY_KEYS spells the writer's field by a copy: {copies}"
     assert _ENTRY_KEYS.get(rr.NOT_ON_RECORD_FIELD) == "findings"
 
 
