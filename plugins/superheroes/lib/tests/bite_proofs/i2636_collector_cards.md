@@ -584,3 +584,10 @@ Added after vet 1028, by the build session, with the same rules as above (one Ed
 - **Neutralization:** `r")(?!\w)(?!-\d)")` became `r")(?!\w)")`.
 - **Raw red:** `e26-trailing-dash-guard` failed with the same refusal naming `('1501')`; `1 failed, 1 passed, 78 deselected in 1.28s`.
 - **Restore receipt:** the inverse Edit; `git diff --stat` showed only the test file changed. **Raw green:** `2 passed, 78 deselected in 1.23s`.
+
+### E27: a carried finding lands on its card whichever spelling carriedBy uses
+
+- **Guarded element / axis:** the card loop's `carried.setdefault(_list_key(call["carriedBy"]), [])`. Axis: a `carriedBy` written as an integer finds a card whose number is the string `"2273"` (and the reverse), and the finding is listed in that card's carried section. This was added to test_e08 at the returning review's fix step.
+- **Neutralization:** `_list_key(call["carriedBy"])` became `call["carriedBy"]` (the raw spelling).
+- **Raw red** (`-k e08`): `e08-string-card` failed. The card's last section was `{'title': 'If left'}`, not `{'title': 'The review findings this decides'}`. Result: `1 failed, 2 passed, 77 deselected in 1.67s`. The `e08-int-card` row (an integer card with `carriedBy` `"2273"`) stays green under it, because the raw string already equals that card's canonical key.
+- **Restore receipt:** the inverse Edit, then `git diff --stat` showed only the test file. **Raw green:** `3 passed, 77 deselected in 9.52s`.

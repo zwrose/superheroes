@@ -240,6 +240,8 @@ def test_e08_a_carried_finding_makes_no_card_of_its_own(card, by):
     # Bites on: a carried finding falling through to a card of its own.
     sheet = build(*small((card, 1501), [GIFT], {GIFT["findingKey"]: {"carriedBy": by}}))
     assert leftover_cards(sheet) == [] and len(sheet["cards"]) == 2 and all(c["question"] != GIFT["title"] for c in sheet["cards"])
+    # ...and it lands on the carrying card, whichever spelling carriedBy and the card's number use.
+    assert card_for(sheet, card)["context"][-1] == {"title": WORDS["carriedTitle"], "blocks": [{"bullets": [GIFT["title"]]}]}
 
 
 def test_e09_a_carried_finding_is_not_a_decided_for_you_entry():
