@@ -22,6 +22,7 @@ for _p in (_HERE, _LIB):
 
 import session_contract as SC  # noqa: E402
 import test_c1l4_gates_retired as G  # noqa: E402
+import test_kept_head_resolver_2393 as KH  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 
 RD = TRD.RD
@@ -142,3 +143,42 @@ def test_e5_a_round_one_with_only_an_owner_choice_blocker_is_stamped_and_ends_on
     assert state["certification"]["shape"] is None
     assert "widen the API" in state["certification"]["reason"]
     assert sorted(state["rounds"]) == ["1"] and "breakItKept" not in state["rounds"]["1"]
+
+
+# --- the kept check at the final commit, through a real repository (test_kept_head_resolver_2393's World) ---
+
+def _world_with_a_held_choice(tmp_path):
+    """A fixed break-it finding whose test the kept check runs at the session head, beside an unsettled held
+    owner choice: the hand-back path reaches `check_kept` itself, past every early return."""
+    world = KH.World(tmp_path)
+    world.fixed_finding()
+    world.state["ownerChoiceHeld"] = [G._CHOICE_KEY]
+    world.state[SC.DISPOSITION_LEDGER_KEY].append(_choice_row())
+    return world
+
+
+def _hand_back_at(world):
+    rounds_before = copy.deepcopy(world.state["rounds"])
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True, session_dir=world.session_dir)
+    assert world.state["terminal"] == "handed-back"
+    assert _kinds(world.state)[-1] == "owner-choice-open", _kinds(world.state)
+    assert "break-it-kept" not in _kinds(world.state), _kinds(world.state)
+    assert world.state["rounds"] == rounds_before  # the hand-back path recorded no breakItKept row
+    return world.state["certification"]
+
+
+def test_k1_a_kept_test_at_the_final_commit_is_checked_and_still_stamps(tmp_path):
+    """axis: K-run — a fixed finding's test that passes at the final commit leaves the stamp, and the check writes nothing: the run record never stands in for the write flag — see bite-proof record i2638_owner_choice_only"""
+    world = _world_with_a_held_choice(tmp_path)
+    world.write_meta(headSha=world.fix())
+    cert = _hand_back_at(world)
+    assert cert["ownerChoiceOnly"] is True and "ownerChoiceGap" not in cert, cert
+
+
+def test_k2_a_test_missing_at_the_final_commit_leaves_the_gap(tmp_path):
+    """axis: K-head — a fixed finding's test absent from the final commit is found by the kept check on the hand-back path, so the gap names it and no stamp is set — see bite-proof record i2638_owner_choice_only"""
+    world = _world_with_a_held_choice(tmp_path)
+    world.fix()  # the fix exists, but the session head stays the setup head, which holds no test
+    cert = _hand_back_at(world)
+    assert "ownerChoiceOnly" not in cert, cert
+    assert KH.TEST_PATH in cert["ownerChoiceGap"] and "not-in-head" in cert["ownerChoiceGap"], cert

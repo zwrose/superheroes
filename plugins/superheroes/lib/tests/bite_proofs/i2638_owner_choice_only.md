@@ -296,3 +296,23 @@ FAILED ...::test_r8_every_other_hand_back_kind_never_takes_the_stamp_and_keeps_t
 .......                                                                  [100%]
 7 passed, 14 deselected in 2.58s
 ```
+
+## (K-run) the kept check's run record never stands in for the write flag
+
+Guarded element: in `_break_it_kept_gap` of `plugins/superheroes/lib/round_driver.py`, the run record the kept check
+runs is named `run_record`, so the `record` parameter a caller passed (`record=False` on the owner-choice hand-back)
+still decides whether the check writes the `breakItKept` rows and the `break-it-kept` decision. Guarding tests:
+`test_k1_a_kept_test_at_the_final_commit_is_checked_and_still_stamps` and
+`test_k2_a_test_missing_at_the_final_commit_leaves_the_gap` in `test_owner_choice_only_2638.py`, which reach
+`break_it.check_kept` through a real repository (the `World` fixture of `test_kept_head_resolver_2393.py`).
+
+- Neutralization (targeted edit, then the inverse edit): `run_record = _restored_run_record(...)` became
+  `run_record = record = _restored_run_record(...)`, the shadowing a review round found.
+- Raw red, `-k "k1 or k2"`, trimmed to the assertions:
+
+```
+E       AssertionError: ['break-it-run', 'owner-choice-open', 'break-it-kept']
+E       assert 'break-it-kept' == 'owner-choice-open'
+```
+
+- Raw green after the inverse edit, the six kept-check and owner-choice suites together: `130 passed in 9.02s`.

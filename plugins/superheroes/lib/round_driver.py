@@ -11931,9 +11931,10 @@ def _break_it_kept_gap(state, config, session_dir=None, *, record=True):
             rows.append(row)
             failed.append(row)
             continue
-        record = _restored_run_record(state, key, run, latest_round[key], entry)
+        # axis: the run record is its own name, never `record`, so the write-control flag a caller passed still decides whether this check writes — see bite-proof record i2638_owner_choice_only (K-run)
+        run_record = _restored_run_record(state, key, run, latest_round[key], entry)
         interpreter = break_it.resolve_interpreter(config)
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, record,
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run_record,
                                   interpreter=interpreter)
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
@@ -11946,7 +11947,7 @@ def _break_it_kept_gap(state, config, session_dir=None, *, record=True):
                 row["stack"] = {"read": "failed", "reason": stack_failure}
             elif layers is not None:
                 found = break_it_layers.check_kept_in_layers(config.get("repoRoot"), config.get("baseRef"), layers,
-                                                             record, interpreter=interpreter)
+                                                             run_record, interpreter=interpreter)
                 if found["read"] != "ok":
                     row["stack"] = {"read": "failed", "reason": found["reason"], "searched": found["searched"]}
                 # axis: the step credits a copy found in a higher layer, naming the layer and commit, and does not park it — see bite-proof record wo_a_2463_stack_layers
