@@ -43,6 +43,8 @@ calls.
   comment, its first line the `<!-- superheroes:vet-receipt -->` marker) and
   `draft-slot<ordinal>.md` (the text that goes beneath the `<!-- superheroes:advisor-vet -->`
   marker, its first line the verdict line).
+- **The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p` and
+  use only to move your own files into, as the clean-up rule below says.
 
 Nothing else. You **post nothing** — no comment, review, reaction or label, by any tool or command;
 you **write no PR body** and never run `lib/vet_slot.py write`; you **file nothing** (no issue, no
@@ -54,8 +56,10 @@ checks the PR and the worktree list after you return.
 delete, by any tool or command, not even on a path you made yourself: on the owner's machine every
 delete stops and waits for the owner's approval. You clean up in two ways only:
 
-- **Move** a file you made and no longer need into `<draft directory>/scratch/` with `mv`, one file
-  per call, and leave it there.
+- **Move** a file you made and no longer need into `<draft directory>/scratch/` with `mv -n`, one
+  file per call, and leave it there. `-n` never replaces a file already in the folder, so give each
+  file a name no file there has yet (for example prefixed with its ordinal), and check that it left
+  its old place.
 - **Remove your own worktree** with `git worktree remove <draft directory>/wt-<ordinal>`, without
   `--force`, before you return. First undo each probe mutation with the inverse edit and move any
   file you added there into the scratch folder, so git finds the worktree clean. If git still

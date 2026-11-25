@@ -108,15 +108,19 @@ def test_vet_drafter_never_deletes_and_names_its_two_clean_up_moves():
     # axis: the never-delete rule stands as its bold sentence (#2644) — see bite-proof record i2644_vet_drafter_no_delete (D-rule)
     assert "**You never delete a file.**" in body, "vet-drafter body no longer states the never-delete rule"
     # axis: the first clean-up move, a move into the scratch folder, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-move)
-    assert "into `<draft directory>/scratch/` with `mv`" in body, (
+    assert "into `<draft directory>/scratch/` with `mv -n`" in body, (
         "vet-drafter body no longer names the move into its scratch folder as a clean-up"
+    )
+    # axis: the scratch folder is a place the drafter may write, so the move has a destination — see bite-proof record i2644_vet_drafter_no_delete (D-scratch)
+    assert "**The scratch folder**, `<draft directory>/scratch/`, which you may create with `mkdir -p`" in body, (
+        "vet-drafter body no longer lists the scratch folder among the places it may write"
     )
     # axis: the second clean-up move, a plain worktree removal, stays named — see bite-proof record i2644_vet_drafter_no_delete (D-remove)
     assert "`git worktree remove <draft directory>/wt-<ordinal>`, without `--force`" in body, (
         "vet-drafter body no longer names the plain `git worktree remove` without `--force`"
     )
-    # axis: no forced worktree removal is ever offered, in either flag form — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
-    forced = re.findall(r"git worktree remove (?:--force|-f)\b", body)
+    # axis: no forced worktree removal is ever offered, in either flag form, before or after the path — see bite-proof record i2644_vet_drafter_no_delete (D-noforce)
+    forced = re.findall(r"git worktree remove[^`]*?\s(?:--force|-f)\b", body)
     assert forced == [], f"vet-drafter body offers a forced worktree removal: {forced!r}"
 
 
