@@ -174,6 +174,59 @@ E       AssertionError: vet-drafter body offers a forced worktree removal: ['git
 
 - Restore: clause removed by the inverse edit. Raw green: `1 passed, 5 deselected in 0.18s`
 
+## Review round 2 (changed and added elements, at `9e692fad`)
+
+Round 2 changed two elements and added one: (D-scratch) now reads only the `## Where you may write` list up to
+`Nothing else.`, so the bullet counts only inside the write allowlist; (D-noforce) now also reads git's `-C <path>` and
+`-c <k=v>` before `worktree` (`git(?:\s+-[Cc]\s+\S+)*\s+worktree\s+remove[^\`]*?\s(?:--force|-f)\b`); and (D-ignored) is
+new: the drafter runs `git status --porcelain --untracked-files=all --ignored` before the plain removal, because git
+removes ignored files with a clean worktree. Same method, in a detached probe worktree at `9e692fad`; restore receipt for
+every element: `git status --porcelain` printed nothing after the inverse edit; the probe worktree was then removed with
+a plain `git worktree remove`.
+
+### (D-scratch) relocation, the spelling the reviewer named
+
+- Neutralization: the scratch-folder bullet moved, unchanged, from the write allowlist to just below "You clean up in two
+  ways only:".
+- Raw red (the long repr of the allowlist slice is elided):
+
+```
+E       AssertionError: vet-drafter's `Where you may write` list no longer names the scratch folder
+1 failed, 5 deselected in 0.24s
+```
+
+- Raw green: `1 passed, 5 deselected in 0.23s`
+
+### (D-ignored) ignored files listed first
+
+- Neutralization: `` `git status --porcelain --untracked-files=all --ignored` `` became `` `git status --porcelain` ``.
+- Raw red:
+
+```
+E       AssertionError: vet-drafter body no longer has the drafter list ignored files before removing its worktree
+1 failed, 5 deselected in 0.20s
+```
+
+- Raw green: `1 passed, 5 deselected in 0.19s`
+
+### (D-noforce) with git's `-C`, and the plain form again under the wider pattern
+
+- Neutralization 1: the worktree bullet regained ``, and remove it with `git -C ./repo worktree remove ./wt-1 --force` ``.
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git -C ./repo worktree remove ./wt-1 --force']
+1 failed, 5 deselected in 0.19s
+```
+
+- Neutralization 2: the same clause as `git worktree remove --force`.
+
+```
+E       AssertionError: vet-drafter body offers a forced worktree removal: ['git worktree remove --force']
+1 failed, 5 deselected in 0.20s
+```
+
+- Restore: clause removed by the inverse edit. Raw green: `1 passed, 5 deselected in 0.19s`
+
 ## Not covered
 
 The test pins words, not behaviour: it cannot show that a dispatched vet-drafter obeys the rule, and nothing in the
