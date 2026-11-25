@@ -350,6 +350,7 @@ FAILED ...::test_e14_the_page_shows_each_carried_finding_on_its_own_card_and_the
 
 ## E11: the carried identity is in the card id
 
+- **Later fix:** GIFT_TWIN at first differed from GIFT in its reviewer id as well as its findingKey, so this proof could not tell which of the two the id hashes. The twin now shares GIFT's reviewer id. The isolated proof is F11 under "Returning review fixes" below.
 - **Guarded element / axis:** `pr_sheet.py:1557`, `[it["number"], [k for k, _ in lines]] if lines else it["number"]` as the identity passed to `_card`. Axis: a card's id changes with what it carries (the finding's key, not only its title) and is stable across builds; a card that carries nothing keeps its id from base (`k-42f04a278896`, `k-3fb4fe9f3b5f`).
 - **Neutralization:** the identity became `it["number"]` (the number alone).
 - **Raw red** (`-k e11`). Of the two e11 tests only the first is red: the second pins the base ids of cards that carry nothing, which this neutralization does not move. The first test was edited once before this red (its last assertion compared the 1501 card across two sheets in which 1501 itself carried the finding; it now compares the 2273 card that carries nothing with the same card on a sheet with no finding at all), so the first red is not a run of the file as first written:
@@ -845,6 +846,7 @@ FAILED ...::test_f09_a_finding_carried_by_a_later_findings_card_lands
 
 ### F10: the carrying card's id changes with what it carries; a card carrying nothing keeps its id
 
+- **Later fix:** the GIFT_TWIN this entry compares now shares GIFT's reviewer id, so only the findingKey differs. The isolated proof is F11 under "Returning review fixes" below.
 - **Guarded element / axis:** `pr_sheet.py:1632`, the identity passed to `_card` for a leftover card, `[key, [carried keys]] if lines else key`. Axis: a carrying card's id changes with the carried finding's key (not only its title) and is stable across builds; a card that carries nothing has the id the base formula gives (`card_id("f-", pr, <finding key>, <card>)`), checked in the test by recomputing it rather than by comparing two new builds. Two arms, two neutralizations, one green after both restores.
 - **Neutralization A:** `if lines else` became `if False else` (the identity is always the bare key).
 - **Raw red A** (`-k f10`):
@@ -886,9 +888,9 @@ FAILED ...::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_ca
 - No test pins a leftover card's id captured at `99bb98cd`: the base capture fixture holds only list-item cards. F10 pins the base identity formula by recomputing `card_id` with the finding's key as the identity; a base-captured constant would need a run at base.
 - The item reference's names-no-item refusal is raised by `_check_input` (which `build` runs first), not by a second check in `build`'s disposition loop.
 
-## Returning review fixes: F2 identity, F3 two matches, F12 the pointer check
-These entries prove the fixes of the review session over head `8d06a7d0`. Every element was re-run at commit `fe32a0d7`, where the whole fix is committed, so each restore can be checked exactly against the committed source. The detector files were left unedited throughout. Every neutralization was one Edit-tool edit in `plugins/superheroes/lib/pr_sheet.py`, undone by the inverse Edit.
-**Restore check, after every inverse Edit:** `git diff --exit-code --quiet HEAD -- plugins/superheroes/lib/pr_sheet.py` exited 0. The worktree blob equalled the HEAD blob, `bfea3fbdc173a6af30cc36bc950a186b5d6db715`, so the file was byte for byte the committed source before the next neutralization. Each entry's restore line is that check.
+## Returning review fixes: F2 identity, F3 two matches, F12 the pointer check, F16 dashed pointers
+These entries prove the review fixes made since head `8d06a7d0`. Every element was re-run at commit `aa2471e7`, where the whole fix is committed, so each restore could be checked exactly against the committed source. The detector files were left unedited throughout. Every neutralization was one Edit-tool edit in `plugins/superheroes/lib/pr_sheet.py`, undone by the inverse Edit.
+**Restore check:** `git diff --exit-code --quiet HEAD -- plugins/superheroes/lib/pr_sheet.py` exited 0, and the worktree blob equalled the HEAD blob, `20ba7c9bfbdd71f095a2f3796af8826880a41f65`. It ran after every inverse Edit, with one exception: F2's restore was followed straight by F3's neutralization. For that pair, F2's green is in F3's red run, and the check after F3's restore covers both lines. Each entry's restore line is that check.
 **Runs:** from the worktree root, `scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest <node id> ... -q -p no:cacheprovider --tb=line`, with the exact node ids each entry names (`T` stands for `plugins/superheroes/lib/tests`). Each capture is the run's `E` lines, its `FAILED` lines and its summary line; the `--tb=line` echo of each `E` line and uv's deprecation warning line are dropped.
 
 ### F2 (identity): the item card's id changes with the finding it carries
@@ -899,26 +901,43 @@ These entries prove the fixes of the review session over head `8d06a7d0`. Every 
 ```
 E   AssertionError: assert 'i-89056b157e68' != 'i-89056b157e68'
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f02_the_item_cards_id_changes_with_the_finding_it_carries
-1 failed in 3.14s
+1 failed in 1.63s
 ```
 
-- **Restore:** exit 0, blob `bfea3fbd`. **Raw green:** `1 passed in 3.51s`.
+- **Restore and raw green:** after the inverse Edit, F2 passed in the next run (F3's red run below, `1 failed, 1 passed`); the exact check after F3's restore covers this line.
 
 ### F3 (two matches): a finding reference naming two findings is refused
 - **Guarded element / axis:** `build`'s carrier resolution, `elif len(target) != 1:`. Axis: TOTAL and FONT share the reviewer id `A2`, and each has its own card by its findingKey; GIFT's `{"finding": "A2"}` is refused with the two-findings text and never lands on the first match.
-- **Node:** `T/test_pr_sheet_carry_any_card_2636.py::test_f03_a_finding_reference_naming_two_findings_is_refused`.
+- **Node:** `T/test_pr_sheet_carry_any_card_2636.py::test_f03_a_finding_reference_naming_two_findings_is_refused` (run with the F2 node).
 - **Neutralization:** `elif len(target) != 1:` became `elif not target:`. **Raw red:**
 
 ```
 E   Failed: DID NOT RAISE Refusal
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f03_a_finding_reference_naming_two_findings_is_refused
-1 failed in 2.01s
+1 failed, 1 passed in 1.69s
 ```
 
-- **Restore:** exit 0, blob `bfea3fbd`. **Raw green:** `1 passed in 1.67s`.
+- **Restore:** exit 0, blob `20ba7c9b`. **Raw green:** `1 passed in 1.83s`.
 
-### F12: the pointer check reads only what the advisor wrote
-- **Guarded element / axis:** the list-item pointer check in `build` reads `_shown(authored(card))`. `authored` blanks the question of every leftover card (the `titled` list); that question is the record finding's title. It also leaves out every section the build writes from the record (the `copied` list, filled by `from_record`). Those sections are a carried section of finding titles, a leftover's What the loop tried, and a leftover's If left when its leftovers entry gives none, which is then the finding's consequence. Everything from the advisor's input is kept. That includes an If left the advisor writes, and the closure card's receipt (`closesSpec.receipt`), which the base row `test_a_pointer_is_found_wherever_an_option_less_card_shows_text[in-the-closure-receipt]` holds as read. Axis: record text that names a list item never refuses an option-less card, and the card's own text is still read. Six arms, one node set each.
+### F11 (identity, isolated): the carried identity is the finding's key, not its reviewer id
+- **Guarded element / axis:** the first lookup key each carried line records, `_lookups(kind, r["pr"], f)[0]` (the findingKey), which every carrying card's id hashes. Axis: GIFT_TWIN now shares GIFT's reviewer id (`A1`) and title, and differs only in its findingKey. A list-item card (E11), a leftover card (F10) and an item card (F2) each carrying one or the other show equal contexts and different ids.
+- **Nodes:** `T/test_pr_sheet_collector_2636.py::test_e11_the_carried_identity_is_in_the_card_id`, `T/test_pr_sheet_carry_any_card_2636.py::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id`, `T/test_pr_sheet_carry_any_card_2636.py::test_f02_the_item_cards_id_changes_with_the_finding_it_carries`.
+- **Neutralization:** the carried line recorded `f["id"]` (the reviewer id) in place of the first lookup key. **Raw red:**
+
+```
+E   AssertionError: assert 'k-f6bdc605f0c9' != 'k-f6bdc605f0c9'
+E   AssertionError: assert 'f-760d918c0e36' != 'f-760d918c0e36'
+E   AssertionError: assert 'i-1a6a981a6f3e' != 'i-1a6a981a6f3e'
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_collector_2636.py::test_e11_the_carried_identity_is_in_the_card_id
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f10_the_carrying_cards_id_changes_with_what_it_carries_and_a_card_carrying_nothing_keeps_its_id
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f02_the_item_cards_id_changes_with_the_finding_it_carries
+3 failed in 2.78s
+```
+
+- **Restore:** exit 0, blob `20ba7c9b`. **Raw green:** `3 passed in 1.86s`.
+
+### F12: the pointer check reads what the owner answers or accepts
+- **Guarded element / axis:** the list-item pointer check in `build` reads `_shown(authored(card))`. `authored` keeps everything the owner answers or accepts, whoever wrote it: the question (on a leftover card, its finding's title), the If left (the advisor's, or the finding's consequence when the leftovers entry gives none), the recommendation and every advisor section. It leaves out the two descriptive sections the build copies from the record (the `copied` list, filled by `from_record`): a carried section of other findings' titles, and a leftover's What the loop tried. Axis: a carried title or a loop-tried history that names a list item never refuses a card; a question or If left that names one always does. Six arms.
 - **Arm A, a carried section:** nodes `T/test_pr_sheet_carried_title_pointer_2636.py::test_an_optionless_carrier_shows_a_finding_title_that_mentions_a_list_item[item]` and `[finding]`, the reviewer's break-it test, committed byte for byte. Neutralization: `carried_section` returned its section without `from_record`. Raw red:
 
 ```
@@ -926,52 +945,61 @@ E   pr_sheet.Refusal: ["items gift-wording: card 'Gift receipts keep one wording
 E   pr_sheet.Refusal: ["leftovers shop/total-line: card 'Gift receipts keep one wording' sends the owner to a list item ('Decision item 9191') instead of carrying that decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"]
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carried_title_pointer_2636.py::test_an_optionless_carrier_shows_a_finding_title_that_mentions_a_list_item[item]
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carried_title_pointer_2636.py::test_an_optionless_carrier_shows_a_finding_title_that_mentions_a_list_item[finding]
-2 failed in 1.69s
+2 failed in 1.96s
 ```
 
-  The `[item]` row is refused at the Accept item (`items gift-wording`) and the `[finding]` row at the leftover card (`leftovers shop/total-line`), each on the carried title. Restore: exit 0, blob `bfea3fbd`. Raw green: `2 passed in 1.60s`.
+  The `[item]` row is refused at the Accept item (`items gift-wording`) and the `[finding]` row at the leftover card (`leftovers shop/total-line`), each on the carried title. Restore: exit 0, blob `20ba7c9b`. Raw green: `2 passed in 1.92s`.
 - **Arm B, the carrier's own text:** node `T/test_pr_sheet_carry_any_card_2636.py::test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check`. Neutralization: a carrying card's whole context was skipped (`[] if any(s is c for s in card["context"] for c in copied) else card["context"]`). Raw red:
 
 ```
 E   Failed: DID NOT RAISE Refusal
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f12_a_carrying_cards_own_text_is_still_read_by_the_pointer_check
-1 failed in 1.77s
+1 failed in 1.97s
 ```
 
-  Restore: exit 0, blob `bfea3fbd`. Raw green: `1 passed in 1.62s`.
-- **Arm C, a leftover card's question:** node `T/test_pr_sheet_carry_any_card_2636.py::test_f13_a_leftover_cards_question_copied_from_its_finding_title_is_not_read_by_the_pointer_check`. Neutralization: `authored` kept every question (`"question": card["question"]`). Raw red:
+  Restore: exit 0, blob `20ba7c9b`. Raw green: `1 passed in 2.06s`.
+- **Arm C, a leftover card's question:** node `T/test_pr_sheet_carry_any_card_2636.py::test_f13_a_leftover_cards_question_is_read_by_the_pointer_check_whoever_wrote_it`. Neutralization: `authored` blanked every question (`"question": ""`). Raw red:
 
 ```
-E   pr_sheet.Refusal: ["leftovers shop/total-line: card 'Decision item 9191 left the thank-you line as it was' sends the owner to a list item ('Decision item 9191') instead of carrying that decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"]
-FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f13_a_leftover_cards_question_copied_from_its_finding_title_is_not_read_by_the_pointer_check
-1 failed in 1.81s
+E   Failed: DID NOT RAISE Refusal
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f13_a_leftover_cards_question_is_read_by_the_pointer_check_whoever_wrote_it
+1 failed in 1.79s
 ```
 
-  Restore: exit 0, blob `bfea3fbd`. Raw green, run with `T/test_pr_sheet.py::test_a_leftover_with_no_options_that_points_away_is_refused_naming_its_key` (a leftover's own context is still read): `2 passed in 1.79s`.
+  Restore: exit 0, blob `20ba7c9b`. Raw green: `1 passed in 1.98s`.
 - **Arm D, a leftover's What the loop tried:** node `T/test_pr_sheet_carry_any_card_2636.py::test_f14_a_leftovers_what_the_loop_tried_from_the_record_is_not_read_by_the_pointer_check`. Neutralization: the leftover card took `*_loop_tried(words, f)` without `from_record`. Raw red:
 
 ```
 E   pr_sheet.Refusal: ["leftovers shop/total-line: card 'The thank-you line may show the total' sends the owner to a list item ('Decision item 9191') instead of carrying that decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"]
 FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f14_a_leftovers_what_the_loop_tried_from_the_record_is_not_read_by_the_pointer_check
-1 failed in 1.64s
+1 failed in 1.95s
 ```
 
-  Restore: exit 0, blob `bfea3fbd`. Raw green: `1 passed in 1.72s`.
-- **Arm E1, a leftover's If left taken from its finding:** node `T/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_taken_from_its_finding_is_not_read_but_the_advisors_own_is`. Neutralization: the default If left (the finding's consequence) was built without `from_record`. Raw red:
-
-```
-E   pr_sheet.Refusal: ["leftovers shop/total-line: card 'The thank-you line may show the total' sends the owner to a list item ('Decision item 9191') instead of carrying that decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"]
-FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_taken_from_its_finding_is_not_read_but_the_advisors_own_is
-1 failed in 1.78s
-```
-
-  Restore: exit 0, blob `bfea3fbd`. The green for this node follows arm E2.
-- **Arm E2, the advisor's own If left:** the same node. Neutralization: the advisor's If left (`call["ifLeft"]`) was wrapped in `from_record`, so the check skipped it. Raw red:
+  Restore: exit 0, blob `20ba7c9b`. Raw green: `1 passed in 1.72s`.
+- **Arm E, a leftover's If left, whoever wrote it:** nodes `T/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_is_read_by_the_pointer_check_whoever_wrote_it[f15-advisor-if-left]` and `[f15-record-consequence]`. Neutralization: the If left section was wrapped in `from_record`, so the check skipped it. Raw red:
 
 ```
 E   Failed: DID NOT RAISE Refusal
-FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_taken_from_its_finding_is_not_read_but_the_advisors_own_is
-1 failed in 2.06s
+E   Failed: DID NOT RAISE Refusal
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_is_read_by_the_pointer_check_whoever_wrote_it[f15-advisor-if-left]
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_carry_any_card_2636.py::test_f15_a_leftovers_if_left_is_read_by_the_pointer_check_whoever_wrote_it[f15-record-consequence]
+2 failed in 1.97s
 ```
 
-  Restore: exit 0, blob `bfea3fbd`. Raw green, after both arms E1 and E2 were restored: `1 passed in 1.69s`.
+  Restore: exit 0, blob `20ba7c9b`. Raw green: `2 passed in 2.17s`.
+- **Kept:** the closure card's receipt is read, as before; the base row `test_a_pointer_is_found_wherever_an_option_less_card_shows_text[in-the-closure-receipt]` holds it.
+
+### F16: a pointer wording reads a dashed list-item number
+- **Guarded element / axis:** `_POINTER`'s numbers, `\d+(?:-\d+)?`, in each wording. Axis: `item 2273-1 on your list` on an option-less card is refused as `item 2273 on your list` is, and the diagnostic names the whole number.
+- **Nodes:** `T/test_pr_sheet_dashed_pointer_2636.py::test_an_optionless_carrier_cannot_send_the_owner_to_a_dashed_list_item` (the reviewer's break-it test, committed byte for byte) and `T/test_pr_sheet.py::test_an_option_less_card_that_points_to_a_list_item_is_refused[refused-dashed-item-on-your-list]`.
+- **Neutralization:** the second wording's number went back to `#?\d+`. **Raw red:**
+
+```
+E   Failed: DID NOT RAISE Refusal
+E   Failed: DID NOT RAISE Refusal
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_dashed_pointer_2636.py::test_an_optionless_carrier_cannot_send_the_owner_to_a_dashed_list_item
+FAILED plugins/superheroes/lib/tests/test_pr_sheet.py::test_an_option_less_card_that_points_to_a_list_item_is_refused[refused-dashed-item-on-your-list]
+2 failed in 2.39s
+```
+
+- **Restore:** exit 0, blob `20ba7c9b`. **Raw green:** `2 passed in 4.08s`.
