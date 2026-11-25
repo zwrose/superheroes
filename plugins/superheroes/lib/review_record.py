@@ -1939,19 +1939,53 @@ def uncertified_line(u):
     return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
 
 
-def owner_choice_only(rec):
+def _owner_choices_settled(session_findings, findings):
+    """True when the session's owner choices are all settled by the owner: every finding the session left for the owner
+    (its account outcome is left-for-owner, or it has no outcome and is a Minor or Nit) now reads `ruling` through an
+    owner-ruling citation, at least one did, and every other finding keeps the outcome the session gave it. A finding
+    the session left for the owner that the record lists for the merge verdict and leaves as the session gave it holds no
+    card, so it needs no ruling and counts as kept. The two lists are the account's findings and the record's,
+    index-aligned; any mismatch reads False (the withheld-certificate bullet of
+    skills/review-code/reference/review-record.md)."""
+    if not (isinstance(session_findings, list) and isinstance(findings, list) and len(session_findings) == len(findings)):
+        return False
+    waited = 0
+    for s, f in zip(session_findings, findings):
+        if not (isinstance(s, dict) and isinstance(f, dict)):
+            return False
+        # axis: a finding listed for the merge verdict and unchanged holds no card, so it needs no ruling; it still keeps its outcome and settles nothing on its own — see bite-proof record i2640_owner_choice_settled (S-listed)
+        listed_as_left = listed_for_merge(f) and f.get("outcome") == s.get("outcome")
+        if not listed_as_left and (s.get("outcome") == _LEFT_FOR_OWNER or (s.get("outcome") not in rfs.OUTCOMES
+                                                                           and s.get("severity") in LISTED_SEVERITIES)):
+            waited += 1
+            by = f.get("decidedBy")
+            # axis: a once-waiting finding counts as settled only as a ruling through an owner-ruling citation, never a write-time fix, a scope ruling or an uncited ruling — see bite-proof record i2640_owner_choice_settled (S-ruled)
+            if not (f.get("outcome") == _RULING and isinstance(by, dict) and by.get("kind") == finding_outcomes.OWNER_RULING):
+                return False
+        # axis: every finding the session did not leave for the owner keeps the outcome the session gave it, so no write-time promotion lifts the line — see bite-proof record i2640_owner_choice_settled (S-kept)
+        elif f.get("outcome") != s.get("outcome"):
+            return False
+    # axis: a stamped session that left nothing for the owner settles nothing — see bite-proof record i2640_owner_choice_settled (S-some)
+    return waited > 0
+
+
+def owner_choice_only(rec, settled=False):
     """True when the record leaves out the withheld-certificate line: the session wrote its own `handed-back` entry with the
-    driver's `ownerChoiceOnly`, every finding has an outcome and at least one waits for the owner (the withheld-certificate
-    bullet of skills/review-code/reference/review-record.md, under "A record whose session ended on any terminal but")."""
+    driver's `ownerChoiceOnly`, every finding has an outcome, and either at least one waits for the owner or `settled`
+    (`_owner_choices_settled`) says the owner has ruled on every finding the session left for them (the
+    withheld-certificate bullet of skills/review-code/reference/review-record.md, under "A record whose session ended on
+    any terminal but")."""
     u, findings = rec.get("uncertified"), rec.get("findings")
     if not (isinstance(u, dict) and u.get("ownerChoiceOnly") is True and u.get("terminal") == "handed-back"
             and u.get("source") == "session" and isinstance(findings, list)):
         return False
-    return (all(isinstance(f, dict) and f.get("outcome") in rfs.OUTCOMES for f in findings)
-            and any(waits_for_owner(f, findings) for f in findings))
+    if not all(isinstance(f, dict) and f.get("outcome") in rfs.OUTCOMES for f in findings):
+        return False
+    # axis: once the owner has ruled on every finding the session left for them, the line stays out and the record can read reviewed — see bite-proof record i2640_owner_choice_settled (S-branch)
+    return settled is True or any(waits_for_owner(f, findings) for f in findings)
 
 
-def _status(rec, unread=(), finding_lines=()):
+def _status(rec, unread=(), finding_lines=(), *, settled=False):
     fc, lines = rec["finalCommit"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
     # axis: a final commit the PR could not be read for is not-reviewed; a head that moved past the certified commit adds no line here (the vet's shared check decides coverage of the head) — see bite-proof record i2496_wo_b_record_commit (E-source)
@@ -1980,8 +2014,8 @@ def _status(rec, unread=(), finding_lines=()):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
     # axis: a session that did not converge never reads reviewed, whatever else is clear — see bite-proof record i2395_uncertified_record
-    # axis: a hand-back for the owner's choices alone leaves the line out only when the session's own entry carries ownerChoiceOnly, every finding has an outcome and one waits for the owner; any other record keeps it — see bite-proof record i2638_owner_choice_only
-    if rec.get("uncertified") and not owner_choice_only(rec):
+    # axis: a hand-back for the owner's choices alone leaves the line out only when the session's own entry carries ownerChoiceOnly, every finding has an outcome, and one waits for the owner or the owner has ruled on every finding the session left for them; any other record keeps it — see bite-proof records i2638_owner_choice_only and i2640_owner_choice_settled
+    if rec.get("uncertified") and not owner_choice_only(rec, settled):
         lines.append(uncertified_line(rec["uncertified"]))
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
@@ -2503,7 +2537,8 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     rec["status"], rec["parked"], lines = _status(
-        rec, [f"the raw output file {n} could not be read" for n in unread], _finding_lines(findings))
+        rec, [f"the raw output file {n} could not be read" for n in unread], _finding_lines(findings),
+        settled=_owner_choices_settled(a["findings"], findings))
     rec["whatIsMissing"] = notes + lines
     if _owner_only(rec, rec["whatIsMissing"]):
         rec["status"] = AWAITS_OWNER
