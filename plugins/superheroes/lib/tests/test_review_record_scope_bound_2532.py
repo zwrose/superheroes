@@ -144,7 +144,8 @@ def test_row2_a_citation_short_of_a_leg_stays_a_card_with_the_leg_named(case, le
     rec = build([f0], case["count"], doc=case["doc"])
     f = the_finding(rec)
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"] and rec["decisionRechecks"] == []
-    assert f["reason"] == "waits for the owner" + NOT_ON_RECORD[case["kind"]] % leg
+    assert f["reason"] == "waits for the owner" and f[rr.NOT_ON_RECORD_FIELD] == leg
+    assert rr.shown_reason(f) == "waits for the owner" + NOT_ON_RECORD[case["kind"]] % leg
     assert f["decidedBy"] == cite(case["kind"], case["url"], case["words"])
     sheet, found = cards(rec, {"f-1": CARD})
     assert len(found) == 1 and sheet["prSheet"]["alreadyDecided"] == []
@@ -169,7 +170,7 @@ def test_demotion_a_ruling_whose_scope_citation_fails_becomes_a_card():
     f = the_finding(rec)
     why = "the cited decision is not on record (%s)" % NO_SCOPE_LINE
     assert f["outcome"] == "left-for-owner" and rec["leftForOwner"] == ["f-1"]
-    assert f["reason"] == f"{why}; the owner said so"
+    assert f["reason"] == "the owner said so" and f[rr.NOT_ON_RECORD_FIELD] == NO_SCOPE_LINE
     assert rec["decisionRechecks"] == [{"finding": "f-1", "from": "ruling", "to": "left-for-owner", "why": why}]
     assert len(cards(rec, {"f-1": CARD})[1]) == 1
     kept = build([ruled], doc=doc_of(receipt("- " + SW, scope_line())))
@@ -242,7 +243,8 @@ def test_fetch_reads_each_distinct_cited_link_once_for_the_new_kinds_and_none_fo
     rec = build(items, doc=doc_of(receipt("- " + SW, scope_line())), calls=calls)
     assert calls == [("o/r", 777), ("o/r", 778), ("o/r", 779)]
     by_id = {f["id"]: f for f in rec["findings"]}
-    assert by_id["f-5"]["outcome"] == "left-for-owner" and by_id["f-5"]["reason"].endswith(NOT_ON_RECORD[SCOPE] % CRITICAL)
+    assert by_id["f-5"]["outcome"] == "left-for-owner" and by_id["f-5"][rr.NOT_ON_RECORD_FIELD] == CRITICAL
+    assert rr.shown_reason(by_id["f-5"]).endswith(NOT_ON_RECORD[SCOPE] % CRITICAL)
     assert by_id["f-4"]["outcome"] == "left-for-owner"
 
 

@@ -1,11 +1,12 @@
-"""Issue 2641: a finding that ends `ruling` carries no stale "not on record" clause an earlier unresolved read stamped.
+"""Issue 2641: a citation the record writer cannot find on record is a structured field, never text in the reason.
 
-A citation that does not resolve keeps every clause as before; the owner's quoted words, the open reason, merge marks,
-the carried suffix and `earlier:` text are kept byte for byte.
+The writer sets `decisionNotOnRecord` (the failure text `finding_outcomes.on_record` returned) on a finding that ends
+left-for-owner with a cited decision that does not resolve, and clears it when the decision resolves. The reason is
+left as it was; `review_record.shown_reason` builds the owner's text from the reason and the field. No code reads a
+clause back out of a reason; the one exception is the exact whole tail the old `settle` appended.
 """
 import ast
 import copy
-import re
 from pathlib import Path
 
 import pytest
@@ -17,21 +18,21 @@ import review_record as rr
 import review_record_session as rs
 from test_review_record_owner_ruling import ADVISOR, DOC, L2, L3, U, W, WORDS, X, account, readers, the_finding
 from test_review_record_repeat_follows_2438 import LFO, OLD, kept, mark, repeat
-from test_review_record_session import CANON_SOURCES, STANDING, Fake
+from test_review_record_session import STANDING, Fake
 
+FIELD = rr.NOT_ON_RECORD_FIELD
 BY = {"kind": "owner-ruling", "ref": {"url": U, "words": W}}
 CITE = f'owner ruling "{W}" ({U})'
-A_L2 = "the cited decision is not on record: " + L2
-B_L3 = f"the cited decision is not on record ({L3})"
-C_L3 = f"the owner ruling it cites is not on record ({L3})"
+CLAUSE_L2 = fo.UNRESOLVED_CLAUSE % L2
+TAIL = fo.LEGACY_UNRESOLVED_TAILS[1]  # the repository text, as the old settle appended it
 RESOLVES = {"repo": "o/r", "ownerRulings": {U: DOC}}
 MEMBER_RAW = "m::t@L1"
+OPEN = "waits for the owner"
 
 
 def stamped(**over):
-    """The left-for-owner finding `settle` stamps when no repository is named: shape A with the repository leg's text."""
-    got = fo.settle(X, ruling={"decidedBy": copy.deepcopy(BY)}, sources={}, open_reason="waits for the owner")
-    assert got["reason"] == "waits for the owner; " + A_L2
+    """The left-for-owner finding `settle` returns when no repository is named, with the citation kept."""
+    got = fo.settle(X, ruling={"decidedBy": copy.deepcopy(BY)}, sources={}, open_reason=OPEN)
     return {**X, "outcome": got["outcome"], "reason": got["reason"], "decidedBy": got["decidedBy"], **over}
 
 
@@ -43,105 +44,275 @@ def doc_for(words):
     return dict(DOC, body=canon.ruling_record("2026-10-18", "12:00", words, "finding f-1"))
 
 
-def test_t1_a_stamped_clause_is_gone_once_the_leftover_resolves_and_is_promoted():
-    # Axis: DoD row 1, the shape `settle` stamps goes when the write-time re-check promotes the finding to ruling.
+def test_n1_settle_writes_no_text_about_the_citation_and_the_resolving_record_reads_clean():
+    # Axis: DoD 1, `settle` leaves the reason as the open reason; a resolving write promotes it with the citation once.
+    got = fo.settle(X, ruling={"decidedBy": copy.deepcopy(BY)}, sources={}, open_reason=OPEN)
+    assert got["reason"] == OPEN and got["decidedBy"] == BY and got["outcome"] == "left-for-owner"
     rec = record(stamped())
     f = the_finding(rec)
-    assert f["outcome"] == "ruling"
-    assert f["reason"] == f"{CITE}; waits for the owner"
+    assert f["outcome"] == "ruling" and f["reason"] == f'owner ruling "{W}" ({U}); waits for the owner' and FIELD not in f
     (decided,) = pr_sheet.build([rec], ADVISOR, WORDS)["prSheet"]["alreadyDecided"]
-    assert decided["detail"] == f["reason"] and "not on record" not in decided["detail"]
+    assert decided["detail"] == f["reason"]
 
 
-def test_t2_a_carried_clause_goes_and_the_carried_suffix_stays_on_the_part_before_it():
-    # Axis: DoD row 1, the record put the words in front but kept the clause; the carried suffix moves to the part before it.
-    carried = stamped(outcome="ruling", reason=f"{CITE}; waits for the owner; {A_L2}" + rs.CARRIED)
-    f = the_finding(record(carried))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner" + rs.CARRIED
-    promoted = the_finding(record(stamped(reason=f"waits for the owner; {A_L2}" + rs.CARRIED)))
-    assert promoted["outcome"] == "ruling" and promoted["reason"] == f"{CITE}; waits for the owner" + rs.CARRIED
-
-
-def test_t3_a_shape_b_clause_in_the_middle_of_the_reason_goes():
-    # Axis: BRIEF-1, a demotion clause (shape B) between the citation and later prose is removed; the prose stays.
-    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY),
-             "reason": f"{CITE}; {B_L3}; the owner said so"}
-    f = the_finding(record(ruled))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; the owner said so"
-
-
-def test_t4_a_shape_c_clause_goes_when_the_leftover_resolves():
-    # Axis: shape C (the owner ruling it cites is not on record) is removed on promotion and the open reason stays.
-    left = {**X, "decidedBy": copy.deepcopy(BY), "reason": "waits for the owner; " + C_L3}
-    f = the_finding(record(left))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner"
-
-
-def test_t5_a_non_linked_ruling_loses_the_clause_and_gets_no_citation_prepended():
-    # Axis: BRIEF-2, an already-ruling canon finding whose citation resolves is cleaned only; nothing is prepended.
-    ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "canon", "ref": STANDING},
-             "reason": "decided earlier; the cited decision is not on record: the cited Canon entry is not on record"}
-    rec = record(ruled, fake=Fake(sources=CANON_SOURCES))
-    f = the_finding(rec)
-    assert f["outcome"] == "ruling" and f["reason"] == "decided earlier" and rec["decisionRechecks"] == []
-
-
-@pytest.mark.parametrize("words, open_reason", [
-    pytest.param("keep it; " + A_L2, "waits for the owner", id="the-whole-clause-inside-the-words"),
-    pytest.param("keep it; " + A_L2 + "; and more", "waits for the owner", id="a-whole-clause-as-a-middle-part-of-the-words"),
-])
-def test_t6_the_owners_quoted_words_are_never_split_or_matched(words, open_reason):
-    # Axis: BRIEF-4, the lead span holds the owner's words whole; only the real clause after it goes, and the citation is not doubled.
-    cite = f'owner ruling "{words}" ({U})'
-    ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": words}},
-             "reason": f"{cite}; {open_reason}; {A_L2}"}
-    f = the_finding(record(ruled, doc=doc_for(words)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{cite}; {open_reason}"
-    assert f["reason"].count(cite) == 1
-
-
-def test_t6_a_free_form_note_that_only_looks_like_a_clause_is_kept():
-    # Axis: BRIEF-4, a part whose why is not in the list is prose, so it is not dropped.
-    note = "the cited decision is not on record: an unrelated prose note"
-    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {note}"}
-    assert the_finding(record(ruled))["reason"] == f"{CITE}; {note}"
-
-
-def test_t7_a_citation_that_does_not_resolve_keeps_every_clause():
-    # Axis: DoD row 2, with no readable comment the finding stays for the owner and its stamped clause stays, as today.
+def test_n2_an_unreadable_comment_sets_the_field_and_leaves_the_reason_for_shown_reason_to_extend():
+    # Axis: DoD 2, a citation that does not resolve is a field on the finding, never text appended to its reason.
     f = the_finding(record(stamped(), doc=None))
-    assert f["outcome"] == "left-for-owner"
-    assert "the cited decision is not on record: the ruling's link is not in this repository" in f["reason"]
-    assert f["reason"] == "waits for the owner; " + A_L2 + "; " + C_L3
+    assert f["outcome"] == "left-for-owner" and f["reason"] == OPEN and f[FIELD] == L3
+    assert rr.shown_reason(f) == "waits for the owner; the owner ruling it cites is not on record (" + L3 + ")"
+    canon_left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}}
+    c = the_finding(record(canon_left, fake=Fake()))
+    assert c["outcome"] == "left-for-owner" and c["reason"] == OPEN and c[FIELD] == fo.WHY_NO_CANON_TEXT
+    assert rr.shown_reason(c) == OPEN + "; " + rr._DEMOTED_CLAUSE % fo.WHY_NO_CANON_TEXT
 
 
-@pytest.mark.parametrize("shape", [
-    pytest.param(A_L2, id="shape-A"),
-    pytest.param(B_L3, id="shape-B"),
-    pytest.param(C_L3, id="shape-C"),
+def test_n2_shown_reason_is_the_reason_unless_the_field_says_otherwise_and_never_raises():
+    # Axis: `shown_reason` reads only a non-blank string field, builds each kind's clause, and tolerates any shape.
+    assert rr.shown_reason({"reason": OPEN}) == OPEN
+    for bad in (None, "", "  ", 3, ["x"], {"a": 1}, True):
+        assert rr.shown_reason({"reason": OPEN, FIELD: bad, "decidedBy": copy.deepcopy(BY)}) == OPEN, bad
+    for kind, label in ((fo.OWNER_RULING, "owner ruling"), (fo.SCOPE_RULING, "scope ruling"), (fo.ADVISOR_BOUND, "advisor's bound")):
+        f = {"reason": OPEN, FIELD: L3, "decidedBy": {"kind": kind, "ref": {"url": U, "words": W}}}
+        assert rr.shown_reason(f) == f"{OPEN}; the {label} it cites is not on record ({L3})"
+    for by in ({"kind": "canon", "ref": STANDING}, {"kind": "residual", "ref": "r"}, {"kind": "nope"}, None, "x", 3):
+        assert rr.shown_reason({"reason": OPEN, FIELD: L3, "decidedBy": by}) == f"{OPEN}; " + rr._DEMOTED_CLAUSE % L3, by
+    for reason in ("", None, 3, ["a"]):
+        assert rr.shown_reason({"reason": reason, FIELD: L3, "decidedBy": copy.deepcopy(BY)}) == (
+            f"the owner ruling it cites is not on record ({L3})"), reason
+    assert rr.shown_reason({FIELD: L3}) == rr._DEMOTED_CLAUSE % L3
+    for odd in (None, "text", 3, [], {}):
+        rr.shown_reason(odd)  # a non-finding never raises
+
+
+def test_n2_the_sheet_lists_a_merge_listed_finding_with_the_text_shown_reason_builds():
+    # Axis: the listed-for-merge detail reads `shown_reason`, so the owner sees the failure the field carries.
+    minor = {**X, "severity": "Minor", "decidedBy": copy.deepcopy(BY)}
+    rec = rr.build_record(account([], [minor]), {**readers(doc=None), "finding_risk": lambda *args: False})
+    f = the_finding(rec)
+    assert rr.listed_for_merge(f) and f["reason"] == OPEN and f[FIELD] == L3
+    (listed,) = pr_sheet.build([rec], ADVISOR, WORDS)["prSheet"]["listed"]
+    assert listed["detail"] == "Minor: " + rr.shown_reason(f) and L3 in listed["detail"]
+
+
+def test_n3_a_demoted_ruling_keeps_its_reason_and_the_recovered_one_keeps_its_citation_once():
+    # Axis: demotion then recovery; the reason is never edited either way and the field comes and goes.
+    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; the owner said so"}
+    demoted = the_finding(record(ruled, doc=None))
+    assert demoted["outcome"] == "left-for-owner" and demoted["reason"] == f"{CITE}; the owner said so" and demoted[FIELD] == L3
+    restored = the_finding(record(demoted))
+    assert restored["outcome"] == "ruling" and restored["reason"] == f"{CITE}; the owner said so" and FIELD not in restored
+
+
+@pytest.mark.parametrize("words", [
+    pytest.param("keep it; " + fo.UNRESOLVED_CLAUSE % L2 + "; and more", id="clause-shaped-owner-words"),
 ])
-def test_t7_a_reason_holding_a_shape_is_unchanged_when_its_citation_does_not_resolve(shape):
-    # Axis: DoD row 2, fail closed; the same shapes survive when the citation does not resolve, canon and linked kinds alike.
-    reason = f"waits for the owner; {shape}"
-    canon_left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": reason}
-    assert the_finding(record(canon_left, fake=Fake()))["reason"] == reason
-    demoted = the_finding(record({**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {shape}"}, doc=None))
-    assert demoted["outcome"] == "left-for-owner" and demoted["reason"] == f"{B_L3}; {CITE}; {shape}"
+def test_n3_owner_words_that_look_like_a_clause_are_never_altered(words):
+    # Axis: no code reads a clause out of a reason, so clause-shaped owner words survive demotion and recovery whole.
+    cite = f'owner ruling "{words}" ({U})'
+    by = {"kind": "owner-ruling", "ref": {"url": U, "words": words}}
+    ruled = {**X, "outcome": "ruling", "decidedBy": by, "reason": f"{cite}; {OPEN}"}
+    demoted = the_finding(record(ruled, doc=None))
+    assert demoted["outcome"] == "left-for-owner" and demoted["reason"] == f"{cite}; {OPEN}" and demoted[FIELD] == L3
+    restored = the_finding(record(demoted, doc=doc_for(words)))
+    assert restored["outcome"] == "ruling" and restored["reason"] == f"{cite}; {OPEN}" and FIELD not in restored
+    kept_ruling = the_finding(record(ruled, doc=doc_for(words)))
+    assert kept_ruling["outcome"] == "ruling" and kept_ruling["reason"] == f"{cite}; {OPEN}"
 
 
-def test_t8_a_repeat_inheriting_a_ruling_writes_its_earlier_text_without_the_clause():
-    # Axis: BRIEF-3, the `earlier:` text of a repeat and of a merged member moved to ruling carries no stale clause.
+def test_n3_a_clause_shaped_phrase_inside_a_leftover_reason_is_kept_whole_on_promotion():
+    # Axis: a phrase shaped like the old clause that is not the whole tail of the reason is prose, so promotion only prepends.
+    reason = "keep it; " + CLAUSE_L2 + "; and more"
+    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": reason}))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {reason}"
+    unresolved = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": reason}, doc=None))
+    assert unresolved["outcome"] == "left-for-owner" and unresolved["reason"] == reason and unresolved[FIELD] == L3
+
+
+def test_n4_a_carried_field_goes_when_the_citation_now_resolves():
+    # Axis: an account finding that carries the field with its citation is written ruling, without the field.
+    carried = {**X, "decidedBy": copy.deepcopy(BY), FIELD: L3}
+    f = the_finding(record(carried))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}" and FIELD not in f
+    still = the_finding(record(carried, doc=None))
+    assert still["outcome"] == "left-for-owner" and still["reason"] == OPEN and still[FIELD] == L3
+
+
+def test_n5_the_field_is_written_only_on_a_left_for_owner_finding_with_a_citation_that_failed():
+    # Axis: a fixed finding and a left-for-owner finding with no citation never leave the writer holding the field.
+    fixed = {**X, "outcome": "fixed", "reason": "fixed in 1a2b3c4", FIELD: L3}
+    assert FIELD not in the_finding(record(fixed))
+    bare = {**X, FIELD: L3}
+    got = the_finding(record(bare))
+    assert FIELD not in got and got["outcome"] == "left-for-owner" and got["reason"] == OPEN
+    ruled_bare = {**X, "outcome": "ruling", "reason": "the owner said so", FIELD: L3}
+    assert FIELD not in the_finding(record(ruled_bare))
+    cited_fixed = {**X, "outcome": "fixed", "reason": "fixed in 1a2b3c4", "decidedBy": copy.deepcopy(BY), FIELD: L3}
+    assert FIELD not in the_finding(record(cited_fixed, doc=None))
+
+
+@pytest.mark.parametrize("bad", [
+    pytest.param("", id="empty"), pytest.param("  ", id="blank"), pytest.param(3, id="not-text"),
+    pytest.param(None, id="null"), pytest.param(["x"], id="list"),
+])
+def test_n5_a_field_that_is_not_a_non_blank_string_refuses_the_account(bad):
+    # Axis: the account validator holds the field to a non-blank string when it is present.
+    with pytest.raises(rr.Refusal) as refused:
+        record({**X, FIELD: bad})
+    assert refused.value.reason == "review-account-invalid" and refused.value.detail == f"findings[0].{FIELD}"
+
+
+@pytest.mark.parametrize("outcome", [
+    pytest.param("ruling", id="ruling-resolves-in-place"),
+    pytest.param("left-for-owner", id="leftover-is-promoted"),
+])
+def test_n6_the_whole_tail_the_old_settle_wrote_is_dropped_by_exact_match(outcome):
+    # Axis: the one text the writer still reads, the exact literal tail, is removed once and the rest stays byte for byte.
+    f = the_finding(record({**X, "outcome": outcome, "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {OPEN}" + TAIL}))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}" and FIELD not in f
+    f = the_finding(record({**X, "outcome": outcome, "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {OPEN}" + TAIL + rs.CARRIED}))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}" + rs.CARRIED
+
+
+def test_n6_a_leftover_with_the_old_tail_is_promoted_with_the_citation_and_no_tail():
+    # Axis: a left-for-owner reason the old `settle` wrote is read back as the open reason, behind the citation.
+    f = the_finding(record(stamped(reason=OPEN + TAIL)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}"
+
+
+@pytest.mark.parametrize("tail", fo.LEGACY_UNRESOLVED_TAILS, ids=[f"tail-{n}" for n in range(len(fo.LEGACY_UNRESOLVED_TAILS))])
+def test_n6_every_literal_tail_is_dropped(tail):
+    # Axis: each failure text the old `settle` wrote as a tail is an exact match, the one home being the tuple.
+    f = the_finding(record(stamped(reason=OPEN + tail)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {OPEN}"
+
+
+def test_n6_the_tail_is_dropped_once_and_only_as_a_whole_literal():
+    # Axis: `_drop_legacy_tail` uses endswith and slicing only; one tail, once, and anything else comes back as it was.
+    second = fo.LEGACY_UNRESOLVED_TAILS[3]
+    assert rr._drop_legacy_tail(OPEN + TAIL) == OPEN
+    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED) == OPEN + rs.CARRIED
+    assert rr._drop_legacy_tail(OPEN + second + TAIL) == OPEN + second
+    assert rr._drop_legacy_tail(OPEN + TAIL + rs.CARRIED + rs.CARRIED) == OPEN + TAIL + rs.CARRIED + rs.CARRIED
+    assert rr._drop_legacy_tail(TAIL) == ""
+    for same in (OPEN, "", OPEN + TAIL[:-1], OPEN + TAIL + " ", OPEN + TAIL.replace("; ", ";", 1), None, 3, ["a"]):
+        assert rr._drop_legacy_tail(same) == same, same
+
+
+def test_n6_a_reason_carrying_the_formatted_round_count_text_stays_byte_for_byte():
+    # Axis: the accepted gap, the formatted round-count text is not one literal, so an old reason carrying it keeps it.
+    old = OPEN + "; " + fo.UNRESOLVED_CLAUSE % (fo.WHY_FEWER_ROUNDS % (1, 2))
+    f = the_finding(record(stamped(reason=old)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {old}"
+    ruled = the_finding(record({**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {old}"}))
+    assert ruled["outcome"] == "ruling" and ruled["reason"] == f"{CITE}; {old}"
+
+
+def test_n6_the_older_demotion_prefix_unmet_suffix_and_a_tail_before_a_merge_mark_stay_as_written():
+    # Axis: texts no exact-tail match covers stay byte for byte, with the citation prepended where promotion applies.
+    prefix = rr._DEMOTED_CLAUSE % L3 + "; the owner said so"
+    f = the_finding(record(stamped(reason=prefix)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {prefix}"
+    suffix = OPEN + "; " + rr._UNMET_CLAUSE % ("owner ruling", L3)
+    f = the_finding(record(stamped(reason=suffix)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {suffix}"
+    merged = OPEN + TAIL + rs.MERGED_INTO_FORMAT.format("rep-1")
+    f = the_finding(record(stamped(reason=merged)))
+    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; {merged}" and rs.merged_into(f["reason"]) == "rep-1"
+    held = the_finding(record({**X, "outcome": "ruling", "decidedBy": copy.deepcopy(BY), "reason": f"{CITE}; {merged}"}))
+    assert held["outcome"] == "ruling" and held["reason"] == f"{CITE}; {merged}"
+
+
+def _source_of(module):
+    return ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+
+
+def _loaded_name(node):
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return node.id
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+        return node.attr
+    return None
+
+
+def _defined_names(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+    return names
+
+
+def test_n7_no_clause_template_is_read_as_anything_but_the_left_side_of_a_percent_format():
+    # Axis: the no-reader census, a template is formatted to be shown and never searched, split or matched.
+    templates = {"_DEMOTED_CLAUSE", "_UNMET_CLAUSE", "UNRESOLVED_CLAUSE"}
+    seen = 0
+    for module in (rr, fo):
+        tree = _source_of(module)
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        for node in ast.walk(tree):
+            if _loaded_name(node) in templates:
+                seen += 1
+                parent = parents[node]
+                assert isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mod) and parent.left is node, (
+                    f"{module.__name__}:{node.lineno} reads {_loaded_name(node)} other than as a % format")
+    assert seen >= 3
+
+
+def test_n7_the_readers_of_a_reason_clause_are_gone():
+    # Axis: the helpers that parsed a clause out of a reason, and the regex list they read, no longer exist anywhere.
+    gone = {"_strip_stale", "_peel_marks", "_without_stale_clauses", "_with_earlier", "_leads_with", "UNRESOLVED_WHYS"}
+    for module in (rr, fo, rs):
+        assert gone & _defined_names(_source_of(module)) == set(), module.__name__
+    assert "merge_mark_start" not in _defined_names(_source_of(rs)) and not hasattr(rs, "merge_mark_start")
+    for name in gone:
+        assert not hasattr(rr, name) and not hasattr(fo, name), name
+
+
+def test_n8_a_two_round_bound_demotes_with_the_field_and_recovers_with_no_clause():
+    # Axis: a real advisor-bound failure, formatted from a count the account accepts, is a field; the reason is untouched.
+    words = "bound the review at two rounds"
+    body = "\n".join([fo.VET_RECEIPT_MARKER, "## Vet receipt", "", "**Decisions.**", "- " + words,
+                      "<!-- superheroes:advisor-bound rounds=2 -->", ""])
+    url = "https://github.com/o/r/issues/7#issuecomment-777"
+    doc = {"id": 777, "issue_url": "https://api.github.com/repos/o/r/issues/7", "html_url": url, "body": body,
+           "author_association": "MEMBER", "user": {"login": "o"}}
+    by = {"kind": fo.ADVISOR_BOUND, "ref": {"url": url, "words": words}}
+    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(by), "reason": "the advisor bounded it"}
+
+    def build(finding, count):
+        a = account([], [finding])
+        a["rounds"] = {"count": count, "cap": 3, "stoppedAtCap": False}
+        return the_finding(rr.build_record(a, readers(doc=doc)))
+
+    demoted = build(ruled, -1)
+    assert demoted["outcome"] == "left-for-owner" and demoted["reason"] == "the advisor bounded it"
+    assert demoted[FIELD] == fo.WHY_FEWER_ROUNDS % (-1, 2)
+    restored = build(demoted, 2)
+    assert restored["outcome"] == "ruling" and FIELD not in restored
+    assert restored["reason"] == f'advisor\'s bound "{words}" ({url}); the advisor bounded it'
+    still = build(demoted, 1)
+    assert still["outcome"] == "left-for-owner" and still[FIELD] == fo.WHY_FEWER_ROUNDS % (1, 2)
+
+
+def test_n9_a_repeat_and_its_member_write_their_earlier_text_byte_for_byte_with_no_field():
+    # Axis: `_follow_repeats` restores the base `earlier:` text, so clause-shaped text and merge marks are kept whole.
     ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(BY)}
-    given = repeat(repeatOf=mark(kept={**kept(), "members": [MEMBER_RAW]}), reason=f"{OLD}; {A_L2}")
-    member = {**X, "id": "f-3", "title": "Merged one", "line": 30, "findingKey": MEMBER_RAW, "outcome": LFO,
-              "reason": f"merged note; {A_L2}" + rs.MERGED_INTO_FORMAT.format("f-2")}
+    old = f"{OLD}; {CLAUSE_L2}"
+    note = f"merged note; {CLAUSE_L2}" + rs.MERGED_INTO_FORMAT.format("f-2")
+    given = repeat(repeatOf=mark(kept={**kept(), "members": [MEMBER_RAW]}), reason=old)
+    member = {**X, "id": "f-3", "title": "Merged one", "line": 30, "findingKey": MEMBER_RAW, "outcome": LFO, "reason": note}
     out = rr._follow_repeats([ruled, given, member], [], lambda: RESOLVES)
-    assert out[1]["reason"] == f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + "; earlier: " + OLD
-    assert out[2]["reason"] == (f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + "; earlier: merged note"
-                                + rs.MERGED_INTO_FORMAT.format("f-2"))
     assert out[1]["outcome"] == out[2]["outcome"] == "ruling"
-    bare = repeat(reason=A_L2)
+    assert out[1]["reason"] == f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {old}"
+    assert out[2]["reason"] == f"{CITE}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + f"; earlier: {note}"
+    assert FIELD not in out[1] and FIELD not in out[2]
+    bare = repeat(reason=OLD)
     assert rr._follow_repeats([ruled, bare], [], lambda: RESOLVES)[1]["reason"] == (
+        f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}")
+    empty = repeat(reason="")
+    assert rr._follow_repeats([ruled, empty], [], lambda: RESOLVES)[1]["reason"] == (
         f"{CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1"))
 
 
@@ -173,16 +344,16 @@ def _failure_kind(tail):
     return "unhomed"
 
 
-def test_t9_the_classifier_refuses_every_inline_text_shape():
+def test_n10_the_classifier_refuses_every_inline_text_shape():
     # Axis: a literal, an f-string and an inline percent format each read as a text with no home.
     for src in ('"some failure"', 'f"some {x}"', '"unregistered failure %s" % (value,)', '"a" + b', "WHY_X + 'y'"):
         assert _failure_kind(ast.parse(src, mode="eval").body) == "unhomed", src
     assert _failure_kind(ast.parse("WHY_FEWER_ROUNDS % (a, b)", mode="eval").body) == "formatted"
 
 
-def test_t9_every_failure_text_has_one_home_and_the_cleanup_reads_it():
+def test_n10_every_failure_text_has_one_home_and_the_legacy_tails_are_built_from_them():
     # Axis: every failure return is classified, none carries a text with no home, the list holds exactly the named
-    # texts, and each one, stamped as the settle clause, is a stale clause the cleanup removes.
+    # texts, and the legacy tails are exactly what the old `settle` appended for each.
     tails = _failure_returns()
     kinds = [_failure_kind(t) for t in tails]
     assert [ast.unparse(t) for t, k in zip(tails, kinds) if k == "unhomed"] == []
@@ -190,206 +361,4 @@ def test_t9_every_failure_text_has_one_home_and_the_cleanup_reads_it():
     formatted = {t.left.id for t, k in zip(tails, kinds) if k == "formatted"}
     assert formatted == {"WHY_FEWER_ROUNDS"}
     assert {getattr(fo, n) for n in named} == set(fo.UNRESOLVED_WHY_TEXTS) and len(fo.UNRESOLVED_WHY_TEXTS) == len(named)
-    for why in fo.UNRESOLVED_WHY_TEXTS + tuple(fo.WHY_FEWER_ROUNDS % pair for pair in ((-1, 2), (0, 2), (12, 40))):
-        assert rr._without_stale_clauses("open; " + fo.UNRESOLVED_CLAUSE % why) == "open", why
-
-
-def test_t13_a_bound_that_fell_short_on_a_negative_count_resolves_without_its_clause():
-    # Axis: a real advisor-bound failure, rendered by the module from a count the account accepts, is removed once the
-    # bound resolves on a later write; its unresolved twin keeps it.
-    words = "bound the review at two rounds"
-    body = "\n".join([fo.VET_RECEIPT_MARKER, "## Vet receipt", "", "**Decisions.**", "- " + words,
-                      "<!-- superheroes:advisor-bound rounds=2 -->", ""])
-    url = "https://github.com/o/r/issues/7#issuecomment-777"
-    doc = {"id": 777, "issue_url": "https://api.github.com/repos/o/r/issues/7", "html_url": url, "body": body,
-           "author_association": "MEMBER", "user": {"login": "o"}}
-    by = {"kind": fo.ADVISOR_BOUND, "ref": {"url": url, "words": words}}
-    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(by), "reason": "the advisor bounded it"}
-
-    def build(finding, count):
-        a = account([], [finding])
-        a["rounds"] = {"count": count, "cap": 3, "stoppedAtCap": False}
-        return the_finding(rr.build_record(a, readers(doc=doc)))
-
-    demoted = build(ruled, -1)
-    assert demoted["outcome"] == "left-for-owner"
-    assert demoted["reason"].startswith(rr._DEMOTED_CLAUSE % (fo.WHY_FEWER_ROUNDS % (-1, 2)))
-    restored = build(demoted, 2)
-    assert restored["outcome"] == "ruling"
-    assert restored["reason"] == f'advisor\'s bound "{words}" ({url}); the advisor bounded it'
-    assert build(demoted, 1)["outcome"] == "left-for-owner"
-
-
-@pytest.mark.parametrize("reason, expected", [
-    pytest.param(A_L2 + rs.CARRIED + "; open", A_L2 + rs.CARRIED + "; open", id="a-clause-no-writer-puts-mid-reason-stays"),
-    pytest.param(f"open; {A_L2} (merged into b); {C_L3}", "open (merged into b)", id="a-clause-after-the-mark-then-the-one-before-it"),
-    pytest.param(f"{B_L3}; open; {A_L2}{rs.CARRIED}", "open" + rs.CARRIED, id="a-demotion-at-the-start-and-a-clause-at-the-end"),
-    pytest.param(A_L2 + rs.CARRIED, rs.CARRIED, id="every-part-dropped-leaves-its-marks"),
-    pytest.param(A_L2, "", id="every-part-dropped-with-no-marks-is-empty"),
-    pytest.param(f"a; {C_L3} (merged into b){rs.CARRIED}{rs.CARRIED}", f"a (merged into b){rs.CARRIED}{rs.CARRIED}",
-                 id="a-run-of-suffixes-moves-whole"),
-    pytest.param("the cited decision is not on record: some other reason", "the cited decision is not on record: some other reason",
-                 id="a-why-outside-the-list-is-prose"),
-    pytest.param("", "", id="empty"),
-    pytest.param(None, None, id="not-a-string"),
-])
-def test_t12_the_helper_drops_only_stale_parts_and_moves_the_carried_suffix(reason, expected):
-    # Axis: the helper's own contract, a dropped part's carried suffix survives on a kept part, and nothing else changes.
-    assert rr._without_stale_clauses(reason) == expected
-
-
-@pytest.mark.parametrize("finding_over", [
-    pytest.param({}, id="promotion"),
-    pytest.param({"outcome": "ruling"}, id="linked-refresh"),
-])
-def test_t11_a_reason_that_was_only_a_stale_clause_becomes_the_citation_text(finding_over):
-    # Axis: all-stale, a left-for-owner finding whose reason is only shape A reads the resolved citation text alone.
-    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": A_L2, **finding_over}))
-    assert f["outcome"] == "ruling" and f["reason"] == f'owner ruling "{W}" ({U})'
-
-
-def test_t11_the_same_holds_for_a_non_linked_ruling():
-    # Axis: all-stale on the non-linked already-ruling branch, the reason is the citation text alone.
-    ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "canon", "ref": STANDING},
-             "reason": "the cited decision is not on record: the cited Canon entry is not on record"}
-    assert the_finding(record(ruled, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}"
-
-
-PAREN_REP = "app/(auth)/page.tsx::unchecked-index@L3"
-
-
-@pytest.mark.parametrize("rep", [pytest.param("rep-1", id="plain-id"), pytest.param(PAREN_REP, id="id-with-parentheses")])
-def test_t14_a_merge_mark_after_the_clause_is_kept_whatever_its_id_holds(rep):
-    # Axis: the merge mark is read as the session writer reads it, so an id with parentheses is peeled too.
-    mark = rs.MERGED_INTO_FORMAT.format(rep)
-    f = the_finding(record(stamped(reason="waits for the owner; " + A_L2 + mark)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
-    assert rs.merged_into(f["reason"]) == rep
-
-
-@pytest.mark.parametrize("over", [pytest.param({}, id="promotion"), pytest.param({"outcome": "ruling"}, id="linked-refresh")])
-def test_t15_a_reason_that_is_only_a_clause_and_its_mark_keeps_the_mark(over):
-    # Axis: all-stale with a merge mark, the citation text replaces the clause and the mark stays, so the member
-    # is still read as merged.
-    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
-    f = the_finding(record(stamped(reason=A_L2 + mark, **over)))
-    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark and rs.merged_into(f["reason"]) == "rep-1"
-
-
-def test_t16_a_promotion_is_not_mistaken_for_a_longer_canon_id_it_starts_like():
-    # Axis: the reason leads with the citation only as a whole part, so entry -1 is still named before a note on -10.
-    left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}0 was considered earlier"}
-    f = the_finding(record(left, fake=Fake(sources=CANON_SOURCES)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"canon {STANDING}; canon {STANDING}0 was considered earlier"
-    again = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}; waits"}
-    assert the_finding(record(again, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}; waits"
-
-
-def test_t17_a_citation_inside_prose_and_a_placeholder_in_the_text_both_survive():
-    # Axis: a citation held whole inside prose comes back as it was, and text that already holds the placeholder's
-    # characters comes back unchanged.
-    inside = f"see {CITE} for more; {A_L2}"
-    assert rr._strip_stale(inside, lead=CITE) == (f"see {CITE} for more", "")
-    odd = "x\x00lead\x00y"
-    assert rr._strip_stale(f"{odd}; {CITE}; {A_L2}", lead=CITE) == (f"{odd}; {CITE}", "")
-
-
-def test_t18_a_repeat_and_its_member_hold_the_inherited_citation_whole_in_their_earlier_text():
-    # Axis: the repeat and the merged member each pass the citation they inherit, so clause-shaped owner words in
-    # an earlier reason that carried it are never cut, and a merge mark after a stale clause is kept.
-    words = "keep it; " + A_L2 + "; and more"
-    cite = f'owner ruling "{words}" ({U})'
-    by = {"kind": "owner-ruling", "ref": {"url": U, "words": words}}
-    ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(by)}
-    given = repeat(repeatOf=mark(kept={**kept(), "members": [MEMBER_RAW]}), reason=f"{OLD}; {cite}; {A_L2}")
-    member = {**X, "id": "f-3", "title": "Merged one", "line": 30, "findingKey": MEMBER_RAW, "outcome": LFO,
-              "reason": f"{cite}; merged note; {A_L2}" + rs.MERGED_INTO_FORMAT.format("f-2")}
-    resolves = {"repo": "o/r", "ownerRulings": {U: doc_for(words)}}
-    out = rr._follow_repeats([ruled, given, member], [], lambda: resolves)
-    assert out[1]["reason"] == f"{cite}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {cite}"
-    assert out[2]["reason"] == (f"{cite}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2")
-                                + f"; earlier: {cite}; merged note" + rs.MERGED_INTO_FORMAT.format("f-2"))
-    bare_member = dict(member, reason=A_L2 + rs.MERGED_INTO_FORMAT.format("f-2"))
-    out = rr._follow_repeats([ruled, given, bare_member], [], lambda: resolves)
-    assert out[2]["reason"] == f"{cite}; " + rr.REPEAT_MEMBER_FOLLOWS_RULING.format(name="f-2") + rs.MERGED_INTO_FORMAT.format("f-2")
-
-
-QUOTED = "keep it; " + A_L2 + "; and more"
-QUOTED_CITE = f'owner ruling "{QUOTED}" ({U})'
-QUOTED_BY = {"kind": "owner-ruling", "ref": {"url": U, "words": QUOTED}}
-
-
-@pytest.mark.parametrize("before", [
-    pytest.param("decided by ", id="after-decided-by"),
-    pytest.param("note; earlier: ", id="after-earlier"),
-    pytest.param("note (", id="inside-a-bracket"),
-])
-def test_t19_a_citation_the_writer_put_after_its_own_prefix_is_held_whole_on_a_later_write(before):
-    # Axis: `settle` writes "decided by <citation>" and the repeat path writes "earlier: <citation>"; a later write
-    # resolving the same citation keeps its quoted words whole there and still drops the real clause.
-    ruled = {**X, "outcome": "ruling", "decidedBy": copy.deepcopy(QUOTED_BY), "reason": f"{before}{QUOTED_CITE}; {A_L2}"}
-    f = the_finding(record(ruled, doc=doc_for(QUOTED)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{QUOTED_CITE}; {before}{QUOTED_CITE}"
-
-
-def test_t19_the_repeat_writes_earlier_text_a_later_write_reads_back_unchanged():
-    # Axis: the reason `_follow_repeats` writes, read again by a later record write, keeps the inherited quote whole.
-    ruled = {**X, "outcome": "ruling", "reason": "the owner ruled", "decidedBy": copy.deepcopy(QUOTED_BY)}
-    given = repeat(reason=f"{OLD}; {QUOTED_CITE}")
-    resolves = {"repo": "o/r", "ownerRulings": {U: doc_for(QUOTED)}}
-    written = rr._follow_repeats([ruled, given], [], lambda: resolves)[1]
-    assert written["reason"] == f"{QUOTED_CITE}; " + rr.REPEAT_FOLLOWS_RULING.format(name="f-1") + f"; earlier: {OLD}; {QUOTED_CITE}"
-    again = the_finding(record({k: v for k, v in written.items() if k != "repeatOf"}, doc=doc_for(QUOTED)))
-    assert again["reason"] == written["reason"]
-
-
-def test_t20_a_merge_mark_whose_id_holds_a_part_separator_is_set_aside_whole():
-    # Axis: the reason's trailing mark is set aside before the split, so an id with "; " never cuts the clause off.
-    mark = rs.MERGED_INTO_FORMAT.format("a; b.py::odd name@L1")
-    f = the_finding(record(stamped(reason="waits for the owner; " + A_L2 + mark)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
-    assert rr._strip_stale(A_L2 + mark + rs.CARRIED) == ("", mark + rs.CARRIED)
-
-
-def test_t21_a_promotion_is_not_mistaken_for_a_citation_followed_by_bracketed_prose():
-    # Axis: only marks may follow a leading citation it skips; a bracketed note after it is prose, so the citation is
-    # still written once in front.
-    note = f"canon {STANDING} (considered and rejected)"
-    left = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": note}
-    f = the_finding(record(left, fake=Fake(sources=CANON_SOURCES)))
-    assert f["outcome"] == "ruling" and f["reason"] == f"canon {STANDING}; {note}"
-    marked = {**X, "decidedBy": {"kind": "canon", "ref": STANDING}, "reason": f"canon {STANDING}" + rs.CARRIED}
-    assert the_finding(record(marked, fake=Fake(sources=CANON_SOURCES)))["reason"] == f"canon {STANDING}" + rs.CARRIED
-
-
-def test_t22_a_citation_followed_only_by_a_merge_mark_is_not_given_twice():
-    # Axis: the leading-citation check reads the merge mark on the whole reason, so a promotion skips it.
-    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
-    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": CITE + mark}))
-    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark
-    f = the_finding(record({**X, "decidedBy": copy.deepcopy(BY), "reason": f"{B_L3}; {CITE}{mark}"}))
-    assert f["outcome"] == "ruling" and f["reason"] == CITE + mark
-
-
-def test_t23_a_clause_appended_after_the_merge_mark_and_the_one_before_it_both_go():
-    # Axis: a failed recheck appends the unmet clause after the merge mark; a later resolve removes it, then the
-    # clause before the mark, and the mark stays at the end.
-    mark = rs.MERGED_INTO_FORMAT.format("rep-1")
-    f = the_finding(record(stamped(reason=f"waits for the owner; {A_L2}{mark}; {C_L3}")))
-    assert f["outcome"] == "ruling" and f["reason"] == f"{CITE}; waits for the owner{mark}"
-
-
-def test_t24_a_short_citation_never_hides_a_clause_and_a_quote_ending_like_a_mark_is_left_whole():
-    # Axis: nothing is masked, so a citation whose text a failure text holds hides no clause, and a citation whose
-    # quoted words hold the merge mark's opening is never cut.
-    residual = "open; " + fo.UNRESOLVED_CLAUSE % fo.WHY_RESIDUAL_ABSENT
-    assert rr._strip_stale(residual, lead="residual is not recorded") == ("open", "")
-    words = "keep it" + rs.MERGED_INTO_FORMAT.split("{}")[0] + "x; " + A_L2
-    cite = f'owner ruling "{words}" ({U})'
-    assert rr._strip_stale(f"open; {cite}", lead=cite) == (f"open; {cite}", "")
-    words = "keep it; " + A_L2 + "; compare" + rs.MERGED_INTO_FORMAT.format("f-2")
-    cite = f'owner ruling "{words}" ({U})'
-    ruled = {**X, "outcome": "ruling", "decidedBy": {"kind": "owner-ruling", "ref": {"url": U, "words": words}}, "reason": cite}
-    assert the_finding(record(ruled, doc=doc_for(words)))["reason"] == cite
-    nul = "\x00lead"
-    assert rr._strip_stale(f"{nul}{CITE}; {A_L2}", lead=CITE) == (f"{nul}{CITE}", "")
+    assert set(fo.LEGACY_UNRESOLVED_TAILS) == {"; " + fo.UNRESOLVED_CLAUSE % t for t in fo.UNRESOLVED_WHY_TEXTS}

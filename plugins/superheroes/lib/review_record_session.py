@@ -909,14 +909,6 @@ def merged_into(reason):
     return found.group(1) if found else None
 
 
-def merge_mark_start(text):
-    """Where the last mark `MERGED_INTO_FORMAT` writes begins in ``text`` (its leading space) when ``text`` ends with
-    that mark after some other text, else None. The id between the mark's two ends is taken whole, whatever it holds."""
-    head, tail = MERGED_INTO_FORMAT.split("{}")
-    at = text.rfind(head) if isinstance(text, str) and text.endswith(tail) else -1
-    return at if at > 0 and len(text) > at + len(head) + len(tail) - 1 else None
-
-
 def _id(row, key):
     rid = row.get("id")
     return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key

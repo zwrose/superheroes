@@ -391,7 +391,7 @@ def _scope_or_bound_on_record(kind, ref, sources):
 
 
 # The texts on_record and its legs return when a decision is not on record. Each text has this one home: the
-# returns name it, and UNRESOLVED_WHYS is built from it, so a reader that recognises a stale clause copies none.
+# returns name each text, and LEGACY_UNRESOLVED_TAILS is built from them.
 WHY_NOT_A_PERMALINK = "the ruling's link is not a comment permalink"
 WHY_ANOTHER_REPOSITORY = "the ruling's link is not in this repository"
 WHY_NO_LINK_OR_WORDS = "the ruling names no link or words"
@@ -422,11 +422,11 @@ UNRESOLVED_WHY_TEXTS = (
     WHY_RECEIPT_NO_SCOPE_RULING, WHY_RECEIPT_NO_BOUND, WHY_ROUNDS_UNKNOWN, WHY_NO_DECISION, WHY_KIND_UNKNOWN,
     WHY_NO_REFERENCE, WHY_NO_CANON_TEXT, WHY_CANON_ENTRY_ABSENT, WHY_NO_RESIDUAL_TEXT, WHY_RESIDUAL_ABSENT,
     WHY_NO_SHEET_ANSWERS, WHY_SHEET_ANSWER_OPEN)
-# The clause `settle` stamps on a leftover whose cited decision is not on record, with the failure text in %s.
+# The clause `settle` wrote into a reason before the decisionNotOnRecord field existed, kept only so old records can be
+# matched exactly (with the failure text in %s).
 UNRESOLVED_CLAUSE = "the cited decision is not on record: %s"
-# Each failure text as a regular-expression source; the formatted one takes any integer where it writes %d.
-UNRESOLVED_WHYS = tuple(re.escape(t) for t in UNRESOLVED_WHY_TEXTS) + (
-    re.escape(WHY_FEWER_ROUNDS).replace("%d", r"-?\d+"),)
+# The exact strings the old `settle` appended to a reason (the formatted round-count text is not one literal, so it is not here).
+LEGACY_UNRESOLVED_TAILS = tuple("; " + UNRESOLVED_CLAUSE % t for t in UNRESOLVED_WHY_TEXTS)
 
 
 def on_record(decided_by, sources):
@@ -489,8 +489,9 @@ def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
-    owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
-    so the record writer can promote it if the decision is on record by write time. Never reads severity.
+    owner, with open_reason; that leftover keeps the citation, so the record writer can promote it if the decision is
+    on record by write time. The record writer re-checks the citation at write time and records any failure in a
+    field, so `settle` writes no text about it. Never reads severity.
 
     With ``open_at_end`` True, a leftover that cites no decision also carries `openAtLoopEnd: True`: it was left for
     the owner only because it was still open when its loop ended. Craft, a ruling and a leftover that cites a decision never do.
@@ -503,13 +504,11 @@ def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False
                   if has_stated_consequence(finding) else "no further consequence stated")
         return {"outcome": craft, "reason": "code quality only: " + stated, "decidedBy": None}
     decided_by = ruling.get("decidedBy") if isinstance(ruling, dict) else None
-    why = ""
     if decided_by is not None:
         resolved, text = on_record(decided_by, sources)
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
-        why = "; " + UNRESOLVED_CLAUSE % text
-    result = {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
+    result = {"outcome": left_for_owner, "reason": open_reason, "decidedBy": decided_by}
     if open_at_end and decided_by is None:
         result[session_contract.OPEN_AT_LOOP_END_FIELD] = True
     return result
