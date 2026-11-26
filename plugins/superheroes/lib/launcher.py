@@ -2628,6 +2628,13 @@ def _apply_dependency_gate(
     if verdict != stack_check.VERDICT_READY:
         # a dependency held only for a card on its stack's sheet, at its current head, is gated like a READY one
         if issue_contract.stack_card_parent(pr_state["body"], pr_state["headRefOid"]) is None:
+            # axis: a card mark pinned to an older head is a stack layer that moved after it was accepted; it refuses, never passes ungated
+            if issue_contract.stack_card_mark(pr_state["body"]) is not None:
+                return {
+                    "ok": False,
+                    "reason": "dependency-card-stale",
+                    "detail": pr_state["headRefOid"],
+                }
             # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
             return {
                 "ok": True,

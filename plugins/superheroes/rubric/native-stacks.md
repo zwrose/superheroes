@@ -173,6 +173,9 @@ the premise shape change is in `TRANSITION.md`:
 - `dependency-open-ready-pr` — the premise names an open dependency pull request whose vet reads
   READY, or carries the card mark, and the resolved base commit is not that pull request's current
   head.
+- `dependency-card-stale` — the dependency pull request's vet carries the card mark pinned to an
+  earlier head than its current one: the layer moved after it was accepted, so the launch refuses
+  until the advisor vets the new head.
 - `dependency-read-unavailable` — the launcher could not read the dependency pull request or its
   vet and the gate could not run.
 

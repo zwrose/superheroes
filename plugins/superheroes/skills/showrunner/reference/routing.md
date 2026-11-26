@@ -122,7 +122,8 @@ PARKED line or a mark at an earlier head. The advisor writes the mark at vet, in
 the layer's only hold is an owner card that its review record leaves for the owner: that card rides
 the feature's stack sheet once the stack is complete enough to have one, so the sheet need not exist
 yet when the mark is written. The launcher's dependency gate pins a card-marked dependency to its
-head exactly as it pins a READY one.
+head exactly as it pins a READY one, and refuses `dependency-card-stale` when the mark is pinned to
+an earlier head than the pull request's current one.
 
 The result's `blockers` always carries `checked`, `open` (every open edge), `accepted` (each
 accepted layer: `ref`, `title`, `url`, `pr`, `head` its vet covers, `form` `ready` or `stack-card`,

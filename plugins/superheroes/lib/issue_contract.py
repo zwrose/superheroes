@@ -90,6 +90,7 @@ def _load_stack_card_qualifier():
 
 
 STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
+_SHA40_RE = re.compile(r"[0-9a-fA-F]{40}")
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
@@ -417,33 +418,42 @@ def stack_card_parent(body, head_sha):
     the vet itself."""
     verdict, refusal = stack_check.read_vet_verdict(body, head_sha)
     # axis: only a PARKED vet pinned to the current head can carry the card mark; a refused or other verdict never does — see bite-proof record wo_2652_stack_layer_blockers
-    if refusal is not None or verdict != stack_check.VERDICT_PARKED or STACK_CARD_QUALIFIER is None:
+    if refusal is not None or verdict != stack_check.VERDICT_PARKED:
+        return None
+    mark = stack_card_mark(body)
+    return mark[1] if mark is not None and stack_check.same_commit(mark[0], head_sha) else None
+
+
+def stack_card_mark(body):
+    """(sha, parent) when `body`'s vet line has the stack-card mark's shape at any head, else None.
+
+    The shape is the PARKED token and separator as `rubric/vet-verdict-form.json` spells them, a 40-hex sha,
+    one space, STACK_CARD_QUALIFIER, the parent issue number in digits, then end of line or a space. The head
+    is not checked here: `stack_card_parent` holds the mark to the current head, and the launcher reads a mark
+    pinned to an older head as a stale card."""
+    if not isinstance(body, str) or STACK_CARD_QUALIFIER is None:
         return None
     region_text, region_refusal = pr_body_regions.read_region(body, "advisor-vet")
     if region_refusal is not None or region_text is None:
         return None
     line = _first_nonempty_line(region_text)
-    if line is None:
-        return None
-    # The verdict reader matched the PARKED token, the separator and the 40-hex sha at this line's start; the
-    # qualifier follows the sha after one space.
     form, form_error = stack_check._load_vet_verdict_form()
-    if form_error is not None:
+    if line is None or form_error is not None:
         return None
     separator, tokens = form
     token = next((t for t, v in tokens if v == stack_check.VERDICT_PARKED), None)
     if token is None or not line.startswith(token + separator):
         return None
+    sha = line[len(token) + len(separator):][:40]
     tail = line[len(token) + len(separator) + 40:]
     prefix = " " + STACK_CARD_QUALIFIER
     # axis: a PARKED line without the exact qualifier and a parent number is a plain park, not a card mark — see bite-proof record wo_2652_stack_layer_blockers
-    if not tail.startswith(prefix):
+    if not _SHA40_RE.fullmatch(sha) or not tail.startswith(prefix):
         return None
     digits = tail[len(prefix):].split(" ", 1)[0]
-    if not digits.isascii() or not digits.isdigit():
+    if not digits.isascii() or not digits.isdigit() or int(digits) < 1:
         return None
-    parent = int(digits)
-    return parent if parent >= 1 else None
+    return sha, int(digits)
 
 
 class _Unreadable(Exception):
