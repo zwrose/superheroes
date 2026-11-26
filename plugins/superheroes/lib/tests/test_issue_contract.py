@@ -432,7 +432,10 @@ def test_realistic_whole_body_fixture():
             ic.SLOT_WHAT: ic.SLOT_STATUS_FILLED,
             ic.SLOT_DOD: ic.SLOT_STATUS_FILLED,
         },
-        "blockers": {"checked": False, "open": [], "detail": None},
+        "blockers": {
+            "checked": False, "open": [], "accepted": [], "held": [],
+            "requiredDependency": None, "stack": None, "detail": None,
+        },
         "advisory": True,
     }
 
@@ -756,7 +759,7 @@ def test_pagination_reads_page_two_and_finds_the_open_blocker(tmp_path, capsys):
     out = _build_ready(tmp_path, capsys, fake)
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert [b["ref"] for b in out["blockers"]["open"]] == ["acme/widgets#12"]
-    assert [c[2] for c in fake.calls] == [PAGE1, PAGE2]
+    assert [c[2] for c in fake.calls] == [PAGE1, PAGE2, PARENT]
 
 
 def test_pagination_page_two_failure_is_unreadable(tmp_path, capsys):
