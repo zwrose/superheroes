@@ -35,9 +35,9 @@ catches, and are not a test result).
 | E4 | issue_contract.py:642 `_judge_with_premise` | a layer counts only in the launch's own stack | `test_case6_premise_stack_s_with_the_pr_in_stack_x_holds` | proven |
 | E5 | issue_contract.py:613 `_layer_of` | a card mark counts only for this stack's own parent | `test_case8_a_stack_card_mark_for_another_parent_holds_naming_it` | proven |
 | E6 | issue_contract.py:599 `_layer_of` | a draft pull request is never a handed-back layer | `test_case3_a_draft_pr_holds` | proven |
-| E7 | issue_contract.py:537 `_closes_issue` | only the first non-empty body line carries a closing reference | `test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | proven |
+| E7 | issue_contract.py:537 `_closes_issue` | only the first non-empty body line carries a closing reference | `test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | proven at 4f52f3c8; superseded by E7r |
 | E8 | stack_check.py:493 `_parse_membership_page` | an absent `stackEntry` key is unreadable, not not-linked | `test_e28_stack_entry_key_missing_is_unreadable_not_not_linked` | proven |
-| E9 | launcher.py:2630 `_apply_dependency_gate` | a card-marked dependency is gated on base equality like a READY one | `test_dependency_gate_stack_card_base_mismatch_refuses` | proven |
+| E9 | launcher.py:2630 `_apply_dependency_gate` | a card-marked dependency is gated on base equality like a READY one | `test_dependency_gate_stack_card_base_mismatch_refuses` | proven at 4f52f3c8; superseded by E9r |
 
 ---
 
@@ -537,3 +537,34 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_stac
 After the last restore, `git diff HEAD -- plugins/superheroes/lib/issue_contract.py
 plugins/superheroes/lib/stack_check.py plugins/superheroes/lib/launcher.py` printed nothing: all three
 files read exactly as at `HEAD`. No residue remains.
+
+## Replay on the reviewed head (review session 2)
+
+**Head:** `56c1c4f260a577962e02dc9b45c1962699a65ff9`, checked out detached in a separate probe worktree.
+E7 and E9 above quote code that review fixes have since replaced: `_closes_issue` now reads
+`_first_prose_line`, and forcing E9's outer card check now hits the stale-card refusal first. **E7r and
+E9r supersede them.** E10-E16 prove the guards added after the first record (the stale-card refusal and
+review session 2's fixes). Same method and command as above. Each neutralization is one exact,
+single-match edit to the guarded code, never to a test. Each is undone by writing back the file's
+original text, and the nodes are re-run. Line numbers are at this head. Captures keep pytest's summary
+line and FAILED lines; the `UV_NATIVE_TLS` warning line is omitted.
+
+| ID | Guarded element (file:line) | Neutralization | Proving nodes | Red | Green after restore |
+|---|---|---|---|---|---|
+| E7r | issue_contract.py:581 `_first_prose_line` | `rest = next((line for line in lines if line.strip()), None)` → `rest = " ".join(lines)` (read the whole body) | `test_issue_contract.py::test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | 1 failed | 1 passed |
+| E9r | launcher.py:2674 `_apply_dependency_gate` | `if stack_check.same_commit(resolved_base_commit, head_sha):` → `if True:` | `test_launcher.py::test_dependency_gate_stack_card_base_mismatch_refuses` | 1 failed | 1 passed |
+| E10 | launcher.py:2657 `_apply_dependency_gate` | `if issue_contract.stack_card_mark(pr_state["body"]) is not None:` → `if False:` | `test_break_it_stack_card_dependency_advance_2652.py` | 1 failed | 1 passed |
+| E11 | issue_contract.py:650 `_read_layer_membership` | `if not stack_check.same_commit(read_head, head):` → `if False:` | `test_break_it_2652_unlinked_membership_head.py`, `test_break_it_unlinked_membership_snapshot_2652.py` | 2 failed, 1 passed | 3 passed |
+| E12 | issue_contract.py:447 `stack_card_mark` | the `_parse_vet_verdict_line(...) != VERDICT_PARKED` test → `if False:` | `test_issue_contract.py::test_stack_card_mark_reads_only_a_line_the_vet_parser_reads_as_parked` | 1 failed | 1 passed |
+| E13 | issue_contract.py:587 `_first_prose_line` | the comment/code-span `starts = [...]` scan → `starts = []` | `test_issue_contract.py::test_first_line_close_in_code_quote_comment_or_html_closes_nothing` | 2 failed, 5 passed | 7 passed |
+| E14 | issue_contract.py:600 `_first_prose_line` | an open construct's `return prose.strip() or None` → `return (prose + rest[at:]).strip() or None` | same node as E13 | 1 failed, 6 passed | 7 passed |
+| E15 | launcher.py:2630 `_apply_dependency_gate` | `lapsed = None if accepted_form is None else {` → `lapsed = None if True else {` | `test_break_it_draft_card_dependency_2652.py`, `test_break_it_2652_card_withdrawn.py`, `test_dependency_acceptance_lapse_2652.py` | 3 failed, 3 passed | 6 passed |
+| E16 | launcher.py:4501 `_check_premises` | `accepted_form=_preflight_accepted_form(...)` → `accepted_form=None,` | `test_break_it_draft_card_dependency_2652.py`, `test_break_it_2652_card_withdrawn.py` | 2 failed | 2 passed |
+
+The red runs' FAILED lines name exactly the proving nodes. E11's red:
+`test_unlinked_membership_at_a_new_head_cannot_use_the_old_vet` and
+`test_unstacked_dependency_uses_the_same_head_as_its_vet[...03e7-blockers-unreadable]`; its same-head
+case stays green. E13's red: the `` `Closes #12` `` and `Done <!-- Closes #12` cases. E14's red: the
+`Done <!-- Closes #12` case. E15's red: the draft, withdrawn-card and accepted-READY cases; the
+two no-acceptance cases and the accepted-form reader test stay green. After the last restore, the probe
+worktree's `git status --short` printed nothing.
