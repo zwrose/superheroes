@@ -35,8 +35,9 @@ preflight, review and park.
   cloud_builder.py self-archive --launch-id L --head SHA
                           the record a superseded builder posts before it archives its own session,
                           naming its lane (L, launch-<hash>) and its pushed head
-  cloud_builder.py terminal --kind {handback,stop,park} --text-file F
-                          the handback, stop or park comment, headed with its fixed first line
+  cloud_builder.py terminal --kind {handback,stop,park} --text-file F [--also-on URL]
+                          the handback, stop or park comment, headed with its fixed first line; it is
+                          posted on the issue, and --also-on names a copy already on the pull request
   cloud_builder.py pass-state
                           the placed reviewer sign-in's state, and whether this is a cloud session
   cloud_builder.py superseded --repo O/N --issue N --launch-id L
@@ -74,6 +75,8 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
 _STARTED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _EXPECTED_RE = re.compile(r"^Expected:\s*(\d+)\s*minutes?\s*$", re.ASCII)
+_PR_COMMENT_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*#issuecomment-[1-9][0-9]*")
+ALSO_ON_LINE = "Also posted on the pull request: "
 
 INTAKE_HEADER = "Builder intake (cloud build)."
 INTAKE_TEXT = (
@@ -650,18 +653,26 @@ def handover_sha(body):
     return match.group(1) if match and text == handover_text(match.group(1)) else None
 
 
-def terminal_text(kind, text):
-    """The handback, stop or park comment: the kind's fixed header, then `text`. A refusal is a result."""
+def terminal_text(kind, text, also_on=None):
+    """The handback, stop or park comment: the kind's fixed header, then `text`. It is posted on the build's
+    issue (`target` is `issue`). `also_on`, when given, is the permalink of one pull request comment that already
+    carries the same text; the comment then ends with one line naming it. A refusal is a result."""
     if kind not in TERMINAL_HEADERS:
         return {"ok": False, "reason": "kind-invalid"}
     if not isinstance(text, str) or not text.strip():
         return {"ok": False, "reason": "text-empty"}
+    # axis: `also_on` is exactly one pull request comment permalink, nothing before, after or around it — see bite-proof record i2651_also_on
+    if also_on is not None and not (isinstance(also_on, str) and _PR_COMMENT_URL_RE.fullmatch(also_on)):
+        return {"ok": False, "reason": "also-on-invalid"}
     comment = TERMINAL_HEADERS[kind] + "\n\n" + text.strip()
+    if also_on is not None:
+        comment += "\n\n" + ALSO_ON_LINE + also_on
     # axis: a composed handback, stop or park carrying a bare at-sign mention is refused, never returned as comment text — see bite-proof record wo_2453_mention_guard
     refusal = _mention_refusal(comment)
     if refusal:
         return refusal
-    return {"ok": True, "comment": comment}
+    # axis: every composed terminal comment names its one target, the build's issue — see bite-proof record i2651_also_on
+    return {"ok": True, "comment": comment, "target": "issue"}
 
 
 def strip_cloud_footer(body):
@@ -1003,7 +1014,8 @@ def _build_parser():
     verb("review-rejected")
     verb("handover", "--head")
     verb("self-archive", "--launch-id", "--head")
-    verb("terminal", "--kind", "--text-file", **{"--kind": {"choices": ["handback", "stop", "park"]}})
+    verb("terminal", "--kind", "--text-file",
+         **{"--kind": {"choices": ["handback", "stop", "park"]}}).add_argument("--also-on", default=None)
     verb("pass-state")
     verb("superseded", "--repo", "--issue", "--launch-id", **{"--issue": {"type": int}})
     verb("superseded-notice", "--launch-id")
@@ -1059,7 +1071,7 @@ def _dispatch(args):
         text = _read_text(args.text_file)
         if text is None:
             return {"ok": False, "reason": "text-unreadable"}
-        return terminal_text(args.kind, text)
+        return terminal_text(args.kind, text, args.also_on)
     if args.verb == "superseded":
         return superseded(args.repo, args.issue, args.launch_id)
     if args.verb == "relayed":

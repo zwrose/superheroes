@@ -430,8 +430,20 @@ comment whose first line is one fixed header. The headers are defined once, in `
 
 Write the comment's text to a file. Run
 `python3 -B <plugin root>/lib/cloud_builder.py terminal --kind handback|stop|park --text-file <file>`.
-Post the result's `comment` on the issue as it is. The cloud harness adds its own footer; the readers
-allow it. Then run the read-back check in § Text changed in transit on the posted comment.
+Post the result's `comment` on the issue as it is. The result's `target` is `issue`. The cloud harness
+adds its own footer; the readers allow it. Then run the read-back check in § Text changed in transit on
+the posted comment.
+
+The issue is the one place for these comments. A handback written on the pull request instead is not one
+the advisor is sure to see. If you have already posted the handback on the pull request too, still post
+it on the issue. Pass `--also-on <that PR comment's permalink>` to `terminal`, so the issue comment ends
+with one line that names the copy. The verb refuses `also-on-invalid` for anything but the permalink of
+one pull request comment.
+
+The advisor's watch also reads builder notes and handback, stop and park comments on the lane's own pull
+request (one whose body closes the lane's issue), as a backstop only. It does not read progress comments,
+handovers or review bodies there. The progress comment, the handovers and every terminal comment stay on
+the issue.
 
 A park on the PR (the lapsed-review comment, the review receipt) is still posted where § Review says.
 The builder also posts a park comment on the issue, because the watch and recovery read the issue.
