@@ -418,8 +418,7 @@ its issue. While a batch has a live cloud lane, every result carries
 When **`builder-note`** fires, a cloud builder has posted an issue comment opening with
 `NOTE_HEADER` (`lib/cloud_builder.py`) on a live lane's issue since that lane started, and no
 `note-answered` has recorded it. The comment may also be on the lane's own pull request: a pull request
-whose body's first line closes the lane's issue with a closing keyword, whatever its base branch, so an unlinked stack
-layer's pull request is its own lane's. Such an entry keeps `issue` as the lane's issue, carries `pr`
+GitHub links to the lane's issue, whatever its base branch. Such an entry keeps `issue` as the lane's issue, carries `pr`
 (the pull request's number), and its `url` is the pull request comment's. The payload carries `launchId`
 (the first note's lane) and `notes`, by comment id: `{"launchId", "issue", "pr", "commentId", "url",
 "createdAt", "cloudSessionName", "cloudSessionId", "configDir"}` — `pr` is present only for a pull request
@@ -460,28 +459,26 @@ local lane's `lane-terminal`, `lane-blocked` or `builder-exited` is already due,
 skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
 
 The lane's own pull request is a backstop, and the handback still belongs on the issue
-(`skills/workhorse/reference/cloud.md` § Terminal comments). Only a builder note or a handback, stop or
-park comment on such a pull request counts, under the same started-at cutoff as the issue: a pull request
-comment from before the lane began is not the lane's. A progress comment or a handover there is no
-lane's. A comment on a pull request that no watched lane's issue is closed by is no lane's. A pull request
-whose body closes two watched lanes' issues is no lane's, and it is disclosed as
-`builder-note-unavailable` with every watched lane named in `unreadIssues`. The watch reads the candidate
-pull request (`repos/<o>/<r>/issues/<n>`, REST) only on a tick whose comments read holds such a header
-comment, so a quiet tick makes no extra request. A read of it that fails or is skipped for budget is
-disclosed as `builder-note-unavailable` with every watched lane named in `unreadIssues`, and the closes of
-reopened lanes are then kept as on a partial read. The backstop has three limits. It does not read pull
-request review bodies or inline review comments. A resumed lane whose basis is older than the 24-hour
-shared lookback is read only from its own issue: no comment on a pull request is ever attributed to it,
-even one the shared read returns because another watched lane opened it, so its handback is seen only on
-its issue. A pull
-request the lane did not open that closes the lane's issue and carries one of these headers after the lane
-began is read as the lane's. Only the first line of the pull request's body is read for its closing
-link, the line the builder's handback contract reserves for it; a closing keyword anywhere else in the body
-names no lane. An ending the builder posted on both the issue and its pull request (the issue copy names
-the other on its `--also-on` line, `skills/workhorse/reference/cloud.md` § Terminal comments) is two
-endings of the lane: the newer fires, and answering it leaves no older one in its place; when you answered
-the first copy before the second was posted, the second fires as well, so answer it too with
-`note-answered`. It can surface twice; it is never missed.
+(`skills/workhorse/reference/cloud.md` § Terminal comments). The lane's own pull request is one GitHub links
+to the lane's issue. When it is based on the repository's default branch, the link is its closing issue
+references (GitHub's GraphQL interface). When it is a stack layer based on another branch, the link is a
+cross-reference GitHub records on the lane's issue timeline (REST). The pull request's description text is
+never read for the link. Only a builder note or a handback, stop or park comment on such a pull request
+counts, under the same started-at cutoff as the issue: a pull request comment from before the lane began is
+not the lane's. A progress comment or a handover there is no lane's. A comment on a pull request that GitHub
+links to no watched lane's issue is no lane's. A pull request GitHub links to two watched lanes' issues is no
+lane's, and it is disclosed as `builder-note-unavailable` with every watched lane named in `unreadIssues`.
+The watch reads a candidate pull request's link only on a tick whose comments read holds such a header
+comment, so a quiet tick makes no extra request. A link that cannot be read is never read as no link: a read
+that fails, is refused (GitHub's GraphQL interface included), comes back truncated or malformed, or is
+skipped for budget is disclosed as `builder-note-unavailable` with every watched lane named in
+`unreadIssues`, and the closes of reopened lanes are then kept as on a partial read. The backstop has three
+limits. It does not read pull request review bodies or inline review comments. A resumed lane whose basis is
+older than the 24-hour shared lookback is read only from its own issue: no comment on a pull request is ever
+attributed to it, even one the shared read returns because another watched lane opened it, so its handback
+is seen only on its issue. A pull request the lane did not open that GitHub links to the lane's issue and
+carries one of these headers after the lane began is read as the lane's. An ending posted on both the issue
+and the pull request may surface twice; answer each comment id with `note-answered`.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
@@ -579,7 +576,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; it is also recorded when a candidate pull request could not be read or names two watched issues, every watched lane then named in `unreadIssues`; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; it is also recorded when the link from a candidate pull request to a lane's issue could not be read, or the pull request is linked to two watched issues, every watched lane then named in `unreadIssues`; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
 - `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
@@ -589,9 +586,9 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 builder note may be waiting unseen, so read the comments of every issue the event names
 (`unreadIssues`; when the event names none, every watched cloud lane's issue) through REST
 yourself, now. Read each named lane's own pull request conversation too, not only its issue. Find that
-pull request from the issue's closing pull requests when the watch could not; an upper stack layer's pull
-request targets the layer below, so GitHub lists no closing link for it, and you find it by searching the
-repository's pull request descriptions for the issue number
+pull request from the issue's closing pull requests when the watch could not read the link; an upper stack
+layer's pull request targets the layer below, so GitHub lists no closing link for it, and you find it by
+searching the repository's pull request descriptions for the issue number
 (`gh api -X GET search/issues -f q='repo:<o>/<r> is:pr in:body <issue number>'`). Answer any builder note
 there inside the builder's 15-minute reply window
 (`rubric/review-discipline.md` § Size). Never wait for the next tick to read them.

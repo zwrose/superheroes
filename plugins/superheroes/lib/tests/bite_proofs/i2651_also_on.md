@@ -1,29 +1,40 @@
 # Bite-proof record: #2651 the cloud builder's terminal comment stays on the issue
 
 Detector under proof: `plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py`.
-Guarded code: `plugins/superheroes/lib/cloud_builder.py` (`terminal_text`).
-Declared guarded-element set: the two below (one neutralization and one red each, no grouping): (1) the
-`also_on` full-match validation, (2) the `target` key. The doc pins in the same test file are literal-presence
-pins and declare no bite-proof. Every neutralization was one targeted edit made with the Edit tool, undone by
-the inverse Edit before the next element, each Edit and each run in its own tool call. No `git checkout`,
-`restore`, `reset` or `stash` was used. Command prefix for every run below (worktree root):
+Guarded code: `plugins/superheroes/lib/cloud_builder.py` (`terminal_text`), unchanged by the order that re-ran this record.
+Base: `2f804e8ba99f5f3f050c91e9398d85b5e7519517`. Declared guarded-element set: the two below (one neutralization and
+one red each, no grouping): (1) the `also_on` check, (2) the `target` key. The doc pins in the same test file are
+literal-presence pins and declare no bite-proof. Both were re-run against the current `cloud_builder.py`; the
+entries below replace the earlier ones. Every neutralization was one targeted edit made with the Edit tool, undone by
+the inverse Edit, each Edit and each run in its own tool call. No `git checkout`, `restore`, `reset` or `stash` was
+used. Command prefix for every run below (worktree root):
 `timeout 900 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py -q -p no:cacheprovider -k "<selector>"`.
 The selector differs per run and is named in each entry. Captures are raw pytest output (the `UV_NATIVE_TLS`
-warning line kept); in element 1's red the pytest "Full output truncated, use '-vv' to show" lines are pytest's
-own. Nothing is redacted (no secrets, only a fixture URL for a made-up repository). Each capture is under 32 KiB.
-The red runs exit 1 by design. The production sites cite this record with `# axis:` comments.
-The restore receipt for each entry is the restored line quoted; the worktree carries uncommitted work, so a
-whole-file `git diff` is not empty and is not the receipt.
+warning line kept) unless an entry says otherwise. Nothing is redacted (no secrets, only a fixture URL for a
+made-up repository). The red runs exit 1 by design. The production sites cite this record with `# axis:` comments.
+The restore receipt for each entry is the restored line quoted; after both restores `git diff --stat --
+plugins/superheroes/lib/cloud_builder.py` printed nothing.
 
-## 1. The `also_on` full-match validation (`terminal_text`, `cloud_builder.py:665`)
+Disclosures:
+- Element 2's first restore attempt failed: the Edit tool refused the inverse edit because the line
+  `    return {"ok": True, "comment": comment}` occurs five times in the file, so the neutralization stayed in the tree
+  and the run that followed (issued in the same step as the failed edit) was red. Its raw output was
+  `F`, `KeyError: 'target'` at `test_cloud_builder_also_on_2651.py:28`, `1 failed, 18 deselected in 0.24s`: the same
+  output as the red below, so the failed restore was caught at once. The restore was redone with the preceding
+  comment line as an anchor and the green below is the run after it. That is one run more than the budget's 24
+  bite-proof runs.
+- Element 1's red capture is incomplete: the tool that ran it cut 5194 characters out of the middle of the output
+  (its own marker is kept below). The six blocks shown by name in the summary and the closing `9 failed` line are intact.
+
+## 1. The `also_on` check in `terminal_text` (`cloud_builder.py:681`)
 
 - **Axis:** `also_on` is exactly one pull request comment permalink, with nothing before, after or around it. Anything else is refused `also-on-invalid`.
-- **Neutralization:** `if also_on is not None and not (isinstance(also_on, str) and _PR_COMMENT_URL_RE.fullmatch(also_on)):` became `if False and also_on is not None and not (isinstance(also_on, str) and _PR_COMMENT_URL_RE.fullmatch(also_on)):`.
-- **Raw red** (`-k "row3_an_also_on"`; all six parametrizations red):
+- **Neutralization:** `    if also_on is not None and (comment_permalink(also_on) or (None, None))[1] != "pull":` became `    if False:`.
+- **Raw red, incomplete** (`-k "row3_an_also_on"`; all nine parametrizations red). Only the first failure block is kept here in full. The other eight repeat it word for word with their own `bad = ...` value and are shortened to the summary lines, about 5 KiB elided by me, on top of the 5194 characters the tool cut from its own copy:
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-FFFFFF                                                                   [100%]
+FFFFFFFFF                                                                [100%]
 =================================== FAILURES ===================================
 _ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/issues/5#issuecomment-1] _
 
@@ -36,6 +47,9 @@ bad = 'https://github.com/acme/widgets/issues/5#issuecomment-1'
         PR_COMMENT + "\nand more text",
         "https://example.com/acme/widgets/pull/42#issuecomment-1234567",
         "",
+        "https://github.com/acme/../pull/42#issuecomment-1",
+        "https://github.com/./widgets/pull/42#issuecomment-1",
+        "https://github.com/acme/widgets/pull/42#issuecomment-0",
     ])
     def test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused(bad):
 >       assert cb.terminal_text("park", "Waiting.", also_on=bad) == {"ok": False, "reason": "also-on-invalid"}
@@ -50,17 +64,11 @@ E                     'Waiting.\n'...
 E         
 E         ...Full output truncated, use '-vv' to show
 
-/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py:50: AssertionError
-_ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/pull/42] _
-(the same failure, for the input 'https://github.com/acme/widgets/pull/42')
-_ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[bad2] _
-(the same failure, for the two URLs separated by a space)
-_ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/pull/42#issuecomment-1234567\nand more text] _
-(the same failure, for a URL followed by a newline and text)
-_ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://example.com/acme/widgets/pull/42#issuecomment-1234567] _
-(the same failure, for a non-github host)
-_ test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[] _
-(the same failure, for the empty string)
+/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py:53: AssertionError
+(blocks 2 to 9: the same failure, for the eight other `bad` values)
+
+... [5194 characters truncated] ...
+
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/issues/5#issuecomment-1]
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/pull/42]
@@ -68,26 +76,25 @@ FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_ro
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/pull/42#issuecomment-1234567\nand more text]
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://example.com/acme/widgets/pull/42#issuecomment-1234567]
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[]
-6 failed, 9 deselected in 0.29s
+FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/../pull/42#issuecomment-1]
+FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/./widgets/pull/42#issuecomment-1]
+FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row3_an_also_on_that_is_not_one_pull_request_comment_permalink_is_refused[https://github.com/acme/widgets/pull/42#issuecomment-0]
+9 failed, 10 deselected in 0.29s
 ```
 
-The five other failure blocks in the capture repeat the first block's traceback word for word with their own
-`bad = ...` value. They are shortened to one line each here: about 5 KiB elided, all six inputs shown above by
-name and by the summary lines.
-
-- **Restore:** inverse Edit. **Restore receipt:** the restored line, `    if also_on is not None and not (isinstance(also_on, str) and _PR_COMMENT_URL_RE.fullmatch(also_on)):`; a search of `cloud_builder.py` for `if False` finds nothing.
+- **Restore:** inverse Edit. **Restore receipt:** the restored line, `    if also_on is not None and (comment_permalink(also_on) or (None, None))[1] != "pull":` (a `grep -n "if False\|if also_on is not None and"` printed line 681 only).
 - **Raw green** (same selector):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-......                                                                   [100%]
-6 passed, 9 deselected in 5.85s
+.........                                                                [100%]
+9 passed, 10 deselected in 0.30s
 ```
 
-## 2. The `target` key (`terminal_text`, `cloud_builder.py:675`)
+## 2. The `target` key (`terminal_text`, `cloud_builder.py:691`)
 
 - **Axis:** every composed terminal comment names its one target, the build's issue, in the result.
-- **Neutralization:** `return {"ok": True, "comment": comment, "target": "issue"}` became `return {"ok": True, "comment": comment}`.
+- **Neutralization:** `    return {"ok": True, "comment": comment, "target": "issue"}` became `    return {"ok": True, "comment": comment}`.
 - **Raw red** (`-k "row1_the_comment"`):
 
 ```
@@ -106,14 +113,14 @@ E       KeyError: 'target'
 /home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py:28: KeyError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_builder_also_on_2651.py::test_row1_the_comment_without_also_on_is_unchanged_and_targets_the_issue
-1 failed, 14 deselected in 0.24s
+1 failed, 18 deselected in 0.24s
 ```
 
-- **Restore:** inverse Edit. **Restore receipt:** the restored line, `    return {"ok": True, "comment": comment, "target": "issue"}`, which a search of `cloud_builder.py` for `"target": "issue"` finds once (line 675).
-- **Raw green** (same selector):
+- **Restore:** inverse Edit, second attempt (see the disclosure above), anchored on the preceding comment line. **Restore receipt:** the restored line, `    return {"ok": True, "comment": comment, "target": "issue"}` (a `grep -n "\"target\": \"issue\""` printed line 691 only).
+- **Raw green** (same selector, after the completed restore):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
-1 passed, 14 deselected in 0.23s
+1 passed, 18 deselected in 0.21s
 ```

@@ -2331,7 +2331,7 @@ def _merge_comments(shared, lane_reads):
 
 def _pr_attributed_kinds():
     """The terminal kinds the builder composes, read from its header map (their one home) at each call. Progress and
-    handover comments stay issue-scoped: only a builder note or one of these endings moves to the lane the PR closes."""
+    handover comments stay issue-scoped: only a builder note or one of these endings moves to the lane GitHub links the PR to."""
     return tuple(cb.TERMINAL_HEADERS)
 
 
@@ -2379,55 +2379,157 @@ def _pr_candidate(comment, watched_issues, earliest):
         return None
 
 
-def _pr_closing_issues(payload, slug):
-    """Sorted tuple of this repository's issue numbers the first line of a pull request's body closes with a closing
-    keyword.
-
-    Only the first line is read: the builder's handback contract puts the close link there, on its own, so no
-    Markdown elsewhere in the body (an example, a template comment, a code block) can name or hide a lane. `()` when
-    payload is a dict without a "pull_request" key (a plain issue); None when payload is not a dict or its body is
-    neither None nor a string. The PR's base branch is not read."""
-    if not isinstance(payload, dict):
-        return None
-    if "pull_request" not in payload:
-        return ()
-    body = payload.get("body")
-    if body is None:
-        body = ""
-    if not isinstance(body, str):
-        return None
-    first = body.replace("\r\n", "\n").replace("\r", "\n").lstrip("\n").split("\n", 1)[0]
-    found = set()
-    # axis: only the body's first line names a lane, so a closing keyword anywhere else in the body never counts — see bite-proof record i2651_pr_comments.md
-    for match in _CLOSING_REF_RE.finditer(first):
-        ref_number = match.group("n") or match.group("bare") or match.group("un")
-        target = match.group("slug") or match.group("uslug")
-        if int(ref_number) > 0 and (target is None or target.lower() == slug.lower()):
-            found.add(int(ref_number))
-    return tuple(sorted(found))
+_PR_LINKS_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
+    "{ pullRequest(number: $number) { closingIssuesReferences(first: 25) "
+    "{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }"
+)
 
 
-def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, env):
-    """{number: tuple of the issues its body closes, or None} for each number, read in sorted order. None is an
-    unreadable pull request, or one skipped for budget (that number and every later one). Never raises."""
+class _PrLinkUnknown(Exception):
+    """A pull request's GitHub link could not be read: the read failed, was refused, or came back malformed."""
+
+
+class _PrBudgetSpent(Exception):
+    """The watch's budget ran out before a pull-request read could start."""
+
+
+def _closing_issue_links(proc, slug, watched_issues):
+    """Sorted tuple of the watched issues of this repository GitHub's closing references name for one pull request
+    (a `gh api graphql` process). Raises _PrLinkUnknown on a non-zero exit (the proxy's GraphQL refusal included), output
+    that is not JSON, an `errors` key, a missing closing-references object, more than one page, or a node without an
+    int number and a string repository name."""
+    if proc.returncode != 0:
+        raise _PrLinkUnknown("graphql exit %s" % proc.returncode)
+    try:
+        parsed = json.loads(proc.stdout)
+    except (TypeError, ValueError):
+        raise _PrLinkUnknown("graphql output is not JSON")
+    if not isinstance(parsed, dict) or "errors" in parsed:
+        raise _PrLinkUnknown("graphql errors")
+    data = parsed.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull = repository.get("pullRequest") if isinstance(repository, dict) else None
+    refs = pull.get("closingIssuesReferences") if isinstance(pull, dict) else None
+    page_info = refs.get("pageInfo") if isinstance(refs, dict) else None
+    nodes = refs.get("nodes") if isinstance(refs, dict) else None
+    if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False or not isinstance(nodes, list):
+        raise _PrLinkUnknown("closing references unreadable or paged")
+    linked = set()
+    for node in nodes:
+        number = node.get("number") if isinstance(node, dict) else None
+        node_repo = node.get("repository") if isinstance(node, dict) else None
+        name = node_repo.get("nameWithOwner") if isinstance(node_repo, dict) else None
+        if not _valid_positive_int(number) or not isinstance(name, str):
+            raise _PrLinkUnknown("closing reference node malformed")
+        if name.lower() == slug.lower() and number in watched_issues:
+            linked.add(number)
+    return tuple(sorted(linked))
+
+
+def _timeline_links(rows, slug, number):
+    """True when a REST issue timeline holds a cross-reference whose source is pull request `number` of this
+    repository. Raises _PrLinkUnknown for a row or cross-reference that cannot be read."""
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            raise _PrLinkUnknown("timeline row")
+        if row.get("event") != "cross-referenced":
+            continue
+        source = row.get("source")
+        issue = source.get("issue") if isinstance(source, dict) else None
+        if not isinstance(issue, dict):
+            raise _PrLinkUnknown("cross-reference without an issue")
+        if "pull_request" not in issue:
+            continue
+        ref_number = issue.get("number")
+        repository = issue.get("repository")
+        full_name = repository.get("full_name") if isinstance(repository, dict) else None
+        if not _valid_positive_int(ref_number) or not isinstance(full_name, str):
+            raise _PrLinkUnknown("cross-reference malformed")
+        if ref_number == number and full_name.lower() == slug.lower():
+            found = True
+    return found
+
+
+def _read_candidate_prs(numbers, slug, watched_issues, repo_root, deadline, monotonic, gh_run, env):
+    """{number: tuple of the watched issues GitHub links the pull request to, or None} for each number, read in
+    sorted order. Never raises.
+
+    A pull request based on the repository's default branch is linked by its closing issue references (GitHub
+    GraphQL); one based on any other branch (a stack layer) by a cross-reference to it on a watched issue's REST
+    timeline. The pull request's body text is never read. None is unknown: a link that could not be read (a failed
+    or refused read, a truncated page, malformed data), or a number skipped for budget (that number and every later
+    one)."""
     resolved = {}
     spent = False
+    default_branch = None
+    owner, _sep, name = slug.partition("/")
+    run_kwargs = dict(cwd=repo_root, env=_gh_scrub_env(env))
+
+    def budget():
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise _PrBudgetSpent()
+        return remaining
+
+    def get(path):
+        remaining = budget()
+        payload, refusal = sc._transport_rest(
+            ["gh", "api", path], max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)), gh_run, None, None, 0,
+            deadline_at=_stack_deadline_at(remaining), run_kwargs=run_kwargs,
+        )
+        if refusal is not None:
+            raise _PrLinkUnknown(path)
+        return payload
+
+    def get_list(path):
+        remaining = budget()
+        rows, refusal = sc.read_rest_list(
+            path, run=gh_run, timeout=max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)),
+            deadline_at=_stack_deadline_at(remaining), run_kwargs=run_kwargs,
+        )
+        if refusal is not None:
+            raise _PrLinkUnknown(path)
+        return rows
+
     for number in sorted(numbers):
         resolved[number] = None
+        if spent:
+            continue
         try:
-            remaining = deadline - monotonic()
-            if spent or remaining <= 0:
-                spent = True
+            if default_branch is None:
+                default_branch = ""
+                value = get("repos/%s" % slug).get("default_branch")
+                if isinstance(value, str):
+                    default_branch = value
+            if not default_branch:
                 continue
-            payload, refusal = sc._transport_rest(
-                ["gh", "api", "repos/%s/issues/%d" % (slug, number)],
-                max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)), gh_run, None, None, 0,
-                deadline_at=_stack_deadline_at(remaining),
-                run_kwargs=dict(cwd=repo_root, env=_gh_scrub_env(env)),
-            )
-            if refusal is not None:
+            pull_base = get("repos/%s/pulls/%d" % (slug, number)).get("base")
+            base_ref = pull_base.get("ref") if isinstance(pull_base, dict) else None
+            if not isinstance(base_ref, str) or not base_ref:
                 continue
-            resolved[number] = _pr_closing_issues(payload, slug)
+            if base_ref == default_branch:
+                remaining = budget()
+                # axis: the closing issue references of a default-branch pull request are read from GitHub's GraphQL, and a read that fails, is refused by the proxy, or comes back truncated or malformed is unknown (None), never "no link" — see bite-proof record i2651_pr_comments.md
+                proc = gh_run(
+                    ["gh", "api", "graphql", "-f", "owner=%s" % owner, "-f", "name=%s" % name,
+                     "-F", "number=%d" % number, "-f", "query=" + _PR_LINKS_QUERY],
+                    capture_output=True, text=True, timeout=max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)),
+                    cwd=repo_root, env=_gh_scrub_env(env),
+                )
+                resolved[number] = _closing_issue_links(proc, slug, watched_issues)
+            else:
+                linked = []
+                # axis: a stack layer belongs to a lane only through a cross-reference GitHub records on the lane's issue timeline whose source is this very pull request of this repository, and a timeline that cannot be read is unknown (None), never "no link" — see bite-proof record i2651_pr_comments.md
+                for issue in sorted(watched_issues):
+                    rows = get_list("repos/%s/issues/%d/timeline" % (slug, issue))
+                    if _timeline_links(rows, slug, number):
+                        linked.append(issue)
+                resolved[number] = tuple(linked)
+        except _PrBudgetSpent:
+            spent = True
+            resolved[number] = None
         except Exception:
             resolved[number] = None
     return resolved
@@ -2435,11 +2537,12 @@ def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, e
 
 def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=frozenset()):
     """(comments, complete): the comments with each builder note or ending on a pull request re-keyed to the one
-    watched lane's issue the PR closes, as a new list; no comment dict is mutated.
+    watched lane's issue GitHub links the PR to, as a new list; no comment dict is mutated.
 
-    A re-keyed copy carries `prNumber`. `complete` is False when a candidate's PR was not read, or closes two or
-    more watched issues (no lane can be named, whether or not one of them is issue-only); a PR that closes no
-    watched issue leaves it as it was. A lane whose issue is in `issue_only` (a resumed lane read from its own issue)
+    `resolved` is `_read_candidate_prs`'s answer: the watched issues GitHub links each PR to, or None when the link
+    could not be read. A re-keyed copy carries `prNumber`. `complete` is False when a candidate's link was not read,
+    or links two or more watched issues (no lane can be named, whether or not one of them is issue-only); a PR
+    linked to no watched issue leaves it as it was. A lane whose issue is in `issue_only` (a resumed lane read from its own issue)
     never takes a pull-request comment. Nothing pairs: an ending the builder posted on both the issue and its PR is
     two endings of the lane."""
     watched_issues = {info["issue"] for info in watched.values()}
@@ -2456,7 +2559,7 @@ def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=fro
             continue
         hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
         if len(hits) >= 2:
-            # axis: a pull request that closes two or more watched issues is no lane's and is disclosed, never guessed onto one — see bite-proof record i2651_pr_comments.md
+            # axis: a pull request GitHub links to two or more watched issues is no lane's and is disclosed, never guessed onto one — see bite-proof record i2651_pr_comments.md
             complete = False
             attributed.append(comment)
             continue
@@ -2464,7 +2567,7 @@ def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=fro
         if not hits or hits[0] in issue_only:
             attributed.append(comment)
             continue
-        # axis: a note or ending on a pull request that closes exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
+        # axis: a note or ending on a pull request GitHub links to exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
         issue_url = re.sub(r"/issues/\d+$", "/issues/%d" % hits[0], comment["issue_url"])
         attributed.append(dict(comment, issue_url=issue_url, prNumber=number))
     return attributed, complete
@@ -2575,7 +2678,9 @@ def _evaluate_cloud_comments(
     if candidates:
         pr_slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
         if pr_slug is not None:
-            resolved = _read_candidate_prs(candidates, pr_slug, repo_root, deadline, monotonic, gh_run, env)
+            resolved = _read_candidate_prs(
+                candidates, pr_slug, watched_issues, repo_root, deadline, monotonic, gh_run, env,
+            )
         else:
             resolved = {n: None for n in candidates}
         comments, pr_complete = _attribute_pr_comments(
