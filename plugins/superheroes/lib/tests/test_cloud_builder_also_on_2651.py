@@ -120,3 +120,18 @@ def test_row5_wave_watch_md_names_the_lane_s_own_pull_request_and_pr_in_both_fie
     terminal = text[text.index("When **`lane-terminal`** fires for a cloud lane"):text.index("A terminal cloud lane **sent a fix order")]
     assert re.search(r'"pr"', note)
     assert re.search(r'"pr"', terminal)
+
+
+def test_wave_watch_md_hand_read_fallback_finds_an_unlinked_stack_layers_pull_request():
+    # axis: the hand-read step names a search that finds a PR GitHub does not link to the issue
+    text = " ".join(_read("skills", "showrunner", "reference", "wave-watch.md").split())
+    step = text[text.index("**On `builder-note-unavailable`, read the issues by hand at once.**"):]
+    step = step[:step.index("## Answering a builder note")]
+    assert "own pull request conversation" in step
+    assert "is:pr in:body" in step
+
+
+def test_wave_watch_md_says_an_old_resumed_lane_takes_no_pull_request_comment_from_the_shared_read():
+    # axis: the stated limit matches the code: no PR comment is attributed to an old resumed lane, shared read or not
+    text = " ".join(_read("skills", "showrunner", "reference", "wave-watch.md").split())
+    assert "no comment on a pull request is ever attributed to it, even one the shared read returns" in text

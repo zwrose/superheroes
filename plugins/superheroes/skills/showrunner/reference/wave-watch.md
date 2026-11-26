@@ -472,7 +472,8 @@ disclosed as `builder-note-unavailable` with every watched lane named in `unread
 reopened lanes are then kept as on a partial read. The backstop has three limits. It does not read pull
 request review bodies or inline review comments. A resumed lane whose basis is older than the 24-hour
 shared lookback is read only from its own issue: no comment on a pull request is ever attributed to it,
-even one the shared read returns because another watched lane opened it. A pull
+even one the shared read returns because another watched lane opened it, so its handback is seen only on
+its issue. A pull
 request the lane did not open that closes the lane's issue and carries one of these headers after the lane
 began is read as the lane's. An ending the builder posted on both, with the issue copy (a handback,
 stop or park of the same kind) naming the pull request copy on its last line, the `--also-on` pointer
