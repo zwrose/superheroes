@@ -1,106 +1,55 @@
-# Bite-proof record: issue 2655, the advisor's owner check-in
+# Bite-proof record: the advisor's owner check-in home
 
 Detector: `plugins/superheroes/lib/tests/test_owner_checkin_doctrine_2655.py` (unedited throughout).
-Guarded-element set (declared by the order, fixed): E1 to E10, one test function each.
 
-How each proof ran: one neutralization, a targeted edit to doc prose and never to the test; the red run by
-exact node id (`scripts/pinned-python -B -m pytest <file>::<test> -q`); the inverse edit; the green run by
-the same node id. The order named `-k <name>`; the exact node id was used instead because
-`rubric/bite-proof.md` says never `-k`. Raw output below is trimmed to the failing test's name and its
-assertion line (the pytest source echo, the long text dump and the `UV_NATIVE_TLS` warning are elided).
-No secret, token or private URL appears; nothing was redacted.
+The detector pins structure only (`rubric/review-discipline.md` § The pin rule): the home heading,
+its Contents entry, and the two citations of the home. An earlier version pinned the home's
+sentences and numbers; review round 1 found that it broke the pin rule, so it was cut back to
+structure, and this record replaces that version's record.
+
+Guarded-element set (fixed): S1 home heading, S2 Contents entry, S3 charter duty 9 citation,
+S4 showrunner-resume Step 6 citation.
+
+How the proof ran: each neutralization was a targeted edit to doc prose with the edit tool, never to
+the test. All four ran in one red run on distinct sites, and each red names its own element. Each was
+undone by the inverse edit, and the green is the whole-file run after the restore with a clean
+`git status --short`. Command: `scripts/pinned-python -B -m pytest <the detector> -q --tb=line`.
+Raw output is trimmed to each failing test's name and its assertion line. Nothing was redacted.
 
 `O` = `plugins/superheroes/skills/showrunner/reference/orchestration.md`,
 `C` = `plugins/superheroes/skills/showrunner/SKILL.md`,
 `R` = `plugins/superheroes/skills/showrunner-resume/SKILL.md`.
 
-Restore receipt for every entry: the restored text was read back by the inverse edit (the edit tool
-matched the neutralized text exactly once, and the replacement is quoted in each entry), and the final
-whole-file run after the last restore reads `10 passed in 0.23s`.
+## S1 home heading
 
-## E1 cadence
+- Element and axis: `O`, `## Owner check-in while lanes run` as a real level-2 heading, once, outside any code fence.
+- Neutralization (name): `## Owner check-in while lanes run` became `## Owner check-ins while lanes run`.
+- Raw red: `FAILED ...::test_home_heading_exists_once` with `AssertionError: orchestration.md must carry '## Owner check-in while lanes run' once` (`assert 0 == 1`).
+- Neutralization (fence, a separate run): the heading wrapped in a `markdown` code fence.
+- Raw red: `1 failed, 3 passed`, `FAILED ...::test_home_heading_exists_once` with the same assertion line.
+- Restore: inverse edits back to the bare heading.
 
-- Element and axis: `O` home, the 30-minute floor sentence and "count from the last note you sent"; axis is the cadence, even when nothing changed.
-- Neutralization: `30 minutes, even when nothing` / `changed.**` became `30 minutes, only when something` / `changed.**`.
-- Raw red: `FAILED ...::test_e1_cadence` with `AssertionError: E1 cadence: orchestration.md home lacks 'While any lane is live, send the owner a status note at least every 30 minutes, even when nothing changed.'`
-- Restore: inverse edit back to `30 minutes, even when nothing` / `changed.**`.
-- Raw green: `1 passed in 0.22s`
+## S2 Contents entry
 
-## E2 shape
+- Element and axis: `O` `# Contents`, the link `[Owner check-in while lanes run](#owner-check-in-while-lanes-run)`.
+- Neutralization: the anchor `(#owner-check-in-while-lanes-run)` became `(#owner-checkin)`.
+- Raw red: `FAILED ...::test_contents_lists_home` with `AssertionError: orchestration.md # Contents lacks the home's entry`.
+- Restore: inverse edit back to `(#owner-check-in-while-lanes-run)`.
 
-- Element and axis: `O` home, the note's shape; axis is what a note carries.
-- Neutralization: `its phase and its age (the` became `its phase and its duration (the`.
-- Raw red: `FAILED ...::test_e2_shape` with `AssertionError: E2 shape: orchestration.md home lacks 'its phase and its age'`
-- Restore: inverse edit back to `its phase and its age (the`.
-- Raw green: `1 passed in 0.20s`
+## S3 charter duty 9 citation
 
-## E3 every wake
+- Element and axis: `C` duty 9, the citation `orchestration.md` § Owner check-in while lanes run.
+- Neutralization: `§ Owner check-in while lanes run.**` became `§ Liveness sweep and wave watch.**`.
+- Raw red: `FAILED ...::test_charter_duty_9_cites_home` with `AssertionError: showrunner SKILL.md duty 9 does not cite the check-in home`.
+- Restore: inverse edit back to `§ Owner check-in while lanes run.**`.
 
-- Element and axis: `O` home, "Every wake sends the note." and the event-or-timer clause; axis is that a `timer` wake sends the note too.
-- Neutralization: `whether an event or the loop's own `timer`` became `whether an event or the loop's own `tick``.
-- Raw red: `FAILED ...::test_e3_every_wake` with `AssertionError: E3 every wake: orchestration.md home lacks "whether an event or the loop's own `timer`"`
-- Restore: inverse edit back to the `timer` wording.
-- Raw green: `1 passed in 0.20s`
+## S4 resume Step 6 citation
 
-## E4 max-seconds bound
+- Element and axis: `R` Step 6, the citation `orchestration.md` § Owner check-in while lanes run.
+- Neutralization: `§ Owner check-in while lanes run, in place` became `§ Liveness sweep and wave watch, in place`.
+- Raw red: `FAILED ...::test_resume_step_6_cites_home` with `AssertionError: showrunner-resume SKILL.md Step 6 does not cite the check-in home`.
+- Restore: inverse edit back to `§ Owner check-in while lanes run, in place`.
 
-- Element and axis: `O` home, the `--max-seconds` bound; axis is a number no larger than 1500.
-- Neutralization: `` `--max-seconds` at most 1500 and`` became `` `--max-seconds` at most 2400 and`` (the `--max-total-seconds` bound left at 1500).
-- Raw red: `FAILED ...::test_e4_max_seconds_bound` with `AssertionError: E4 max-seconds bound: orchestration.md home states `--max-seconds` at most 2400, over 1500` and `assert 2400 <= 1500`
-- Restore: inverse edit back to `at most 1500 and`.
-- Raw green: `1 passed in 0.23s`
+## Green
 
-## E5 max-total-seconds bound
-
-- Element and axis: `O` home, the `--max-total-seconds` bound and the sentence "only `--max-total-seconds` ends the loop"; axis is a number no larger than 1500, independent of E4.
-- Neutralization: `most 1500 (25 minutes)` became `most 2400 (25 minutes)` (the `--max-seconds` bound left at 1500).
-- Raw red: `FAILED ...::test_e5_max_total_seconds_bound` with `AssertionError: E5 max-total-seconds bound: orchestration.md home states `--max-total-seconds` at most 2400, over 1500` and `assert 2400 <= 1500`
-- Restore: inverse edit back to `most 1500 (25 minutes)`.
-- Raw green: `1 passed in 0.20s`
-- Not separately neutralized: the second leg of E5 (the sentence "only `--max-total-seconds` ends the loop") shares this test function; the order declared E5 as one element, so only the number leg has its own red.
-
-## E6 override
-
-- Element and axis: `O` home, "These values replace the example values in `wave-watch.md`" and "on every host"; axis is that the override holds on every host.
-- Neutralization: `on every host;` became `on some hosts;`.
-- Raw red: `FAILED ...::test_e6_override` with `AssertionError: E6 override: orchestration.md home lacks 'on every host'`
-- Restore: inverse edit back to `on every host;`.
-- Raw green: `1 passed in 0.21s`
-
-## E7 not-held report
-
-- Element and axis: `O` home, the not-held report sentence; axis is that the advisor tells the owner the check-in is not held, why, and what clears it.
-- Neutralization: `the 30-minute check-in is not held, why, and what clears it` became `the 30-minute check-in is late`.
-- Raw red: `FAILED ...::test_e7_not_held_report` with `AssertionError: E7 not-held report: orchestration.md home lacks 'the 30-minute check-in is not held, why, and what clears it'`
-- Restore: inverse edit back to the full phrase.
-- Raw green: `1 passed in 0.20s`
-
-## E8 charter pointer
-
-- Element and axis: `C` duty 9, the new pointer line; axis is the cadence in brief, the resume-first rule, and the pointer to the home.
-- Neutralization: ``runs `showrunner-resume` first, resume point or not:`` became ``runs `showrunner-resume` first, if a resume point exists:``.
-- Raw red: `FAILED ...::test_e8_charter_pointer` with `AssertionError: E8 charter pointer: SKILL.md duty 9 lacks 'runs `showrunner-resume` first, resume point or not'`
-- Restore: inverse edit back to ``first, resume point or not:``.
-- Raw green: `1 passed in 0.20s`
-- Not separately neutralized: the other two needles in this test (the cadence phrase and the pointer) share this function; the order declared E8 as one element.
-
-## E9 resume re-arm and note
-
-- Element and axis: `R` Step 6, the new paragraph; axis is arming with the home's ceiling, the note right after the Step 7 report, and the not-held report on line 3.
-- Neutralization: `right after the Step 7 report` became `before the Step 7 report`.
-- Raw red: `FAILED ...::test_e9_resume_rearm_and_note` with `AssertionError: E9 resume re-arm and note: showrunner-resume SKILL.md Step 6 lacks 'right after the Step 7 report'`
-- Restore: inverse edit back to `right after the Step 7 report`.
-- Raw green: `1 passed in 0.21s`
-- Not separately neutralized: the other needles in this test share this function; the order declared E9 as one element.
-
-## E10 one home
-
-- Element and axis: `C` and `R` whole files must not restate the ceiling number or the note's shape; `O` `# Contents` must list the home. Axis is one home.
-- Neutralization (restatement leg): in `C`, `with the check-in ceiling; a restarted` became `with the check-in ceiling of 1500; a restarted`.
-- Raw red: `FAILED ...::test_e10_one_home` with `AssertionError: E10 one home: showrunner SKILL.md restates '1500'`
-- Restore: inverse edit back to `with the check-in ceiling; a restarted`.
-- Raw green: `1 passed in 0.20s`
-- Neutralization (contents leg, run on a spare invocation): in `O`, `(#owner-check-in-while-lanes-run)` became `(#owner-checkin)` on the `# Contents` line.
-- Raw red: `AssertionError: E10 one home: orchestration.md # Contents lacks the home's entry`
-- Restore: inverse edit back to `- [Owner check-in while lanes run](#owner-check-in-while-lanes-run)`; the green is the final whole-file run, `10 passed in 0.23s`.
-- Not separately neutralized: the `25 minutes`, `its phase and its age` and `anything answered since the last note` needles, and the same needles in `R`; they share the restatement loop with `1500`, which is the representative.
+After every restore: `4 passed`, and `git status --short` clean.
