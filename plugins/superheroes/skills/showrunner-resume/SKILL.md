@@ -116,6 +116,8 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 **Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
+**Arm with the check-in ceiling, and check in.** Every watch this step arms carries the ceiling in `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Owner check-in while lanes run, in place of `wave-watch.md`'s example values. While any lane is live, send the owner a check-in note in that section's shape right after the Step 7 report; when no watch with the ceiling is armed, line 3 of the report carries that section's not-held report.
+
 **Re-check the waits before you arm.** An app exit or restart since the last seat armed its watchers kills every one of them silently, with no marker. Re-list the waits the session ledger records (`waiting on X; on X do Y`) and re-check each against the world directly; a wait whose X already happened is acted on now, not left to the new watcher (`wave-watch.md` § The boundary the owner accepted).
 
 The reference's one-off check returns at once and is safe to run before arming, but a mistyped batch id reads as a quiet batch (`timer`), so check the batch id against the launch record rather than trusting the check.

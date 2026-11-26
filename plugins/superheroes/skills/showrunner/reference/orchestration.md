@@ -9,6 +9,7 @@
 - [The launcher provisions each build's worktree](#the-launcher-provisions-each-builds-worktree)
 - [iPhone lanes: launching and reaping their phones](#iphone-lanes-launching-and-reaping-their-phones)
 - [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
+- [Owner check-in while lanes run](#owner-check-in-while-lanes-run)
 - [Lapsed-pass parks and the send-back](#lapsed-pass-parks-and-the-send-back)
 - [Acting on the builders' account](#acting-on-the-builders-account)
 - [Adoption mechanics](#adoption-mechanics)
@@ -367,6 +368,43 @@ probe has three legs — `resultProduction`, `completionDetection`, `progressTel
 live-review failure rate. The canary strengthens what the `engine-auth` check must mean in a wave;
 it does not add a check to the preflight list. The walk and the owner's launch-without word live in
 `skills/showrunner/reference/dispatch-preflight.md`.
+
+## Owner check-in while lanes run
+
+This section is the one home for the advisor's check-in with the owner: its cadence, the note's
+shape, and the watch ceiling that keeps them. The charter's duty 9 and `showrunner-resume` point
+here.
+
+**While any lane is live, send the owner a status note at least every 30 minutes, even when nothing
+changed.** The 30 minutes count from the last note you sent, not from the last wake, so a note falls
+due during your own long work (a vet, a review read) as well. When nothing changed since the last
+note, the note is one line.
+
+**The note's shape.** One line per live lane: its issue, its phase and its age (the time since its
+launch, and since its last activity). Then anything answered since the last note: a builder note, an
+owner question, a vet. Then anything waiting on the owner, or that nothing is.
+
+**Every wake sends the note.** A wave-watch wake, whether an event or the loop's own `timer`, sends
+the note first, then runs the liveness sweep (§ Liveness sweep and wave watch), then acts on the
+event and re-arms. An event is news, so the owner hears it in that note.
+
+**The ceiling.** Arm every wave watch with `--max-seconds` at most 1500 and `--max-total-seconds` at
+most 1500 (25 minutes), so the loop ends on its `timer` and wakes you inside the 30 minutes.
+`--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
+`--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). The 5 minutes of slack covers
+the loop's overrun of its total and the note itself. These values replace the example values in
+`wave-watch.md` (`--max-seconds 2400` in its arming snippet, `--max-total-seconds 1680` under a
+`Monitor`) on every host; `wave-watch.md` stays the home of the arming pattern and every other flag.
+
+**Restarts and compaction.** A watch does not survive a restart, an app exit or compaction
+(`wave-watch.md` § The boundary the owner accepted). A restarted or compacted advisor seat with live
+lanes runs `showrunner-resume` first, whether or not a resume point exists. It re-arms each watch
+with this ceiling and sends a check-in note in this shape right after its report.
+
+**When the cadence is not held.** When lanes are live and no watch with this ceiling is armed (a
+batch the resume left unarmed, a refused arm, or a headless seat that cannot arm `loop`), tell the
+owner in the next note or report that the 30-minute check-in is not held, why, and what clears it.
+At a resume, this goes on line 3 of the report.
 
 ## Lapsed-pass parks and the send-back
 
