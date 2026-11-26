@@ -19,5 +19,7 @@ def test_unlinked_membership_at_a_new_head_cannot_use_the_old_vet(tmp_path, caps
     result = _judge_cli(capsys, run, None, tmp_path, {"dependency": 101})
 
     assert result["ok"] is False
-    assert result["reason"] == "blockers-unreadable"
+    assert result["reason"] == "blocker-open"
+    assert result["blockers"]["checked"] is True
     assert result["blockers"]["accepted"] == []
+    assert "moved between reads" in result["blockers"]["held"][0]["why"]

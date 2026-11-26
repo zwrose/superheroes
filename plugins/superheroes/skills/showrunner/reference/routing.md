@@ -98,8 +98,11 @@ A blocker is a **lower layer of the same stack** when all of these hold:
 1. It is in the same repository.
 2. It is a sub-issue of the same feature issue as the blocked issue, listed before it in that
    feature's sub-issue list (`native-stacks.md` § Each layer is a sub-issue).
-3. It has exactly one open pull request whose first line closes it (`native-stacks.md`, item 6).
-   That pull request is the one read. READY is never read from the issue itself.
+3. It has exactly one open pull request GitHub links to it: one based on the default branch whose
+   closing references name it, or a stack layer based on another branch whose cross-reference GitHub
+   records on the blocker's timeline (`native-stacks.md`, item 6). The pull request body's text is
+   never read for the link. That pull request is the one read. READY is never read from the issue
+   itself.
 4. That pull request is not a draft.
 5. Its vet reads READY at the pull request's current head, or carries the card mark below at that
    head.

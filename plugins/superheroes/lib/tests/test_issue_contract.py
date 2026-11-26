@@ -1,8 +1,6 @@
 """Tests for issue_contract (#932)."""
 import json
 
-import pytest
-
 import issue_contract as ic
 
 
@@ -590,7 +588,10 @@ class _Proc:
 
 
 class _FakeRun:
-    """A subprocess.run-shaped fake: argv[2] (the endpoint) -> (returncode, stdout[, stderr]); unknown -> (1, "")."""
+    """A subprocess.run-shaped fake: argv[2] (the endpoint) -> (returncode, stdout[, stderr]); unknown -> (1, "").
+
+    A graphql call is answered by the key ("graphql", <n>) when its `-F number=<n>` argument has one, else by
+    the key "graphql"."""
 
     def __init__(self, responses=None, raises=None):
         self.responses = responses or {}
@@ -601,7 +602,12 @@ class _FakeRun:
         self.calls.append(list(argv))
         if self.raises is not None:
             raise self.raises
-        return _Proc(*self.responses.get(argv[2], (1, "")))
+        key = argv[2]
+        if key == "graphql":
+            numbers = [arg for arg in argv if isinstance(arg, str) and arg.startswith("number=")]
+            if numbers and ("graphql", int(numbers[0].split("=", 1)[1])) in self.responses:
+                key = ("graphql", int(numbers[0].split("=", 1)[1]))
+        return _Proc(*self.responses.get(key, (1, "")))
 
 
 def _row(number, state, repo="acme/widgets", title="t"):
@@ -866,11 +872,12 @@ def test_check_blockers_verb_missing_or_bad_args(capsys):
 # --- 9. An open blocker that is a lower layer of the same stack (#2652) -------
 #
 # Issue 7 of acme/widgets is a sub-issue of feature #50; its blockers are judged against #50's sub-issue
-# list, the open pull requests (the PR whose first line closes the blocker), that PR's vet and its stack.
+# list, the open pull requests (the PR GitHub links to the blocker), that PR's vet and its stack.
 
 FEATURE = 50
 SUBS = "repos/acme/widgets/issues/50/sub_issues?per_page=100&page=1"
 PULLS = "repos/acme/widgets/pulls?state=open&per_page=100&page=1"
+REPO_PATH = "repos/acme/widgets"
 MARKER = "<!-- superheroes:advisor-vet -->"
 
 
@@ -890,19 +897,48 @@ def _card(head, parent=FEATURE):
     return "%s %s%d" % (_vet("PARKED", head), ic.STACK_CARD_QUALIFIER, parent)
 
 
-def _pr_row(number, closes=None, vet=None, draft=False, head=None, body=None):
+def _pr_row(number, closes=None, vet=None, draft=False, head=None, body=None, base="layer-base", links=None):
+    """An open-PR row. `base` is its base branch (default: a stack layer, so its timeline cross-reference is its
+    link). `links` are the issue numbers GitHub links to it (default `[closes]`, or none); the fake world reads
+    them off the row's "links" key, and the judge ignores that key."""
     head = head or _head(number)
     if body is None:
         body = "Closes #%d\n\n%s" % (closes, vet if vet is not None else _vet("READY", head))
-    return {"number": number, "state": "open", "draft": draft, "head": {"sha": head}, "body": body}
+    if links is None:
+        links = [closes] if closes is not None else []
+    return {
+        "number": number, "state": "open", "draft": draft, "head": {"sha": head}, "base": {"ref": base},
+        "body": body, "links": list(links),
+    }
 
 
 def _sub(number, repo="acme/widgets"):
     return {"number": number, "repository_url": "https://api.github.com/repos/" + repo}
 
 
+def _timeline_path(issue):
+    return "repos/acme/widgets/issues/%d/timeline?per_page=100&page=1" % issue
+
+
+def _cross_ref(pr_number, repo="acme/widgets"):
+    """A timeline row: pull request `pr_number` of `repo` cross-references the issue."""
+    return {
+        "event": "cross-referenced",
+        "source": {"type": "issue", "issue": {"number": pr_number, "pull_request": {}, "repository": {"full_name": repo}}},
+    }
+
+
+def _closing_answer(numbers, has_next_page=False):
+    """A GraphQL closingIssuesReferences answer naming `numbers` of acme/widgets."""
+    nodes = [{"number": n, "repository": {"nameWithOwner": "acme/widgets"}} for n in numbers]
+    refs = {"pageInfo": {"hasNextPage": has_next_page}, "nodes": nodes}
+    return 0, json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": refs}}}})
+
+
 def _world(blocked=(12,), subs=(12, 7), prs=(), parent=FEATURE, responses=None, rows=None):
-    """A fake gh for issue 7: its blocked_by rows, parent, the parent's sub-issues and the open PRs."""
+    """A fake gh for issue 7: its blocked_by rows, parent, the parent's sub-issues, the open PRs, the default
+    branch, each blocked issue's timeline (one cross-reference per PR row that links it) and the closing
+    references of each PR based on the default branch (the issues the row links)."""
     table = {PAGE1: (0, json.dumps(rows if rows is not None else [_row(n, "open") for n in blocked]))}
     table[PARENT] = NO_PARENT if parent is None else (0, json.dumps({"number": parent}))
     if parent is not None:
@@ -910,8 +946,20 @@ def _world(blocked=(12,), subs=(12, 7), prs=(), parent=FEATURE, responses=None, 
             0, json.dumps([_sub(n) for n in subs])
         )
     table[PULLS] = (0, json.dumps(list(prs)))
+    table[REPO_PATH] = (0, json.dumps({"default_branch": "main"}))
+    issues = set(blocked) | {r["number"] for r in (rows or []) if isinstance(r, dict) and _is_plain_int(r.get("number"))}
+    pulls = [pr for pr in prs if isinstance(pr, dict) and isinstance(pr.get("links"), list)]
+    for issue in issues:
+        table[_timeline_path(issue)] = (0, json.dumps([_cross_ref(pr["number"]) for pr in pulls if issue in pr["links"]]))
+    for pr in pulls:
+        if isinstance(pr.get("base"), dict) and pr["base"].get("ref") == "main":
+            table[("graphql", pr["number"])] = _closing_answer(pr["links"])
     table.update(responses or {})
     return _FakeRun(table)
+
+
+def _is_plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _in_stack(stack, position):
@@ -1020,38 +1068,21 @@ def test_no_parent_is_also_read_from_a_404_on_stderr_alone(tmp_path, capsys):
     assert _held_refs(out) == ["acme/widgets#12"]
 
 
-def test_case1_the_pr_is_found_by_its_first_line_closing_ref(tmp_path, capsys):
-    for first_line in (
-        "Closes #12", "fixes: #12", "Resolved acme/widgets#12", "Closes ACME/Widgets#12",
-        "Fixes https://github.com/acme/widgets/issues/12", "Part of the work. Closes #12",
-    ):
-        body = "%s\n\n%s" % (first_line, _vet("READY", _head(101)))
-        fake = _world(blocked=(12,), subs=(12, 7), prs=[_pr_row(101, body=body)])
-        out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
-        assert out["ok"] is True, first_line
-        assert out["blockers"]["accepted"][0]["pr"] == 101, first_line
-
-
-def test_case1_a_closing_ref_to_another_issue_or_repo_is_not_this_blockers_pr(tmp_path, capsys):
-    prs = [
-        _pr_row(101, body="Closes #13\n\n" + _vet("READY", _head(101))),
-        _pr_row(102, body="Closes #120\n\n" + _vet("READY", _head(102))),
-        _pr_row(103, body="Closes other/lib#12\n\n" + _vet("READY", _head(103))),
-        _pr_row(104, body="Relates to #12\n\n" + _vet("READY", _head(104))),
-    ]
-    out = _build_ready(tmp_path, capsys, _world(prs=prs), members=_Members({}))
-    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert "no open pull request's first line closes it" in out["blockers"]["held"][0]["why"]
+NO_LINK_WHY = (
+    "no open pull request is linked to it on GitHub (a closing reference, or a stack layer's cross-reference),"
+    " so no handed-back layer builds it"
+)
 
 
 def test_case1_ready_text_in_the_blocker_issue_itself_is_never_read(tmp_path, capsys):
+    # axis: READY text in the blocker issue's own title or body is never evidence; no linked pull request still holds
     row = _row(12, "open", title="**Verdict: READY** · " + _head(12))
     row["body"] = _vet("READY", _head(12))
     fake = _world(rows=[row], subs=(12, 7), prs=[])
     out = _build_ready(tmp_path, capsys, fake, members=_Members({}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["accepted"] == []
-    assert "no open pull request's first line closes it" in out["blockers"]["held"][0]["why"]
+    assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
 
 
 def test_case1_no_pr_found_holds_and_asks_the_membership_reader_nothing(tmp_path, capsys):
@@ -1061,62 +1092,12 @@ def test_case1_no_pr_found_holds_and_asks_the_membership_reader_nothing(tmp_path
     assert members.calls == []
 
 
-def test_case1_more_than_one_open_pr_closing_it_holds(tmp_path, capsys):
+def test_case1_more_than_one_linked_open_pr_holds(tmp_path, capsys):
+    # axis: two open pull requests linked to one blocker are ambiguous and hold, naming both
     prs = [_pr_row(101, closes=12), _pr_row(102, closes=12)]
     out = _build_ready(tmp_path, capsys, _world(prs=prs), members=_Members({}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert out["blockers"]["held"][0]["why"] == "more than one open pull request closes it (#101, #102)"
-
-
-def test_first_line_only_a_closing_ref_on_the_second_line_does_not_count(tmp_path, capsys):
-    body = "A layer of the feature.\nCloses #12\n\n" + _vet("READY", _head(101))
-    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
-    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert out["blockers"]["accepted"] == []
-    assert "first line closes it" in out["blockers"]["held"][0]["why"]
-
-
-def test_first_line_only_a_closing_ref_inside_the_body_does_not_count(tmp_path, capsys):
-    body = "Layer two.\n\nSome words about it.\n\nCloses #12\n\n" + _vet("READY", _head(101))
-    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
-    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert out["blockers"]["accepted"] == []
-
-
-def test_first_line_means_the_first_non_empty_line(tmp_path, capsys):
-    body = "\n\nCloses #12\n\n" + _vet("READY", _head(101))
-    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
-    assert out["ok"] is True
-
-
-@pytest.mark.parametrize("opening", [
-    "Closes #12.\n## What's changing, and why\nIt reads `stack_check` first.",
-    "Closes #12\nPart of #50. See [plan](plan.md).",
-    "Closes #12 <!-- note --> after",
-    "- Closes #12",
-    # axis: a complete close beside a closed code span, before a comment closing later, or beside one $ counts
-    "Closes #12 `code`", "Closes #12 <!-- a note\nthat ends here -->", "Closes #12. Saves $10 per run.",
-])
-def test_first_line_is_read_alone_so_later_markdown_cannot_hide_its_close(tmp_path, capsys, opening):
-    body = opening + "\n\n" + _vet("READY", _head(101))
-    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
-    assert out["ok"] is True, opening
-
-
-@pytest.mark.parametrize("opening", [
-    "`Closes #12`", "> Closes #12", "    Closes #12", "<!-- x\nCloses #12 -->", "Done <!-- Closes #12",
-    "Done `x\nCloses #12`", "<details>Closes #12</details>",
-    # axis: markup left on the line (code, a list-nested quote, a link title, an attribute, tab indent) holds
-    "-     Closes #12", "Closes `x` #12", "- > Closes #12", '[plan](plan.md "Closes #12")',
-    '<a title="Closes #12">x</a>', " \tCloses #12", "Closes <!-- x --> #12", "$Closes #12$",
-    # axis: comment syntax inside a code span, and a list-nested tilde fence's info string, hold
-    "`<!--` <!-- note --> `Closes #12`", "- ~~~ Closes #12",
-])
-def test_first_line_close_in_code_quote_comment_or_html_closes_nothing(tmp_path, capsys, opening):
-    body = opening + "\n\n" + _vet("READY", _head(101))
-    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
-    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN, opening
-    assert out["blockers"]["accepted"] == [], opening
+    assert out["blockers"]["held"][0]["why"] == "more than one open pull request is linked to it (#101, #102)"
 
 
 def test_case2_a_ready_vet_pinned_to_an_earlier_head_holds(tmp_path, capsys):
@@ -1151,9 +1132,7 @@ def test_case3_a_not_ready_vet_holds(tmp_path, capsys):
 def test_case3_a_closed_unmerged_pr_is_not_among_the_open_pulls_so_it_holds(tmp_path, capsys):
     out = _build_ready(tmp_path, capsys, _world(prs=[]), members=_Members({}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert out["blockers"]["held"][0]["why"] == (
-        "no open pull request's first line closes it, so no handed-back layer builds it"
-    )
+    assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
 
 
 def test_case4_a_layer_beside_a_non_layer_blocker_refuses_naming_only_the_non_layer_held(tmp_path, capsys):
@@ -1469,7 +1448,7 @@ def test_case9_a_null_pr_body_reads_as_empty_and_holds(tmp_path, capsys):
     row = dict(_pr_row(101, closes=12), body=None)
     out = _build_ready(tmp_path, capsys, _world(prs=[row]), members=_Members({}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert "first line closes it" in out["blockers"]["held"][0]["why"]
+    assert "does not read READY" in out["blockers"]["held"][0]["why"]
 
 
 def test_case9_a_vet_form_refusal_is_unreadable_not_not_ready(tmp_path, capsys, monkeypatch):
@@ -1531,7 +1510,8 @@ def test_every_gh_call_of_the_judge_is_gh_api_with_a_timeout(tmp_path, capsys):
         return fake(argv, **kw)
 
     _build_ready(tmp_path, capsys, run, members=_Members({101: _in_stack(900, 1)}))
-    assert len(kwargs_seen) == 4
+    # blocked_by, parent, sub-issues, open PRs, default branch, the blocker's timeline (a stack layer: no closing read)
+    assert len(kwargs_seen) == 6
     for argv_head, kw in kwargs_seen:
         assert argv_head == ["gh", "api"]
         assert kw == {"capture_output": True, "text": True, "timeout": ic.GH_TIMEOUT_SECONDS}

@@ -7,7 +7,7 @@ from test_issue_contract import _head, _judge_cli, _pr_row, _world
 
 @pytest.mark.parametrize("membership_head, expected_reason", [
     (_head(101), None),
-    (_head(999), "blockers-unreadable"),
+    (_head(999), "blocker-open"),
 ])
 def test_unstacked_dependency_uses_the_same_head_as_its_vet(
     tmp_path, capsys, membership_head, expected_reason,
@@ -27,7 +27,9 @@ def test_unstacked_dependency_uses_the_same_head_as_its_vet(
     result = _judge_cli(capsys, run, None, tmp_path, {"dependency": 101})
     assert any(call[:3] == ["gh", "api", "graphql"] for call in run.calls)
     assert result["reason"] == expected_reason
-    assert result["blockers"]["checked"] is (expected_reason is None)
+    assert result["blockers"]["checked"] is True
     assert [entry["pr"] for entry in result["blockers"]["accepted"]] == (
         [101] if expected_reason is None else []
     )
+    if expected_reason is not None:
+        assert "moved between reads" in result["blockers"]["held"][0]["why"]

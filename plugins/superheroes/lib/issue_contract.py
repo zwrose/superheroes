@@ -90,9 +90,12 @@ def _load_stack_card_qualifier():
 
 STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->")
-_CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
-_LIST_MARKER_RE = re.compile(r"^[ ]{0,3}(?:[-+*]|[0-9]{1,9}[.)])[ ]")
+# The closing references GitHub records for one pull request (the issues it closes when it merges).
+_PR_LINKS_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
+    "{ pullRequest(number: $number) { closingIssuesReferences(first: 25) "
+    "{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }"
+)
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
 SLOT_STATUS_MISSING = "missing"
@@ -464,6 +467,10 @@ class _Unreadable(Exception):
     """A read the judge needed could not complete; the whole judgement is then unreadable."""
 
 
+class _Moved(Exception):
+    """A pull request's head moved between two reads of it; that blocker holds and is judged again next check."""
+
+
 def _gh_call(run, endpoint):
     """The completed process of one `gh api <endpoint>` call, or None when it timed out or could not start."""
     try:
@@ -543,7 +550,7 @@ def _read_sibling_refs(run, repo, parent):
 
 
 def _read_open_prs(run, repo):
-    """Every open pull request of `repo` as {number, draft, head, body}; unreadable raises."""
+    """Every open pull request of `repo` as {number, draft, head, base, body}; unreadable raises."""
     rows = gh_pages.read(_gh_fetch(run), "repos/%s/pulls?state=open" % repo)
     # axis: an open-PR list that cannot be read in full is unreadable, never an empty list — see bite-proof record wo_2652_stack_layer_blockers
     if rows is None:
@@ -552,9 +559,12 @@ def _read_open_prs(run, repo):
     for row in rows:
         head = row.get("head") if isinstance(row, dict) else None
         sha = head.get("sha") if isinstance(head, dict) else None
+        base = row.get("base") if isinstance(row, dict) else None
+        base_ref = base.get("ref") if isinstance(base, dict) else None
         body = row.get("body") if isinstance(row, dict) else None
         # axis: any pull-request row that is malformed fails the whole read, even after a matching row — see bite-proof record wo_2652_stack_layer_blockers
-        # axis: a row with no body key is unreadable, never an empty body: an unread body cannot show it closes nothing
+        # axis: a row with no body key is unreadable, never an empty body: an unread body cannot show its vet
+        # axis: a row with no base branch name is unreadable, never a stack layer or a default-base pull request — see bite-proof record wo_2652_stack_layer_blockers
         if (
             not isinstance(row, dict)
             or "body" not in row
@@ -563,6 +573,8 @@ def _read_open_prs(run, repo):
             or not isinstance(row.get("draft"), bool)
             or not isinstance(sha, str)
             or not _PR_HEAD_SHA_RE.fullmatch(sha)
+            or not isinstance(base_ref, str)
+            or not base_ref
             or not (body is None or isinstance(body, str))
         ):
             raise _Unreadable("an open pull request row of %s is malformed" % repo)
@@ -570,51 +582,106 @@ def _read_open_prs(run, repo):
             "number": row["number"],
             "draft": row["draft"],
             "head": sha,
+            "base": base_ref,
             "body": body if body is not None else "",
         })
     return prs
 
 
-def _first_prose_line(body):
-    """The body's first non-empty line, read from that line alone, when it is plain prose; else None.
-
-    An HTML comment or code span closed on the line is dropped and leaves a break no reference can span; the line
-    ends at a comment or backtick left open on it, which a later line could close. Any other markup left (a link,
-    raw HTML, a quote, math, an escape, or indented code, nested in a list item or not, or a fence) makes it not
-    plain prose, so a closing keyword there counts for nothing and the blocker holds. Over-holding a layer only
-    keeps it waiting. Later Markdown never changes the reading."""
-    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    line = next((line for line in lines if line.strip()), None)
-    # axis: a line holding both a backtick and a comment opener is not read, as either can hide the other — see bite-proof record wo_2652_stack_layer_blockers
-    if line is None or ("`" in line and "<!--" in line):
-        return None
-    text = _HTML_COMMENT_RE.sub("\x00", line).split("<!--", 1)[0]
-    text = _CODE_SPAN_RE.sub("\x00", text).split("`", 1)[0]
-    item = _LIST_MARKER_RE.sub("", text, count=1)
-    indents = [part[:len(part) - len(part.lstrip())] for part in (text, item)]
-    # axis: only a plain first line can carry the closing reference; any markup left on it holds the blocker — see bite-proof record wo_2652_stack_layer_blockers
-    if any("\t" in indent or len(indent) >= 4 for indent in indents) or any(mark in text for mark in "<>[]\\") \
-            or text.count("$") >= 2 or any(part.lstrip().startswith("~~~") for part in (text, item)):
-        return None
-    return text.strip() or None
+def _read_default_branch(run, repo):
+    """The default branch name of `repo`; a read that fails or names no branch raises."""
+    proc = _gh_call(run, "repos/%s" % repo)
+    # axis: a default-branch read that times out, cannot start or exits non-zero is unreadable, never a guessed branch — see bite-proof record wo_2652_stack_layer_blockers
+    if proc is None or proc.returncode != 0:
+        raise _Unreadable("the default branch of %s could not be read" % repo)
+    try:
+        payload = json.loads(proc.stdout) if isinstance(proc.stdout, str) else None
+    except ValueError:
+        payload = None
+    branch = payload.get("default_branch") if isinstance(payload, dict) else None
+    # axis: an answer with no non-empty string default_branch is unreadable, never a branch no pull request is based on — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(branch, str) or not branch:
+        raise _Unreadable("the default branch of %s is not a name" % repo)
+    return branch
 
 
-def _closes_issue(pr, repo, number):
-    """True when the PR body's first non-empty line holds a closing reference to `repo`#`number`."""
-    # axis: only the first non-empty body line counts — a closing reference lower in the body is not a handed-back layer — see bite-proof record wo_2652_stack_layer_blockers
-    line = _first_prose_line(pr["body"])
-    if line is None:
-        return False
-    for match in stack_check.CLOSING_REF_RE.finditer(line):
-        if match.group("bare") is not None:
-            if int(match.group("bare")) == number:
-                return True
+def _timeline_pr_links(run, repo, issue):
+    """The numbers of this repository's pull requests that cross-reference `repo`#`issue` on its GitHub timeline.
+
+    The timeline is read in full; a read that fails, or a row that cannot be told from a pull request's
+    cross-reference, raises. A pull request body's text is never read here."""
+    rows = gh_pages.read(_gh_fetch(run), "repos/%s/issues/%d/timeline" % (repo, issue))
+    # axis: a timeline that cannot be read in full is unreadable, never an issue no pull request links — see bite-proof record wo_2652_stack_layer_blockers
+    if rows is None:
+        raise _Unreadable("the timeline of %s#%d could not be read in full" % (repo, issue))
+    found = set()
+    for row in rows:
+        # axis: a timeline row that is not an object fails the whole read, even beside valid rows — see bite-proof record wo_2652_stack_layer_blockers
+        if not isinstance(row, dict):
+            raise _Unreadable("a timeline row of %s#%d is not an object" % (repo, issue))
+        if row.get("event") != "cross-referenced":
             continue
-        slug = match.group("slug") or match.group("uslug")
-        named = match.group("n") or match.group("un")
-        if slug is not None and slug.lower() == repo.lower() and int(named) == number:
-            return True
-    return False
+        source = row.get("source")
+        source_issue = source.get("issue") if isinstance(source, dict) else None
+        # axis: a cross-reference that names no issue cannot be told from a pull request's, so it fails the read — see bite-proof record wo_2652_stack_layer_blockers
+        if not isinstance(source_issue, dict):
+            raise _Unreadable("a cross-reference on the timeline of %s#%d names no issue" % (repo, issue))
+        if "pull_request" not in source_issue:
+            continue
+        ref_number = source_issue.get("number")
+        repository = source_issue.get("repository")
+        full_name = repository.get("full_name") if isinstance(repository, dict) else None
+        # axis: a pull-request cross-reference with no positive int number or no repository name fails the read — see bite-proof record wo_2652_stack_layer_blockers
+        if not launch_ledger.is_positive_premise_int(ref_number) or not isinstance(full_name, str):
+            raise _Unreadable("a cross-reference on the timeline of %s#%d is malformed" % (repo, issue))
+        # axis: only a pull request of this repository counts; the repository name is compared ignoring case — see bite-proof record wo_2652_stack_layer_blockers
+        if git_origin.same_repository(full_name, repo):
+            found.add(ref_number)
+    return found
+
+
+def _closing_refs(run, repo, pr):
+    """The numbers of this repository's issues that pull request `pr` closes by GitHub's own record; unreadable raises."""
+    owner, name = repo.split("/", 1)
+    argv = [
+        "gh", "api", "graphql", "-f", "owner=" + owner, "-f", "name=" + name, "-F", "number=%d" % pr,
+        "-f", "query=" + _PR_LINKS_QUERY,
+    ]
+    try:
+        proc = run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        proc = None
+    # axis: a closing-reference read that times out, cannot start or exits non-zero is unreadable, never no references — see bite-proof record wo_2652_stack_layer_blockers
+    if proc is None or proc.returncode != 0:
+        raise _Unreadable("the closing references of pull request #%d could not be read" % pr)
+    try:
+        parsed = json.loads(proc.stdout)
+    except (TypeError, ValueError):
+        parsed = None
+    # axis: closing-reference output that is not a JSON object, or carries an errors key, is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(parsed, dict) or "errors" in parsed:
+        raise _Unreadable("the closing references of pull request #%d were not answered" % pr)
+    data = parsed.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull = repository.get("pullRequest") if isinstance(repository, dict) else None
+    refs = pull.get("closingIssuesReferences") if isinstance(pull, dict) else None
+    page_info = refs.get("pageInfo") if isinstance(refs, dict) else None
+    nodes = refs.get("nodes") if isinstance(refs, dict) else None
+    # axis: closing references that are missing, paged (hasNextPage not false) or not a list are unreadable, never the whole set — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False or not isinstance(nodes, list):
+        raise _Unreadable("the closing references of pull request #%d are unreadable or paged" % pr)
+    linked = set()
+    for node in nodes:
+        number = node.get("number") if isinstance(node, dict) else None
+        node_repo = node.get("repository") if isinstance(node, dict) else None
+        node_name = node_repo.get("nameWithOwner") if isinstance(node_repo, dict) else None
+        # axis: a closing-reference node with no positive int number or no repository name fails the read — see bite-proof record wo_2652_stack_layer_blockers
+        if not launch_ledger.is_positive_premise_int(number) or not isinstance(node_name, str):
+            raise _Unreadable("a closing reference of pull request #%d is malformed" % pr)
+        # axis: only an issue of this repository counts, its name compared ignoring case — see bite-proof record wo_2652_stack_layer_blockers
+        if git_origin.same_repository(node_name, repo):
+            linked.add(number)
+    return linked
 
 
 def _held_row(row, why):
@@ -636,7 +703,8 @@ def _accepted_row(row, layer):
 
 def _read_layer_membership(membership_reader, run, repo, pr, head):
     """(stack number or None, position or None) of a pull request read at `head`; any read other than not-linked
-    failing raises, and so does an ok or not-linked read taken at another head than the one the vet was read at."""
+    failing raises _Unreadable, and an ok or not-linked read taken at another head than the one the vet was read at
+    raises _Moved (the blocker holds and is judged again on the next check)."""
     result = membership_reader(pr=pr, repo=repo, run=run)
     ok = isinstance(result, dict) and result.get("ok") is True
     # axis: only not-linked means "in no stack"; every other membership refusal is unreadable — see bite-proof record wo_2652_stack_layer_blockers
@@ -649,26 +717,41 @@ def _read_layer_membership(membership_reader, run, repo, pr, head):
     # axis: an ok membership read without an int stack number and position, or a read naming no head, is malformed — see bite-proof record wo_2652_stack_layer_blockers
     if not isinstance(read_head, str) or (ok and (not _is_int(number) or not _is_int(queried.get("position")))):
         raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
-    # axis: a membership answer, linked or not-linked, read at another head than the vet joins two snapshots; it is unreadable, never accepted — see bite-proof record wo_2652_stack_layer_blockers
+    # axis: a membership answer, linked or not-linked, read at another head than the vet joins two snapshots; the blocker holds, never accepted and never unreadable — see bite-proof record wo_2652_stack_layer_blockers
     if not stack_check.same_commit(read_head, head):
-        raise _Unreadable(
-            "pull request #%d moved between reads (vet read at %s, stack membership at %s)" % (pr, head, read_head)
+        raise _Moved(
+            "its pull request #%d moved between reads (vet read at %s, stack membership at %s); "
+            "it is judged again on the next check" % (pr, head, read_head)
         )
     return (number, queried["position"]) if ok else (None, None)
 
 
-def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index):
-    """Steps 6-9 for one row: its handed-back layer {pr, head, form, stack, position}, or None once held."""
-    closing = [pr for pr in pulls if _closes_issue(pr, repo, number)]
-    if not closing:
-        decided[index] = ("held", "no open pull request's first line closes it, so no handed-back layer builds it")
+def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index, default_branch):
+    """Steps 6-9 for one row: its handed-back layer {pr, head, form, stack, position}, or None once held.
+
+    The blocker's pull request is found from the links GitHub records, never from a pull request body's text."""
+    cross_referenced = _timeline_pr_links(run, repo, number)
+    linked = []
+    for pr in pulls:
+        # axis: a pull request the blocker's timeline does not cross-reference is not linked to it, whatever its body says — see bite-proof record wo_2652_stack_layer_blockers
+        if pr["number"] not in cross_referenced:
+            continue
+        # axis: a pull request based on another branch than the default is a stack layer, linked by its timeline cross-reference; one based on the default branch is linked only by a closing reference naming the blocker — see bite-proof record wo_2652_stack_layer_blockers
+        if pr["base"] != default_branch or number in _closing_refs(run, repo, pr["number"]):
+            linked.append(pr)
+    if not linked:
+        decided[index] = (
+            "held",
+            "no open pull request is linked to it on GitHub (a closing reference, or a stack layer's cross-reference),"
+            " so no handed-back layer builds it",
+        )
         return None
-    # axis: more than one open pull request closing the same blocker is ambiguous and holds — see bite-proof record wo_2652_stack_layer_blockers
-    if len(closing) > 1:
-        names = ", ".join("#%d" % pr["number"] for pr in closing)
-        decided[index] = ("held", "more than one open pull request closes it (%s)" % names)
+    # axis: more than one linked open pull request for the same blocker is ambiguous and holds — see bite-proof record wo_2652_stack_layer_blockers
+    if len(linked) > 1:
+        names = ", ".join("#%d" % pr["number"] for pr in linked)
+        decided[index] = ("held", "more than one open pull request is linked to it (%s)" % names)
         return None
-    pr = closing[0]
+    pr = linked[0]
     # axis: a draft pull request is work in flight, never a handed-back layer — see bite-proof record wo_2652_stack_layer_blockers
     if pr["draft"]:
         decided[index] = ("held", "its pull request #%d is a draft" % pr["number"])
@@ -699,7 +782,11 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
             )
             return None
         form = "stack-card"
-    stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"], pr["head"])
+    try:
+        stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"], pr["head"])
+    except _Moved as exc:
+        decided[index] = ("held", str(exc))
+        return None
     return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position, "feature": parent}
 
 
@@ -834,10 +921,11 @@ def _judge(open_rows, issue, repo, run, premise, membership_reader):
         live = still
     if live:
         pulls = _read_open_prs(run, repo)
+        default_branch = _read_default_branch(run, repo)
         layers = []
         for index in live:
             number = int(open_rows[index]["ref"].rsplit("#", 1)[1])
-            layer = _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index)
+            layer = _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index, default_branch)
             if layer is not None:
                 layers.append((index, layer))
         if premise is not None:
