@@ -49,9 +49,12 @@ Check 6's "(see below)" refers to § The owner-involvement taxonomy, at the end 
 
 **Check 2 reads the native blocker edges.** At launch, the base-state check also reads the launching
 issue's native `blocked_by` edges with `issue_contract.py check-blockers --issue <n> --repo
-<owner/name>` (for a sub-issue or a stack layer, its own issue), because a hold the owner recorded
-there is part of the base state, and a body's prose about edges is not. An open blocker is a `fail`
-for `base-state` naming the blocker, and a `blockers-unreadable` result is a `fail` too, never a pass.
+<owner/name> --premise <the launch's premise file>` (for a sub-issue or a stack layer, its own
+issue), because a hold the owner recorded there is part of the base state, and a body's prose about
+edges is not. It reads `ok` and `reason`. `blocker-open` is a `fail` for `base-state` naming each
+`held` blocker and its reason. `blockers-unreadable` is a `fail` too, never a pass. A pass records
+each `accepted` row (its pull request and head) as the check's evidence. Which blockers are accepted
+is decided once, in [routing.md § Native dependency edges](routing.md#native-dependency-edges).
 
 Checks marked always run every time; conditional checks run when the work needs them.
 An N/A carries a **one-line reason**; "marked N/A" without a reason is a silent skip.
