@@ -274,7 +274,7 @@ def test_row6_a_stack_upper_layers_pr_comment_is_the_upper_lanes_only(repo):
 def test_row7_a_pr_closing_two_watched_issues_is_no_lanes_and_is_disclosed(repo):
     _cloud_lane(repo, "cloud-a", 101)
     _cloud_lane(repo, "cloud-b", 102)
-    gh = _PrGh([_pr_comment(7, 503, _body("handback"))], prs={503: _pr(503, "Closes #101\nCloses #102")})
+    gh = _PrGh([_pr_comment(7, 503, _body("handback"))], prs={503: _pr(503, "Closes #101, closes #102")})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -386,73 +386,50 @@ def test_row12_an_answered_pr_handback_no_longer_surfaces(repo):
     assert _arm(repo, _PrGh(comments, prs=prs))["event"] == ww.EVENT_TIMER
 
 
-# --- review round 1: prose-only closing keywords, linked copies -----------------------------------
+# --- closing links: the body's first line only -----------------------------------------------------
 
 
-@pytest.mark.parametrize("hidden", [
+@pytest.mark.parametrize("rest", [
     "<!-- Fixes #102 -->",
     "```\nFixes #102\n```",
     "> Fixes #102",
+    "Fixes #102 in a plain paragraph",
+    "`Fixes #102` in a span\nthat crosses a line",
 ])
-def test_a_closing_keyword_outside_the_prs_prose_names_no_lane(repo, hidden):
-    # axis: only a closing keyword on a prose line of the PR body names a lane; code, quotes and HTML comments do not
+def test_a_closing_keyword_after_the_first_line_names_no_lane(repo, rest):
+    # axis: only the body's first line names a lane, so nothing later in the body (prose, code, comments) counts
     _cloud_lane(repo, "cloud-a", 101)
     _cloud_lane(repo, "cloud-b", 102)
-    body = "Closes #101.\n\n%s\n\nThe work." % hidden
-    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, body)})
-    result = ww.run(repo, _BATCH, gh_run=gh)
-    launch = _only_launch(result)
-    assert launch["launchId"] == "cloud-a"
-    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
-
-
-def test_a_pr_copy_named_by_the_issue_copys_also_on_line_is_read_once_from_the_issue(repo):
-    # axis: an ending posted on the PR and on the issue with --also-on is one ending, the issue comment's
-    _cloud_lane(repo, "cloud-a", 101)
-    pr_copy = _pr_comment(7, 501, _body("handback"), age=200)
-    issue_body = cb.terminal_text("handback", "Done with the work.", also_on=pr_copy["html_url"])["comment"]
-    gh = _PrGh([pr_copy, _comment(8, 101, issue_body, age=100)], prs={501: _pr(501, "Closes #101.")})
-    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
-    assert launch["commentId"] == 8
-    assert "pr" not in launch
-    assert _note_answered(repo, 8)["ok"] is True
-    assert ww.run(repo, _BATCH, gh_run=_PrGh(
-        [pr_copy, _comment(8, 101, issue_body, age=100)], prs={501: _pr(501, "Closes #101.")},
-    ))["event"] == ww.EVENT_TIMER
-
-
-def test_a_pr_copy_not_named_by_any_issue_comment_is_still_the_lanes(repo):
-    # axis: only the copy an issue comment names is left out; any other PR ending still counts
-    _cloud_lane(repo, "cloud-a", 101)
-    other = _pr_comment(9, 501, _body("park"), age=200)
-    issue_body = cb.terminal_text(
-        "handback", "Done.", also_on="https://github.com/%s/pull/501#issuecomment-7" % _SLUG)["comment"]
-    gh = _PrGh([other, _comment(8, 101, issue_body, age=300)], prs={501: _pr(501, "Closes #101.")})
-    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
-    assert launch["commentId"] == 9
-    assert launch["pr"] == 501
-
-
-# --- review round 2 --------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("body", [
-    "The work.\n\n```\npytest -q\n```\n\nCloses #101.",
-    "Closes #101.\n<!-- Template guidance: Fixes #102 -->",
-    "Closes #101. <!-- Fixes #102 --> and `Fixes #102` in a span",
-])
-def test_a_visible_closing_keyword_beside_hidden_text_or_after_a_closed_fence_still_counts(repo, body):
-    # axis: masking removes only what is surely not prose, so a visible close beside it still names the lane
-    _cloud_lane(repo, "cloud-a", 101)
-    _cloud_lane(repo, "cloud-b", 102)
+    body = "Closes #101.\n\n%s\n\nThe work." % rest
     gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, body)})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert _only_launch(result)["launchId"] == "cloud-a"
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
 
 
-def test_a_pointer_line_in_a_free_form_issue_comment_hides_nothing(repo):
-    # axis: only an ending whose last line is the pointer pairs with a PR copy; free-form text names nothing
+def test_a_pr_whose_close_link_is_not_on_its_first_line_is_no_lanes(repo):
+    # axis: a close link below the first line names no lane (the handback contract puts it on the first line)
+    _cloud_lane(repo, "cloud-a", 101)
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, "The work.\n\nCloses #101.")})
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER
+    assert gh.pr_reads == [501]
+
+
+def test_an_ending_on_both_the_issue_and_the_pr_is_two_endings_and_each_is_answered(repo):
+    # axis: nothing pairs: both copies are the lane's endings, the newer fires, and answering it leaves no older one in its place
+    _cloud_lane(repo, "cloud-a", 101)
+    pr_copy = _pr_comment(7, 501, _body("handback"), age=200)
+    issue_body = cb.terminal_text("handback", "Done with the work.", also_on=pr_copy["html_url"])["comment"]
+    comments = [pr_copy, _comment(8, 101, issue_body, age=100)]
+    prs = {501: _pr(501, "Closes #101.")}
+    assert _only_launch(ww.run(repo, _BATCH, gh_run=_PrGh(comments, prs=prs)))["commentId"] == 8
+    assert _note_answered(repo, 8)["ok"] is True
+    assert ww.run(repo, _BATCH, gh_run=_PrGh(comments, prs=prs))["event"] == ww.EVENT_TIMER
+
+
+def test_a_pointer_line_in_any_issue_comment_hides_nothing_on_the_pr(repo):
+    # axis: no comment pairs or hides another: a PR note stays the lane's note whatever an issue comment names
     _cloud_lane(repo, "cloud-a", 101)
     pr_note = _pr_comment(7, 501, _NOTE_BODY, age=200)
     pasted = "Looking at this:\n\n%s%s" % (cb.ALSO_ON_LINE, pr_note["html_url"])
@@ -460,44 +437,6 @@ def test_a_pointer_line_in_a_free_form_issue_comment_hides_nothing(repo):
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert [note["commentId"] for note in result["notes"]] == [7]
-
-
-def test_an_issue_ending_of_another_kind_does_not_pair_with_the_pr_copy(repo):
-    # axis: a pair needs the same ending kind on both copies
-    _cloud_lane(repo, "cloud-a", 101)
-    pr_park = _pr_comment(7, 501, _body("park"), age=100)
-    issue_stop = cb.terminal_text("stop", "Stopped.", also_on=pr_park["html_url"])["comment"]
-    gh = _PrGh([pr_park, _comment(8, 101, issue_stop, age=200)], prs={501: _pr(501, "Closes #101.")})
-    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
-    assert launch["commentId"] == 7
-    assert launch["pr"] == 501
-
-
-def test_an_answer_recorded_for_the_pr_copy_answers_the_issue_copy_that_arrives_later(repo):
-    # axis: the pair shares one answer, so the issue copy does not fire again after the PR copy was answered
-    _cloud_lane(repo, "cloud-a", 101)
-    pr_copy = _pr_comment(7, 501, _body("handback"), age=200)
-    prs = {501: _pr(501, "Closes #101.")}
-    assert _only_launch(ww.run(repo, _BATCH, gh_run=_PrGh([pr_copy], prs=prs)))["commentId"] == 7
-    assert _note_answered(repo, 7)["ok"] is True
-    issue_body = cb.terminal_text("handback", "Done with the work.", also_on=pr_copy["html_url"])["comment"]
-    later = _PrGh([pr_copy, _comment(8, 101, issue_body, age=100)], prs=prs)
-    assert ww.run(repo, _BATCH, gh_run=later)["event"] == ww.EVENT_TIMER
-
-
-def test_a_paired_issue_copy_keeps_the_pr_copys_earlier_posting_time():
-    # axis: the pair's ending is dated by its first posting, so a reopened window closes where it first ended
-    lanes = _lanes({"cloud-a": (101, 700)})
-    pr_copy = _pr_comment(7, 501, _body("handback"), age=300)
-    issue_body = cb.terminal_text("handback", "Done.", also_on=pr_copy["html_url"])["comment"]
-    issue_copy = _comment(8, 101, issue_body, age=100)
-    aliases = {}
-    out, complete = ww._attribute_pr_comments(
-        [pr_copy, issue_copy], lanes, {501: (101,)}, 0.0, aliases_out=aliases)
-    assert complete is True
-    assert [c["id"] for c in out] == [8]
-    assert out[0]["created_at"] == pr_copy["created_at"]
-    assert aliases == {8: 7}
 
 
 def test_a_pr_closing_a_live_issue_and_an_old_resumed_issue_stays_ambiguous():

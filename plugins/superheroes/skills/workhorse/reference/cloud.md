@@ -441,7 +441,7 @@ with one line that names the copy. The verb refuses `also-on-invalid` for anythi
 one pull request comment.
 
 The advisor's watch also reads builder notes and handback, stop and park comments on the lane's own pull
-request (one whose body closes the lane's issue), as a backstop only. It does not read progress comments,
+request (one whose body's first line closes the lane's issue), as a backstop only. It does not read progress comments,
 handovers or review bodies there. The progress comment, the handovers and every terminal comment stay on
 the issue.
 

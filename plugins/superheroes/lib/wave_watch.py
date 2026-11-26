@@ -2380,10 +2380,13 @@ def _pr_candidate(comment, watched_issues, earliest):
 
 
 def _pr_closing_issues(payload, slug):
-    """Sorted tuple of this repository's issue numbers a pull request's body closes with a closing keyword.
+    """Sorted tuple of this repository's issue numbers the first line of a pull request's body closes with a closing
+    keyword.
 
-    `()` when payload is a dict without a "pull_request" key (a plain issue); None when payload is not a dict or
-    its body is neither None nor a string. The PR's base branch is not read."""
+    Only the first line is read: the builder's handback contract puts the close link there, on its own, so no
+    Markdown elsewhere in the body (an example, a template comment, a code block) can name or hide a lane. `()` when
+    payload is a dict without a "pull_request" key (a plain issue); None when payload is not a dict or its body is
+    neither None nor a string. The PR's base branch is not read."""
     if not isinstance(payload, dict):
         return None
     if "pull_request" not in payload:
@@ -2393,41 +2396,15 @@ def _pr_closing_issues(payload, slug):
         body = ""
     if not isinstance(body, str):
         return None
+    first = body.replace("\r\n", "\n").replace("\r", "\n").lstrip("\n").split("\n", 1)[0]
     found = set()
-    for match in _CLOSING_REF_RE.finditer(_pr_body_prose(body)):
+    # axis: only the body's first line names a lane, so a closing keyword anywhere else in the body never counts — see bite-proof record i2651_pr_comments.md
+    for match in _CLOSING_REF_RE.finditer(first):
         ref_number = match.group("n") or match.group("bare") or match.group("un")
         target = match.group("slug") or match.group("uslug")
         if int(ref_number) > 0 and (target is None or target.lower() == slug.lower()):
             found.add(int(ref_number))
     return tuple(sorted(found))
-
-
-_FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
-
-
-def _pr_body_prose(body):
-    """`body` less what is surely not prose GitHub reads for a closing keyword: HTML comments, fenced code blocks
-    (closed, or running to the end), inline code spans, quote lines and lines indented four columns. Everything
-    else stays, so a visible closing keyword beside hidden text, or after a closed fence, still counts; masking more
-    than this would let the watch miss a lane's handback with no disclosure."""
-    # axis: a closing keyword counts only outside an HTML comment, a fence, a code span, a quote or an indented code line — see bite-proof record i2651_pr_comments.md
-    text = re.sub(r"<!--.*?(?:-->|\Z)", " ", body.replace("\r\n", "\n").replace("\r", "\n"), flags=re.DOTALL)
-    kept, fence = [], None
-    for line in text.split("\n"):
-        opener = _FENCE_RE.match(line)
-        if fence is not None:
-            # A fence closes on a run of its own character at least as long as its opener, with nothing after it.
-            if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence) \
-                    and not line[opener.end():].strip():
-                fence = None
-            continue
-        if opener:
-            fence = opener.group(1)
-            continue
-        if line.expandtabs(4).startswith("    ") or line.lstrip().startswith(">"):
-            continue
-        kept.append(re.sub(r"(`+)(?:(?!\1).)+?\1", " ", line))
-    return "\n".join(kept)
 
 
 def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, env):
@@ -2456,41 +2433,17 @@ def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, e
     return resolved
 
 
-def _also_on_links(comments, watched_issues):
-    """{pull-request comment id: (issue comment, its issue, its ending kind, the PR number)} for each handback, stop
-    or park on a watched issue whose last line is the `--also-on` pointer (`cb.ALSO_ON_LINE`) naming one pull-request
-    comment. A note, free-form text, or a pointer line anywhere but the ending's last line names nothing. Never raises."""
-    links = {}
-    for comment in comments:
-        body = comment.get("body") if isinstance(comment, dict) else None
-        issue_url = comment.get("issue_url") if isinstance(comment, dict) else None
-        if not isinstance(body, str) or not isinstance(issue_url, str) or not _valid_positive_int(comment.get("id")):
-            continue
-        match = re.search(r"/issues/(\d+)$", issue_url)
-        kind = cb.terminal_kind(body)
-        if match is None or int(match.group(1)) not in watched_issues or kind not in _pr_attributed_kinds():
-            continue
-        last = cb.strip_cloud_footer(body).splitlines()[-1]
-        permalink = cb.comment_permalink(last[len(cb.ALSO_ON_LINE):]) if last.startswith(cb.ALSO_ON_LINE) else None
-        if permalink is not None and permalink[1] == "pull":
-            links[permalink[3]] = (comment, int(match.group(1)), kind, permalink[2])
-    return links
-
-
-def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=frozenset(), aliases_out=None):
+def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=frozenset()):
     """(comments, complete): the comments with each builder note or ending on a pull request re-keyed to the one
     watched lane's issue the PR closes, as a new list; no comment dict is mutated.
 
     A re-keyed copy carries `prNumber`. `complete` is False when a candidate's PR was not read, or closes two or
     more watched issues (no lane can be named, whether or not one of them is issue-only); a PR that closes no
     watched issue leaves it as it was. A lane whose issue is in `issue_only` (a resumed lane read from its own issue)
-    never takes a pull-request comment. An ending on the PR that an ending of the same kind on the same lane's issue
-    names on its `--also-on` line is one ending with it: the PR copy is left out, the issue copy keeps the earlier of
-    the two posting times, and `aliases_out` (a dict) gains {issue comment id: PR comment id}, so an answer recorded
-    for either id answers the pair."""
+    never takes a pull-request comment. Nothing pairs: an ending the builder posted on both the issue and its PR is
+    two endings of the lane."""
     watched_issues = {info["issue"] for info in watched.values()}
-    links = _also_on_links(comments, watched_issues)
-    attributed, paired = [], {}
+    attributed = []
     complete = True
     for comment in comments:
         number = _pr_candidate(comment, watched_issues, earliest)
@@ -2511,27 +2464,9 @@ def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=fro
         if not hits or hits[0] in issue_only:
             attributed.append(comment)
             continue
-        link = links.get(comment.get("id"))
-        # axis: a PR ending the same lane's issue ending of the same kind names on its --also-on line is one ending with it, read from the issue — see bite-proof record i2651_pr_comments.md
-        if link is not None and link[1] == hits[0] and link[3] == number and cb.terminal_kind(comment["body"]) == link[2]:
-            paired[link[0]["id"]] = comment
-            continue
         # axis: a note or ending on a pull request that closes exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
         issue_url = re.sub(r"/issues/\d+$", "/issues/%d" % hits[0], comment["issue_url"])
         attributed.append(dict(comment, issue_url=issue_url, prNumber=number))
-    if paired:
-        out = []
-        for comment in attributed:
-            pr_copy = paired.get(comment.get("id")) if isinstance(comment, dict) else None
-            if pr_copy is not None:
-                if isinstance(aliases_out, dict):
-                    aliases_out[comment["id"]] = pr_copy["id"]
-                first = min(_parse_activity_time(comment.get("created_at")) or float("inf"),
-                            _parse_activity_time(pr_copy.get("created_at")) or float("inf"))
-                if first == _parse_activity_time(pr_copy.get("created_at")):
-                    comment = dict(comment, created_at=pr_copy["created_at"])
-            out.append(comment)
-        attributed = out
     return attributed, complete
 
 
@@ -2636,7 +2571,6 @@ def _evaluate_cloud_comments(
         n for n in (_pr_candidate(c, watched_issues, earliest) for c in comments) if n is not None
     })
     pr_complete = True
-    aliases = {}
     # No candidate, no request: the common tick reads nothing new.
     if candidates:
         pr_slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
@@ -2646,7 +2580,7 @@ def _evaluate_cloud_comments(
             resolved = {n: None for n in candidates}
         comments, pr_complete = _attribute_pr_comments(
             comments, watched, resolved, earliest,
-            issue_only=frozenset(info["issue"] for info in old_dormant.values()), aliases_out=aliases,
+            issue_only=frozenset(info["issue"] for info in old_dormant.values()),
         )
     if not pr_complete:
         # axis: a note or ending on a pull request the watch could not attribute to one lane is disclosed and names every watched lane, never read as no note — see bite-proof record i2651_pr_comments.md
@@ -2659,8 +2593,6 @@ def _evaluate_cloud_comments(
         active_out[0] = _dormant_active_lanes(comments, watched, observed_progress)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
-    # axis: an answer recorded for either copy of a linked pair answers the pair — see bite-proof record i2651_pr_comments.md
-    answered = answered | {issue_id for issue_id, pr_id in aliases.items() if pr_id in answered}
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
     # axis: an incomplete pull-request attribution is a partial read, so it neither replaces the known closes nor sets the closed slot — see bite-proof record i2651_pr_comments.md
     complete = state and pr_complete

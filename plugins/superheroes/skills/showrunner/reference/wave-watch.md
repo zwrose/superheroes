@@ -418,7 +418,7 @@ its issue. While a batch has a live cloud lane, every result carries
 When **`builder-note`** fires, a cloud builder has posted an issue comment opening with
 `NOTE_HEADER` (`lib/cloud_builder.py`) on a live lane's issue since that lane started, and no
 `note-answered` has recorded it. The comment may also be on the lane's own pull request: a pull request
-whose body closes the lane's issue with a closing keyword, whatever its base branch, so an unlinked stack
+whose body's first line closes the lane's issue with a closing keyword, whatever its base branch, so an unlinked stack
 layer's pull request is its own lane's. Such an entry keeps `issue` as the lane's issue, carries `pr`
 (the pull request's number), and its `url` is the pull request comment's. The payload carries `launchId`
 (the first note's lane) and `notes`, by comment id: `{"launchId", "issue", "pr", "commentId", "url",
@@ -475,12 +475,13 @@ shared lookback is read only from its own issue: no comment on a pull request is
 even one the shared read returns because another watched lane opened it, so its handback is seen only on
 its issue. A pull
 request the lane did not open that closes the lane's issue and carries one of these headers after the lane
-began is read as the lane's. An ending the builder posted on both, with the issue copy (a handback,
-stop or park of the same kind) naming the pull request copy on its last line, the `--also-on` pointer
-(`skills/workhorse/reference/cloud.md` § Terminal comments), is one ending: it is read from the issue,
-dated by the earlier of the two postings, and a `note-answered` for either comment's id answers both. A
-pointer line in any other comment pairs nothing. A closing keyword counts in the pull request's body
-except inside an HTML comment, a code block or span, a quote or an indented code line.
+began is read as the lane's. Only the first line of the pull request's body is read for its closing
+link, the line the builder's handback contract reserves for it; a closing keyword anywhere else in the body
+names no lane. An ending the builder posted on both the issue and its pull request (the issue copy names
+the other on its `--also-on` line, `skills/workhorse/reference/cloud.md` § Terminal comments) is two
+endings of the lane: the newer fires, and answering it leaves no older one in its place; when you answered
+the first copy before the second was posted, the second fires as well, so answer it too with
+`note-answered`. It can surface twice; it is never missed.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
