@@ -509,6 +509,24 @@ def test_a_pr_closing_a_live_issue_and_an_old_resumed_issue_stays_ambiguous():
     assert "prNumber" not in out[0]
 
 
+def test_the_attributed_kinds_follow_the_builders_header_map(monkeypatch):
+    # axis: a kind added to cloud_builder.TERMINAL_HEADERS is attributed through a PR with no second list to edit
+    header = "Builder pause (cloud build)."
+    monkeypatch.setitem(cb.TERMINAL_HEADERS, "pause", header)
+    paused = _pr_comment(7, 501, header + "\n\nPaused.")
+    assert ww._pr_candidate(paused, {101}, 0.0) == 501
+
+
+@pytest.mark.parametrize("html_url", [
+    "https://github.com/%s/pull/501#issuecomment-8" % _SLUG,
+    "https://github.com/other/repo/pull/501#issuecomment-7",
+])
+def test_a_permalink_naming_another_comment_or_repository_is_no_candidate(html_url):
+    # axis: the permalink must name this comment: its own id and the repository its issue_url names
+    odd = dict(_pr_comment(7, 501, _body("handback")), html_url=html_url)
+    assert ww._pr_candidate(odd, {101}, 0.0) is None
+
+
 def test_an_oversized_permalink_number_is_no_permalink():
     # axis: a number past the digit limit reads as no permalink, never an exception
     huge = "9" * 5000

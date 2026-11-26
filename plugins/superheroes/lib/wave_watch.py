@@ -2329,9 +2329,10 @@ def _merge_comments(shared, lane_reads):
     return merged
 
 
-# The terminal kinds the builder composes (its header map is their one home). Progress and handover comments stay
-# issue-scoped: only a builder note or one of these endings moves to the lane the PR closes.
-_PR_ATTRIBUTED_KINDS = tuple(cb.TERMINAL_HEADERS)
+def _pr_attributed_kinds():
+    """The terminal kinds the builder composes, read from its header map (their one home) at each call. Progress and
+    handover comments stay issue-scoped: only a builder note or one of these endings moves to the lane the PR closes."""
+    return tuple(cb.TERMINAL_HEADERS)
 
 
 def _pr_candidate(comment, watched_issues, earliest):
@@ -2364,10 +2365,14 @@ def _pr_candidate(comment, watched_issues, earliest):
         html_url = comment.get("html_url")
         # axis: only a comment on a pull request (its html_url is a /pull/<n> page with the issue_url's number) is a candidate, so a plain issue's comment causes no read and no disclosure — see bite-proof record i2651_pr_comments.md
         permalink = cb.comment_permalink(html_url)
-        if permalink is None or permalink[1] != "pull" or permalink[2] != number:
+        # The permalink must name this very comment: its repository (the one issue_url names), its pull request page
+        # and its own id, so a link to another comment or repository is never read as this one.
+        repo = re.search(r"/repos/([^/]+/[^/]+)/issues/\d+$", issue_url)
+        if permalink is None or permalink[1] != "pull" or permalink[2] != number or permalink[3] != comment["id"] \
+                or repo is None or permalink[0].lower() != repo.group(1).lower():
             return None
         # axis: only a builder note or a handback, stop or park is read onto a lane through its pull request; any other comment on one is no lane's — see bite-proof record i2651_pr_comments.md
-        if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _PR_ATTRIBUTED_KINDS):
+        if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _pr_attributed_kinds()):
             return None
         return number
     except Exception:
@@ -2463,7 +2468,7 @@ def _also_on_links(comments, watched_issues):
             continue
         match = re.search(r"/issues/(\d+)$", issue_url)
         kind = cb.terminal_kind(body)
-        if match is None or int(match.group(1)) not in watched_issues or kind not in _PR_ATTRIBUTED_KINDS:
+        if match is None or int(match.group(1)) not in watched_issues or kind not in _pr_attributed_kinds():
             continue
         last = cb.strip_cloud_footer(body).splitlines()[-1]
         permalink = cb.comment_permalink(last[len(cb.ALSO_ON_LINE):]) if last.startswith(cb.ALSO_ON_LINE) else None
