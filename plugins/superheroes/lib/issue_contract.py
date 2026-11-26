@@ -795,7 +795,9 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
     except _Moved as exc:
         decided[index] = ("held", str(exc))
         return None
-    return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position, "feature": parent}
+    # axis: a feature in another repository is recorded as no feature, so a card at launch can never match it — see bite-proof record wo_2652_stack_layer_blockers
+    feature = parent if git_origin.same_repository(parent_repo, repo) else None
+    return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position, "feature": feature}
 
 
 def _judge_with_premise(layers, premise, decided):

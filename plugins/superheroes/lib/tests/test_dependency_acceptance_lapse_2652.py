@@ -58,6 +58,14 @@ def test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for(
         assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
 
 
+def test_a_card_at_launch_lapses_an_acceptance_recorded_with_no_feature(tmp_path, monkeypatch):
+    # axis: a READY dependency accepted under a feature in another repository (recorded feature None) that falls back
+    # to a card at the same head lapses
+    body = lambda head: _card_vet_body(head, parent=FEATURE)
+    result, head = _gate(tmp_path, monkeypatch, body, {"pr": 701, "form": "ready", "head": "h", "feature": None})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
 def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependency():
     rows = [{"pr": 702, "form": "ready", "head": "h"}, {"pr": 701, "form": "stack-card", "head": "h"}]
     checks = lambda evidence, check="base-state": [{"id": check, "evidence": evidence}]

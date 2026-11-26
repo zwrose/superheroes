@@ -175,6 +175,8 @@ def test_a_parent_in_another_repository_has_its_sub_issues_read_there(tmp_path, 
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
     assert ["gh", "api", plan_subs] in fake.calls
+    # axis: the accepted row records no feature for a parent in another repository, so no card can match it at launch
+    assert out["blockers"]["accepted"][0]["feature"] is None
 
 
 # --- the link is GitHub's record, never body text -----------------------------
