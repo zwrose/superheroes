@@ -528,9 +528,12 @@ def _read_parent_number(run, repo, issue):
     except ValueError:
         payload = None
     # axis: a parent answer that is not an issue object with an int number is unreadable — see bite-proof record wo_2652_stack_layer_blockers
-    if not isinstance(payload, dict) or not _is_int(payload.get("number")):
-        raise _Unreadable("the parent of %s#%d is not an issue object with a number" % (repo, issue))
-    return payload["number"]
+    # axis: the parent names its own repository (it may live in another one), and one that cannot name it is unreadable
+    ref = _blocker_ref(payload) if isinstance(payload, dict) else None
+    if ref is None:
+        raise _Unreadable("the parent of %s#%d is not an issue object with a number and repository" % (repo, issue))
+    parent_repo, number = ref.rsplit("#", 1)
+    return parent_repo, int(number)
 
 
 def _read_sibling_refs(run, repo, parent):
@@ -733,11 +736,12 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
     cross_referenced = _timeline_pr_links(run, repo, number)
     linked = []
     for pr in pulls:
-        # axis: a pull request the blocker's timeline does not cross-reference is not linked to it, whatever its body says — see bite-proof record wo_2652_stack_layer_blockers
-        if pr["number"] not in cross_referenced:
-            continue
-        # axis: a pull request based on another branch than the default is a stack layer, linked by its timeline cross-reference; one based on the default branch is linked only by a closing reference naming the blocker — see bite-proof record wo_2652_stack_layer_blockers
-        if pr["base"] != default_branch or number in _closing_refs(run, repo, pr["number"]):
+        # axis: a pull request based on another branch than the default is a stack layer, linked only by the blocker's timeline cross-reference; one based on the default branch is linked only by a closing reference naming the blocker (a manual Development link included), whatever its body says — see bite-proof record wo_2652_stack_layer_blockers
+        if pr["base"] != default_branch:
+            is_linked = pr["number"] in cross_referenced
+        else:
+            is_linked = number in _closing_refs(run, repo, pr["number"])
+        if is_linked:
             linked.append(pr)
     if not linked:
         decided[index] = (
@@ -895,14 +899,15 @@ def _judge(open_rows, issue, repo, run, premise, membership_reader):
             live.append(index)
     required, stack = None, None
     if live:
-        parent = _read_parent_number(run, repo, issue)
+        parent_ref = _read_parent_number(run, repo, issue)
+        parent_repo, parent = parent_ref if parent_ref is not None else (None, None)
         if parent is None:
             for index in live:
                 decided[index] = ("held", "this issue is not a sub-issue of a feature, so it is not a stack layer")
             live = []
     if live:
         # Refs are compared with the repository part folded to lower case (GitHub names ignore case).
-        siblings = [ref.lower() for ref in _read_sibling_refs(run, repo, parent)]
+        siblings = [ref.lower() for ref in _read_sibling_refs(run, parent_repo, parent)]
         own = ("%s#%d" % (repo, issue)).lower()
         # axis: the blocked issue must itself be listed under its parent, or the order of layers is unknown — see bite-proof record wo_2652_stack_layer_blockers
         if own not in siblings:

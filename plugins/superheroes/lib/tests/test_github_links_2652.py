@@ -2,7 +2,7 @@
 
 A stack layer (a pull request based on a branch other than the default) is linked by the cross-reference GitHub
 records on the blocker's timeline; a pull request based on the default branch is linked only when its closing
-references also name the blocker. Every read that cannot answer makes the whole judgement unreadable."""
+references name the blocker (a manual Development link included), whatever the timeline says. Every read that cannot answer makes the whole judgement unreadable."""
 import json
 import subprocess
 
@@ -10,8 +10,8 @@ import pytest
 
 import issue_contract as ic
 from test_issue_contract import (
-    NO_LINK_WHY, REPO_PATH, _assert_unreadable_and_no_pass, _build_ready, _closing_answer, _cross_ref, _head,
-    _in_stack, _Members, _pr_row, _timeline_path, _vet, _world,
+    NO_LINK_WHY, PARENT, REPO_PATH, SUBS, _assert_unreadable_and_no_pass, _build_ready, _closing_answer, _cross_ref,
+    _head, _in_stack, _Members, _pr_row, _row, _sub, _timeline_path, _vet, _world,
 )
 
 TIMELINE = _timeline_path(12)
@@ -87,8 +87,8 @@ def test_a_closing_reference_names_the_repository_ignoring_case(tmp_path, capsys
     assert _accepted_prs(out) == [101]
 
 
-def test_closing_references_are_read_only_for_default_base_pull_requests_on_the_timeline(tmp_path, capsys):
-    # axis: no closing-reference read for a stack layer, or for a default-base pull request the timeline omits
+def test_closing_references_are_read_for_every_default_base_pull_request_and_no_stack_layer(tmp_path, capsys):
+    # axis: no closing-reference read for a stack layer; every default-base pull request's is read, on the timeline or not
     prs = [
         _pr_row(101, closes=12),
         _pr_row(102, closes=12, base="main", links=[]),
@@ -98,7 +98,44 @@ def test_closing_references_are_read_only_for_default_base_pull_requests_on_the_
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
+    assert [call[8] for call in _graphql_calls(fake)] == ["number=102", "number=103"]
+
+
+def test_a_default_base_pr_linked_by_hand_with_no_timeline_mention_is_linked(tmp_path, capsys):
+    # axis: a manual Development link shows in the closing references but not as a timeline cross-reference; it links
+    fake = _world(
+        prs=[_pr_row(101, closes=12, base="main")],
+        responses={TIMELINE: (0, json.dumps([{"event": "connected"}]))},
+    )
+    out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
+    assert out["ok"] is True
+    assert _accepted_prs(out) == [101]
+
+
+def test_a_stack_layer_closing_the_blocker_with_no_timeline_mention_is_not_linked(tmp_path, capsys):
+    # axis: a stack layer is linked only by the timeline cross-reference, never by a closing reference alone
+    fake = _world(prs=[_pr_row(101, closes=12)], responses={TIMELINE: (0, json.dumps([]))})
+    out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
     assert _graphql_calls(fake) == []
+
+
+def test_a_parent_in_another_repository_has_its_sub_issues_read_there(tmp_path, capsys):
+    # axis: the feature may live in another repository; its sub-issues are read from the repository the parent names
+    plan_subs = "repos/acme/plans/issues/50/sub_issues?per_page=100&page=1"
+    fake = _world(
+        prs=[_pr_row(101, closes=12)],
+        responses={
+            PARENT: (0, json.dumps(_row(50, "open", repo="acme/plans"))),
+            plan_subs: (0, json.dumps([_sub(12), _sub(7)])),
+            SUBS: (1, "", "gh: Not Found (HTTP 404)"),
+        },
+    )
+    out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
+    assert out["ok"] is True
+    assert _accepted_prs(out) == [101]
+    assert ["gh", "api", plan_subs] in fake.calls
 
 
 # --- the link is GitHub's record, never body text -----------------------------

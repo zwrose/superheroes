@@ -2541,6 +2541,15 @@ def _apply_stack_gate(
     return {"ok": True, "stackGate": stack_gate}
 
 
+def _unique_keys(pairs):
+    """A decoded JSON object that refuses a repeated key, so a second value never silently replaces the first."""
+    keys = [key for key, _ in pairs]
+    # axis: base-state evidence with a repeated key in any object is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if len(set(keys)) != len(keys):
+        raise ValueError("repeated key in base-state evidence")
+    return dict(pairs)
+
+
 def _preflight_accepted(preflight_checks, dependency):
     """The row preflight's base-state check accepted `dependency` in, read from its evidence (check-blockers'
     `blockers.accepted` array as JSON); None when the evidence is empty or names no such row; False when the
@@ -2549,12 +2558,13 @@ def _preflight_accepted(preflight_checks, dependency):
     if entry is None or not entry.get("evidence"):
         return None
     try:
-        rows = json.loads(entry["evidence"])
+        rows = json.loads(entry["evidence"], object_pairs_hook=_unique_keys)
     except ValueError:
         rows = None
     # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted" — see bite-proof record wo_2652_stack_layer_blockers
     if not isinstance(rows, list) or not all(
         isinstance(row, dict) and ll.is_positive_premise_int(row.get("pr")) and isinstance(row.get("form"), str)
+        and (row.get("feature") is None or ll.is_positive_premise_int(row.get("feature")))
         for row in rows
     ):
         return False

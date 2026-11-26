@@ -940,7 +940,7 @@ def _world(blocked=(12,), subs=(12, 7), prs=(), parent=FEATURE, responses=None, 
     branch, each blocked issue's timeline (one cross-reference per PR row that links it) and the closing
     references of each PR based on the default branch (the issues the row links)."""
     table = {PAGE1: (0, json.dumps(rows if rows is not None else [_row(n, "open") for n in blocked]))}
-    table[PARENT] = NO_PARENT if parent is None else (0, json.dumps({"number": parent}))
+    table[PARENT] = NO_PARENT if parent is None else (0, json.dumps(_row(parent, "open")))
     if parent is not None:
         table["repos/acme/widgets/issues/%d/sub_issues?per_page=100&page=1" % parent] = (
             0, json.dumps([_sub(n) for n in subs])
