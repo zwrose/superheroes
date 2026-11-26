@@ -17,7 +17,7 @@ from test_launcher import (
 
 @pytest.mark.parametrize("evidence, expected", [
     # axis: an accepted READY dependency whose READY line stayed at the old head refuses at launch
-    ("accepted", {"ok": False, "reason": "dependency-open-ready-pr"}),
+    ("accepted", {"ok": False, "reason": "dependency-acceptance-lapsed"}),
     # axis: base-state evidence that records no acceptance keeps the pre-existing ungated not-ready pass
     ("", {"ok": True}),
     ("not json", {"ok": True}),

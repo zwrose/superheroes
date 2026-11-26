@@ -176,6 +176,8 @@ the premise shape change is in `TRANSITION.md`:
 - `dependency-card-stale` — the dependency pull request's vet carries the card mark pinned to an
   earlier head than its current one: the layer moved after it was accepted, so the launch refuses
   until the advisor vets the new head.
+- `dependency-acceptance-lapsed` — preflight's base-state evidence accepted the dependency, and at
+  launch it no longer qualifies at its current head (back to draft, card withdrawn, or no READY line).
 - `dependency-read-unavailable` — the launcher could not read the dependency pull request or its
   vet and the gate could not run.
 

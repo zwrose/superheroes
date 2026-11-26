@@ -90,6 +90,7 @@ def _load_stack_card_qualifier():
 
 STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->")
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
 SLOT_STATUS_MISSING = "missing"
@@ -573,33 +574,22 @@ def _read_open_prs(run, repo):
 
 
 def _first_prose_line(body):
-    """The prose GitHub renders from the body's first non-empty line, read from that line alone, or None.
+    """The body's first non-empty line, read from that line alone, when it is plain prose; else None.
 
-    A line that opens indented code, a quote, a fence or an HTML block holds no prose. An HTML comment or a code
-    span on the line is cut out, and the line ends at one left open on it, which a later line could close."""
+    An HTML comment closed on the line is dropped, as GitHub hides it, and leaves a break no reference can span.
+    Any other markup left on the line (a code span, a link, raw HTML, a quote, math, an escape, or an indented
+    or fenced code line) makes it not plain prose, so a closing keyword there counts for nothing and the blocker
+    holds. Later Markdown never changes the reading."""
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    rest = next((line for line in lines if line.strip()), None)
-    # axis: a first line that is code, a quote, a fence or an HTML block closes nothing — see bite-proof record wo_2652_stack_layer_blockers
-    if rest is None or rest.startswith(("    ", "\t")) or rest.lstrip().startswith((">", "<", "```", "~~~")):
+    line = next((line for line in lines if line.strip()), None)
+    if line is None:
         return None
-    prose = ""
-    while True:
-        starts = [at for at in (rest.find("<!--"), rest.find("`")) if at >= 0]
-        if not starts:
-            return (prose + rest).strip() or None
-        at = min(starts)
-        prose += rest[:at] + " "
-        if rest.startswith("<!--", at):
-            end = rest.find("-->", at + 4)
-            skip = end + 3 if end >= 0 else -1
-        else:
-            run = len(rest[at:]) - len(rest[at:].lstrip("`"))
-            close = re.search(r"(?<!`)`{%d}(?!`)" % run, rest[at + run:])
-            skip = at + run + close.end() if close else -1
-        # axis: a comment or code span left open on the first line may close on a later one, so the line's prose ends there — see bite-proof record wo_2652_stack_layer_blockers
-        if skip < 0:
-            return prose.strip() or None
-        rest = rest[skip:]
+    text = _HTML_COMMENT_RE.sub("\x00", line)
+    indent = text[:len(text) - len(text.lstrip())]
+    # axis: only a plain first line can carry the closing reference; any markup on it holds the blocker — see bite-proof record wo_2652_stack_layer_blockers
+    if "\t" in indent or len(indent) >= 4 or any(mark in text for mark in "`<>[]\\$") or text.lstrip().startswith("~~~"):
+        return None
+    return text.strip() or None
 
 
 def _closes_issue(pr, repo, number):

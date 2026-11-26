@@ -53,7 +53,8 @@ issue's native `blocked_by` edges with `issue_contract.py check-blockers --issue
 issue), because a hold the owner recorded there is part of the base state, and a body's prose about
 edges is not. It reads `ok` and `reason`. `blocker-open` is a `fail` for `base-state` naming each
 `held` blocker and its reason. `blockers-unreadable` is a `fail` too, never a pass. A pass records
-each `accepted` row (its pull request and head) as the check's evidence. Which blockers are accepted
+the result's `blockers.accepted` array, verbatim as JSON, as the check's evidence; the launcher reads
+it to recheck an accepted dependency at launch. Which blockers are accepted
 is decided once, in [routing.md § Native dependency edges](routing.md#native-dependency-edges).
 
 Checks marked always run every time; conditional checks run when the work needs them.

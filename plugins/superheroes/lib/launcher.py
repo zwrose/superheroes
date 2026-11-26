@@ -2626,13 +2626,17 @@ def _apply_dependency_gate(
             "reason": "dependency-read-unavailable",
             "detail": pr_lifecycle,
         }
-    # a dependency preflight accepted that no longer holds at its current head refuses, never passes ungated
-    lapsed = None if accepted_form is None else {
-        "ok": False,
-        "reason": "dependency-card-stale" if accepted_form == "stack-card" else "dependency-open-ready-pr",
-        "detail": pr_state["headRefOid"],
-    }
-    # axis: draft dependency is work in flight — verdict is not consulted, unless preflight accepted it as a layer — see bite-proof record wo_2652_stack_layer_blockers
+    head_sha = pr_state["headRefOid"]
+    mark = issue_contract.stack_card_mark(pr_state["body"])
+    # axis: a card mark pinned to an older head is a stack layer that moved after it was accepted; it refuses, never passes ungated
+    if mark is not None and not stack_check.same_commit(mark[0], head_sha):
+        lapsed = {"ok": False, "reason": "dependency-card-stale", "detail": head_sha}
+    else:
+        # a dependency preflight accepted that no longer qualifies at its current head refuses, never passes ungated
+        lapsed = None if accepted_form is None else {
+            "ok": False, "reason": "dependency-acceptance-lapsed", "detail": head_sha,
+        }
+    # axis: draft dependency is work in flight — verdict is not consulted, unless its acceptance lapsed — see bite-proof record wo_2652_stack_layer_blockers
     if pr_state.get("isDraft"):
         if lapsed is not None:
             return lapsed
@@ -2652,15 +2656,8 @@ def _apply_dependency_gate(
     form = "ready"
     if verdict != stack_check.VERDICT_READY:
         # a dependency held only for a card on its stack's sheet, at its current head, is gated like a READY one
-        if issue_contract.stack_card_parent(pr_state["body"], pr_state["headRefOid"]) is None:
-            # axis: a card mark pinned to an older head is a stack layer that moved after it was accepted; it refuses, never passes ungated
-            if issue_contract.stack_card_mark(pr_state["body"]) is not None:
-                return {
-                    "ok": False,
-                    "reason": "dependency-card-stale",
-                    "detail": pr_state["headRefOid"],
-                }
-            # axis: a withdrawn card or a READY line left at an older head lapses a preflight acceptance — see bite-proof record wo_2652_stack_layer_blockers
+        if issue_contract.stack_card_parent(pr_state["body"], head_sha) is None:
+            # axis: a stale card, or a withdrawn card or READY line left at an older head after acceptance, refuses — see bite-proof record wo_2652_stack_layer_blockers
             if lapsed is not None:
                 return lapsed
             # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
@@ -2669,7 +2666,6 @@ def _apply_dependency_gate(
                 "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
             }
         form = "stack-card"
-    head_sha = pr_state["headRefOid"]
     # axis: READY or card-marked dependency requires base exactly equal to dependency head — see bite-proof record wo_2652_stack_layer_blockers
     if stack_check.same_commit(resolved_base_commit, head_sha):
         return {
