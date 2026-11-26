@@ -42,12 +42,23 @@ def _count_blocking(findings):
     return sum(1 for f in findings if circuit_breaker.is_blocking(f.get("severity")))
 
 
+def _findings_list(data, path, what):
+    """The findings list an artifact holds: the array itself, or the `findings` list of an object.
+    Anything else raises ValueError naming the artifact, so the handler's reason names the file."""
+    findings = data if isinstance(data, list) else data.get("findings") if isinstance(data, dict) else None
+    if not isinstance(findings, list):
+        raise ValueError("%s %s: no findings list" % (what, path))
+    if not all(isinstance(f, dict) for f in findings):
+        raise ValueError("%s %s: a finding that is not an object" % (what, path))
+    return findings
+
+
 def _blocking_fixed_from_fix_batch(path):
     """fix-batch.json is the array of findings handed to the fixer this round."""
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    findings = data if isinstance(data, list) else data.get("findings", [])
-    return _count_blocking(findings)
+    # axis: a fix batch with no findings list (a dict without `findings`, one whose `findings` is not a list) or a non-dict entry is unreadable, never zero blocking fixes — see bite-proof record i2659_unknown_reads
+    return _count_blocking(_findings_list(data, path, "fix-batch"))
 
 
 def _skipped_blocking_from_resolutions(path):
@@ -57,8 +68,15 @@ def _skipped_blocking_from_resolutions(path):
     """
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
+    # axis: a resolutions file with no `resolutions` list is unreadable, never zero skips — see bite-proof record i2659_unknown_reads
+    rows = data.get("resolutions") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("resolutions %s: no resolutions list" % path)
     n = 0
-    for r in data.get("resolutions", []):
+    for r in rows:
+        # axis: a resolution row with no string `action` is unreadable, never a row that skipped nothing — see bite-proof record i2659_unknown_reads
+        if not (isinstance(r, dict) and isinstance(r.get("action"), str)):
+            raise ValueError("resolutions %s: a row with no action" % path)
         if r.get("action") != "skip":
             continue
         # #276: the shared FAIL-CLOSED predicate — a skip whose severity is blocking, foreign, mis-cased,
@@ -76,8 +94,8 @@ def _blocking_present_from_compiled(path):
     from the agents' findings, not self-reported by the orchestrator."""
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    findings = data if isinstance(data, list) else data.get("findings", [])
-    return _count_blocking(findings)
+    # axis: a compiled file with no findings list (a dict without `findings`, one whose `findings` is not a list) or a non-dict entry is unreadable, never zero blocking findings — see bite-proof record i2659_unknown_reads
+    return _count_blocking(_findings_list(data, path, "compiled"))
 
 
 def decide(blocking_fixed, skipped_blocking, rnd, max_rounds, breaker_halt):

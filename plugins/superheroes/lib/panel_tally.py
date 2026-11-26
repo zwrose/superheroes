@@ -222,13 +222,21 @@ def _valid_final_receipt(result, receipt_context=None):
     required = {"citation", "reachability", "missing-check", "tooling"}
     if not isinstance(receipt, dict) or not receipt.get("artifact"):
         return False
-    if not isinstance(receipt.get("coverageDecisionIds"), list):
+
+    def _ids(value):
+        return isinstance(value, list) and all(isinstance(i, str) and i for i in value)
+
+    # axis: a final confirmation with no receipt context (none, not a dict, no artifact, no decision-id list) has nothing to match the receipt against, so it is no certification — see bite-proof record i2659_unknown_reads
+    ctx = receipt_context
+    if not (isinstance(ctx, dict) and isinstance(ctx.get("artifact"), str) and ctx["artifact"]
+            and isinstance(ctx.get("coverageDecisionIds"), list)):
         return False
-    ctx = receipt_context or {}
-    if ctx.get("artifact") and receipt.get("artifact") != ctx.get("artifact"):
+    # axis: a decision id that is not a non-empty string, in the context or the receipt, is unreadable, never a match — see bite-proof record i2659_unknown_reads
+    if not (_ids(ctx["coverageDecisionIds"]) and _ids(receipt.get("coverageDecisionIds"))):
         return False
-    needed_ids = set(ctx.get("coverageDecisionIds") or [])
-    if needed_ids and not needed_ids.issubset(set(receipt.get("coverageDecisionIds") or [])):
+    if receipt.get("artifact") != ctx["artifact"]:
+        return False
+    if not set(ctx["coverageDecisionIds"]).issubset(set(receipt["coverageDecisionIds"])):
         return False
     seen = set()
     for step in chain or []:

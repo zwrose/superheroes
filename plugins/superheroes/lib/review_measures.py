@@ -48,7 +48,9 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     session among all its records: certified when that session's latest record is `reviewed`. `silentReviewerVoids` reads each in-window session's latest record
     that is not `reviewed` and has a reviewer row that did not run: `voided` when a silence-watchdog end names that
     row, `unresolved` when an end names no row (a forfeited or recovered seat's run dir binds no row, so its end
-    carries its role and run dir and cannot be tied to the row that did not run), else neither. `voided` is what the
+    carries its role and run dir and cannot be tied to the row that did not run), also `unresolved` when the
+    record holds no `silenceWatchdogEnds` at all (the record writers leave the field out when it is empty, so
+    absence cannot be told from none; an explicitly present empty list reads clear), else neither. `voided` is what the
     held in-session reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer); an
     `unresolved` session is read in its record before it counts. A release before 0.48.0, which recorded no watchdog
     ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that release's figure
@@ -339,15 +341,20 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
                      and not review_learning._merged_member(f)}
             put("ownerCardsPerMergedPr", pr_release, len(cards))
         for sid, last in sessions[pr].items():
-            ends = last.get("silenceWatchdogEnds", [])
+            answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
+            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
+            # axis: the writers omit the ends when empty, so absent ends beside a row that did not run, in a session that did not certify, read unresolved, never clear — see bite-proof record i2659_unknown_reads
+            absent = "silenceWatchdogEnds" not in last
+            unseen = absent and bool(not_run) and not review_record.cleared(last.get("status"))
+            ends = [] if absent else last["silenceWatchdogEnds"]
             # axis: a silence end that is not a dict naming a seat, or a status the writer does not record, reads unmeasured — see bite-proof record i2498_by_release
             whole = (isinstance(ends, list) and last.get("status") in review_record.STATUSES
                      and all(isinstance(e, dict) and isinstance(e.get("seat"), str) and e["seat"].strip() for e in ends))
-            answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
-            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
             silent = [e["seat"] for e in ends if e["seat"] not in answered] if whole else []
             if not whole:
                 state = None
+            elif unseen:
+                state = "unresolved"
             elif review_record.cleared(last.get("status")) or not not_run or not silent:
                 # axis: a session that certified, or whose every silent seat answered, or with no reviewer row that did not run, is no void — see bite-proof record i2498_by_release
                 state = "clear"

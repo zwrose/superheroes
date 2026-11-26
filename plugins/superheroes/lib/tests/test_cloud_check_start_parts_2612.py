@@ -369,7 +369,7 @@ def test_start_parts_is_not_a_required_report_field():
 
 def _record(copy, session=SESSION, parts=None, **over):
     record = {"schema": cloud_pass.START_COPY_SCHEMA, "session": session, "roots": [str(copy)],
-              "parts": {"lib/x.py": [0]} if parts is None else parts}
+              "parts": {"lib/x.py": [0]} if parts is None else parts, "unattributed": []}
     record.update(over)
     return record
 
@@ -508,7 +508,8 @@ def test_a_mid_swap_attributes_each_part_to_the_copy_it_was_opened_from(tmp_path
     assert state["parts"] == {"lib/host_model.py": {0}, "lib/cloud_pass.py": {1}}
     state["parts"][HOOK_PART] = {1}
     record = {"schema": cloud_pass.START_COPY_SCHEMA, "session": SESSION, "roots": state["roots"],
-              "parts": {part: sorted(idx) for part, idx in state["parts"].items()}}
+              "parts": {part: sorted(idx) for part, idx in state["parts"].items()},
+              "unattributed": []}
     started = CC._start_parts(_env(record))
     assert started["lib/host_model.py"][0]["version"] == "0.1.0"
     assert started["lib/cloud_pass.py"][0]["version"] == "0.2.0"

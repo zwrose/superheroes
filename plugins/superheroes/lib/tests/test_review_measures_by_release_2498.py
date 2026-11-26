@@ -85,10 +85,11 @@ def test_a_session_is_voided_by_a_silent_reviewer_only_when_it_did_not_certify_a
     m, _ = _m([_rec(1, "s1", at=at, status="not-reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
                _rec(2, "s2", at=at, status="reviewed", rows=[_row(SEC, "not-run"), _row(CODE)], ends=[_end(SEC)]),
                _rec(3, "s3", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE)], ends=[_end(SEC)]),
+               # absent ends beside a row that did not run, in a session that did not certify, read unresolved (issue 2659)
                _rec(4, "s4", at=at, status="not-reviewed", rows=[_row(SEC, "not-run")]),
                # the silent seat answered after its end; another seat did not run, silently or not, so this is no void
                _rec(5, "s5", at=at, status="not-reviewed", rows=[_row(SEC), _row(CODE, "not-run")], ends=[_end(SEC)])])
-    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "unresolved": 0, "sessions": 5}},
+    assert m["silentReviewerVoids"] == {"byRelease": {"0.50.0": {"voided": 1, "unresolved": 1, "sessions": 5}},
                                         "unplaced": 0}
 
 
