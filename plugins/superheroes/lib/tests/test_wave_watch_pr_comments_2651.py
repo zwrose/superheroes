@@ -114,12 +114,15 @@ def _failed(argv=()):
 # --- row 1, 2: a handback or a builder note on the lane's own PR is the lane's ---------------
 
 
-def test_row1_a_handback_on_the_lanes_pr_is_lane_terminal_for_the_lane(repo):
+@pytest.mark.parametrize("kind, state", [("handback", "handback"), ("stop", "stopped"), ("park", "parked")])
+def test_row1_a_handback_on_the_lanes_pr_is_lane_terminal_for_the_lane(repo, kind, state):
+    # axis: every terminal kind (handback, stop, park) on the lane's own PR is the lane's ending
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
+    gh = _PrGh([_pr_comment(7, 501, _body(kind))], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
     launch = _only_launch(_arm(repo, gh))
     assert launch["launchId"] == "cloud-a"
-    assert launch["state"] == "handback"
+    assert launch["kind"] == kind
+    assert launch["state"] == state
     assert launch["issue"] == 101
     assert launch["pr"] == 501
     assert launch["commentId"] == 7
@@ -183,6 +186,17 @@ def test_a_pr_comment_whose_page_number_differs_from_its_issue_number_is_no_cand
     assert result["event"] == ww.EVENT_TIMER
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
     assert gh.pr_reads == []
+    assert ww._pr_candidate(odd, {101}, 0.0) is None
+
+
+@pytest.mark.parametrize("html_url", [
+    "https://example.com/%s/pull/501#issuecomment-7" % _SLUG,
+    "https://github.com/%s/pull/501#issuecomment-0" % _SLUG,
+    "https://github.com/%s/pull/501#issuecomment-7/x" % _SLUG,
+])
+def test_a_pr_comment_whose_permalink_is_not_a_github_pr_comment_is_no_candidate(html_url):
+    # axis: the watch reads the html_url with the builder's own permalink parser, whole string, never a suffix
+    odd = dict(_pr_comment(7, 501, _body("handback")), html_url=html_url)
     assert ww._pr_candidate(odd, {101}, 0.0) is None
 
 

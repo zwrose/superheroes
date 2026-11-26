@@ -75,7 +75,8 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPO_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}\Z)[A-Za-z0-9_.-]+\Z")
 _STARTED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _EXPECTED_RE = re.compile(r"^Expected:\s*(\d+)\s*minutes?\s*$", re.ASCII)
-_PR_COMMENT_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*#issuecomment-[1-9][0-9]*")
+_COMMENT_PERMALINK_RE = re.compile(
+    r"https://github\.com/([^/\s#]+/[^/\s#]+)/(issues|pull)/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)")
 ALSO_ON_LINE = "Also posted on the pull request: "
 
 INTAKE_HEADER = "Builder intake (cloud build)."
@@ -653,6 +654,17 @@ def handover_sha(body):
     return match.group(1) if match and text == handover_text(match.group(1)) else None
 
 
+def comment_permalink(url):
+    """(repository, page kind, page number, comment id) of one GitHub conversation comment permalink, else None.
+
+    The page kind is `issues` or `pull`; the repository is `owner/name` and passes the same check `--repo`
+    does, so a `.` or `..` segment is refused. The whole string must be the permalink, nothing around it."""
+    match = _COMMENT_PERMALINK_RE.fullmatch(url) if isinstance(url, str) else None
+    if match is None or not _REPO_RE.match(match.group(1)):
+        return None
+    return match.group(1), match.group(2), int(match.group(3)), int(match.group(4))
+
+
 def terminal_text(kind, text, also_on=None):
     """The handback, stop or park comment: the kind's fixed header, then `text`. It is posted on the build's
     issue (`target` is `issue`). `also_on`, when given, is the permalink of one pull request comment that already
@@ -662,7 +674,7 @@ def terminal_text(kind, text, also_on=None):
     if not isinstance(text, str) or not text.strip():
         return {"ok": False, "reason": "text-empty"}
     # axis: `also_on` is exactly one pull request comment permalink, nothing before, after or around it — see bite-proof record i2651_also_on
-    if also_on is not None and not (isinstance(also_on, str) and _PR_COMMENT_URL_RE.fullmatch(also_on)):
+    if also_on is not None and (comment_permalink(also_on) or (None, None))[1] != "pull":
         return {"ok": False, "reason": "also-on-invalid"}
     comment = TERMINAL_HEADERS[kind] + "\n\n" + text.strip()
     if also_on is not None:

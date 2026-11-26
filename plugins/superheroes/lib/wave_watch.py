@@ -2329,8 +2329,9 @@ def _merge_comments(shared, lane_reads):
     return merged
 
 
-# Progress and handover comments stay issue-scoped: only a builder note or an ending moves to the lane the PR closes.
-_PR_ATTRIBUTED_KINDS = ("handback", "stop", "park")
+# The terminal kinds the builder composes (its header map is their one home). Progress and handover comments stay
+# issue-scoped: only a builder note or one of these endings moves to the lane the PR closes.
+_PR_ATTRIBUTED_KINDS = tuple(cb.TERMINAL_HEADERS)
 
 
 def _pr_candidate(comment, watched_issues, earliest):
@@ -2362,10 +2363,8 @@ def _pr_candidate(comment, watched_issues, earliest):
             return None
         html_url = comment.get("html_url")
         # axis: only a comment on a pull request (its html_url is a /pull/<n> page with the issue_url's number) is a candidate, so a plain issue's comment causes no read and no disclosure — see bite-proof record i2651_pr_comments.md
-        if not isinstance(html_url, str):
-            return None
-        pull = re.search(r"/pull/(\d+)#issuecomment-\d+$", html_url)
-        if pull is None or int(pull.group(1)) != number:
+        permalink = cb.comment_permalink(html_url)
+        if permalink is None or permalink[1] != "pull" or permalink[2] != number:
             return None
         # axis: only a builder note or a handback, stop or park is read onto a lane through its pull request; any other comment on one is no lane's — see bite-proof record i2651_pr_comments.md
         if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _PR_ATTRIBUTED_KINDS):
