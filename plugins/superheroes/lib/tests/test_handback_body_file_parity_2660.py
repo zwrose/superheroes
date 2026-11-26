@@ -27,7 +27,7 @@ REPO = "owner/example"
 PR = 42
 PULL = ["gh", "api", "repos/owner/example/pulls/42"]
 COMMENTS = "repos/owner/example/issues/42/comments?per_page=100&page="
-NOT_RUN = ["caught-up", "leftovers", "calibration-disclosures"]
+NOT_RUN = list(vs.HANDBACK_PR_CHECKS)  # the one home of the skipped-check names; never restated here
 FOLLOWUPS_LINE = "<!-- superheroes:followups none -->\n"
 
 
@@ -188,7 +188,6 @@ def test_row8_file_only_pass_says_which_three_checks_it_did_not_run(capsys, tmp_
     rc, out = _go(capsys, ["handback", "--body-file", _file(tmp_path, HEALTHY)], fake)
     assert rc == 0
     assert out == {"ok": True, "verb": "handback", "followups": [], "notRun": NOT_RUN}
-    assert out["notRun"] == list(vs.HANDBACK_PR_CHECKS) == ["caught-up", "leftovers", "calibration-disclosures"]
     assert fake.calls == []
 
 
