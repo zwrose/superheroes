@@ -638,3 +638,25 @@ Each red fails on its own axis: body text alone linked a pull request (L1); a de
 closing reference (L2); a stack layer refused its timeline link (L3); a paged closing-reference answer read as whole
 (L4); a moved head refused the whole judgement instead of holding (L5). After the last restore, the probe worktree's
 `git status --short` printed nothing.
+
+## Review session 3 fixes
+
+Review session 3's fix commits changed code that L1-L4 quote: the timeline gate L1 neutralized became a per-base
+choice, and the per-pull-request closing-reference read L2-L4 name became one read of the blocker issue's own
+closing pull requests (`closedByPullRequestsReferences`). **L1-L4 are kept as history at `c1063075`**; their tests
+still exist and pass, but their neutralizations quote lines that no longer exist. L5 stands.
+
+Each session-3 fix was proved the same way, not by a one-edit neutralization: with the fix commit's code files
+stashed (tests kept), the fix's new tests were run on the code before the fix, and each failed; after the stash was
+restored, each passed. `git status --short` after each restore showed only the fix's own files.
+
+| Fix commit | Code stashed | Tests that failed on the code before the fix |
+|---|---|---|
+| `a998e2e0` | `issue_contract.py`, `launcher.py` | the boolean-feature and duplicate-key break-it tests; every default-base pull request's closing references read; a default-base pull request linked by hand with no timeline mention; a parent in another repository read there (5 failed) |
+| `6453cd29` | `launcher.py`, `stack_check.py` | the unlink-during-verification break-it test (GraphQL and REST); the dependency-joins-a-stack break-it test; the membership reread (three cases); the stack premise recheck with a withdrawn card (7 failed) |
+| `558b6205` | `issue_contract.py`, `launcher.py` | the blocker's closing pull requests read once, by the blocker's number (two tests); a card under a parent in another repository; a not-linked membership read at another head; an accepted layer moved to the launch's own position (5 failed) |
+| `342ef18c` | `issue_contract.py` | a parent in another repository records no feature (1 failed) |
+
+Two of the new tests are regression guards that also pass on the code before the fix, by design: a stack layer
+closing the blocker with no timeline mention is not linked, and a stack premise with an intact card passes on to the
+layer gate.
