@@ -1253,6 +1253,15 @@ def _transport_rest(
     return payload, None
 
 
+def _left_mid_read(refusal, earlier_snapshot, repo, pr, pages):
+    """A not-linked answer after an earlier page or pass read the pull request in a stack is a moved snapshot."""
+    # axis: a pull request that leaves its stack while it is being read is an order mismatch, never a definitive absence — see bite-proof record wo_2652_stack_layer_blockers
+    if earlier_snapshot is not None and refusal.get("reason") == REASON_NOT_LINKED:
+        return _refusal(REASON_ORDER_MISMATCH, "pull request left its stack during the read", repo=repo, pr=pr,
+            pages=pages)
+    return refusal
+
+
 def _parse_rest_pull(pull, repo, pr, pages):
     """Return (snapshot, refusal) from the pull-request GET — exactly one is non-None."""
     head = pull.get("head")
@@ -1408,7 +1417,7 @@ def _read_membership_rest(
 
         snapshot, refusal = _parse_rest_pull(pull, repo, pr, pages)
         if refusal is not None:
-            return refusal
+            return _left_mid_read(refusal, prior_snapshot, repo, pr, pages)
 
         stack_payload, refusal = _transport_rest(
             _rest_stack_argv(owner, name, snapshot["stack_number"]), timeout, run, repo, pr, pages,
@@ -1544,7 +1553,7 @@ def _read_membership_graphql(
             if page_refusal is not None and page_result is not None:
                 raise AssertionError("_parse_membership_page returned both page and refusal")
             if page_refusal is not None:
-                return page_refusal
+                return _left_mid_read(page_refusal, snapshot or prior_snapshot, repo, pr, pages)
             if page_result is None:
                 raise AssertionError("_parse_membership_page returned neither page nor refusal")
 
