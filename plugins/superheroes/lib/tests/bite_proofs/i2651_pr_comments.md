@@ -7,7 +7,7 @@ and for element 7 the existing `test_wave_watch_pr_old_resumed_2651.py`). Guarde
 Base: `2f804e8ba99f5f3f050c91e9398d85b5e7519517`; this record is the rewrite for the seam that replaced the body
 reader: a pull request belongs to a lane only through a link GitHub records (its closing issue references when it is
 based on the default branch, a cross-reference on the lane's issue timeline when it is a stack layer), never through
-its body text, and a link that cannot be read is unknown, never "no link". Declared guarded-element set: the ten
+its body text, and a link that cannot be read is unknown, never "no link". Declared guarded-element set: the eleven
 below (one neutralization and one red each, no grouping). Every neutralization was a targeted edit made with the
 Edit tool, undone by the inverse Edit before the next element, each Edit and each run in its own tool call. No `git
 checkout`, `restore`, `reset` or `stash` was used. Command prefix for every run below (worktree root):
@@ -282,68 +282,44 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 5 passed, 78 deselected in 1.13s
 ```
 
-## 5. Close partial (`complete = state and pr_complete`, `wave_watch.py:2703`)
+## 5. Close partial, per unsure lane (`close_kinds` excludes `uncertain`, `wave_watch.py:2730`)
 
-- **Axis:** an incomplete pull-request attribution is a partial read, so it neither replaces the known closes nor sets the closed slot.
-- **Neutralization:** `    complete = state and pr_complete` became `    complete = state`.
-- **Raw red** (`-k "row11"`; 3 red, 1 passing: the `control_a_resolved_pr_comment_sets_the_closed_slot` control passes under this neutralization, as a control must):
+- **Axis:** a lane a pull-request comment the watch could not attribute may belong to is read as on a partial comments read: its stored close only, nothing new stored for it (advisor ruling 584734b4ec02, option a).
+- **Refreshed after the ruling** (head `2f63d9e` plus the narrowing, uncommitted at the run). The earlier neutralization (`complete = state and pr_complete`) no longer exists.
+- **Neutralization:** `    close_kinds = {lid: value for lid, value in observed.items() if lid not in uncertain}` became `    close_kinds = {lid: value for lid, value in observed.items()}`.
+- **Raw red** (`-k "row11"`; 4 red, 4 passing controls; the capture keeps each failure's assertion and error lines):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-FF.F                                                                     [100%]
+FF..FF..                                                                 [100%]
 =================================== FAILURES ===================================
-_______ test_row11_an_unresolved_pr_comment_leaves_the_closed_slot_unset _______
-
-    def test_row11_an_unresolved_pr_comment_leaves_the_closed_slot_unset():
-        lanes, comments = _reopened_lane_and_comments()
-        gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
-        closed_out, unread_out = [None], {}
-        _evaluate(lanes, gh, closed_out=closed_out, unread_out=unread_out)
->       assert closed_out[0] is None
-E       AssertionError: assert {'cloud-a': ((1795710593.0, 7), 'handback')} is None
-
-/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py:607: AssertionError
-________ test_row11_a_refused_graphql_read_leaves_the_closed_slot_unset ________
-
-    def test_row11_a_refused_graphql_read_leaves_the_closed_slot_unset():
-        lanes, comments = _reopened_lane_and_comments()
-        gh = _PrGh(comments, prs={501: _on_main(101)}, graphql="refused")
-        closed_out, unread_out = [None], {}
-        _evaluate(lanes, gh, closed_out=closed_out, unread_out=unread_out)
->       assert closed_out[0] is None
-E       AssertionError: assert {'cloud-a': ((1795710593.0, 7), 'handback')} is None
-
-/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py:616: AssertionError
-__________ test_row11_an_unresolved_pr_comment_keeps_the_known_closes __________
-
-    def test_row11_an_unresolved_pr_comment_keeps_the_known_closes():
-        lanes, comments = _reopened_lane_and_comments()
-        known = {"cloud-a": ((time.time() - 300, 7), "handback")}
-        gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
-        (notes, terminals), degraded = _evaluate(lanes, gh, known_closes=known)
-        assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in degraded
->       assert terminals == []  # the cached close, not this read's first ending, bounds the window
-        ^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: assert [{'launchId':...e': 101, ...}] == []
-E         
-E         Left contains one more item: {'launchId': 'cloud-a', 'state': 'handback', 'kind': 'handback', 'issue': 101, ...}
-E         Use -v to get more diff
-
-/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py:635: AssertionError
+_____ test_row11_an_unresolved_pr_comment_stores_nothing_new_for_its_lane ______
+>       assert closed_out[0] == {}
+E       AssertionError: assert {'cloud-a': (..., 'handback')} == {}
+______ test_row11_a_refused_graphql_read_stores_nothing_new_for_its_lane _______
+>       assert closed_out[0] == {}
+E       AssertionError: assert {'cloud-a': (..., 'handback')} == {}
+___ test_row11_with_no_stored_close_an_unsure_lane_has_no_bound_and_says_so ____
+>       assert [note["commentId"] for note in notes] == [9]
+E       assert [] == [9]
+_ test_row11_an_observed_park_is_not_a_close_while_a_pr_note_after_it_is_unread _
+>       assert [(t["commentId"], t["kind"]) for t in terminals] == [(9, "stop")]
+E       AssertionError: assert [(7, 'park')] == [(9, 'stop')]
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_an_unresolved_pr_comment_leaves_the_closed_slot_unset
-FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_a_refused_graphql_read_leaves_the_closed_slot_unset
-FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_an_unresolved_pr_comment_keeps_the_known_closes
-3 failed, 1 passed, 79 deselected in 0.60s
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_an_unresolved_pr_comment_stores_nothing_new_for_its_lane
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_a_refused_graphql_read_stores_nothing_new_for_its_lane
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_with_no_stored_close_an_unsure_lane_has_no_bound_and_says_so
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_row11_an_observed_park_is_not_a_close_while_a_pr_note_after_it_is_unread
+4 failed, 4 passed, 85 deselected in 1.27s
 ```
 
-- **Restore:** inverse Edit. **Restore receipt:** the restored line, `    complete = state and pr_complete` (a `grep -n "    complete = state"` printed line 2703 only).
-- **Raw green** (same selector):
+- **Restore:** inverse Edit. **Restore receipt:** a `grep -n` printed `2730:    close_kinds = {lid: value for lid, value in observed.items() if lid not in uncertain}` only.
+- **Raw green** (`-k "row11 or stored_park_and_no_pr_candidate"`):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-....                                                                     [100%]
-4 passed, 79 deselected in 0.71s
+.........                                                                [100%]
+9 passed, 84 deselected in 25.62s
 ```
 
 ## 6. PR-only candidate (`_pr_candidate`'s permalink check, `wave_watch.py:2371`)
@@ -590,3 +566,25 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed, 82 deselected in 0.62s
 ```
+
+
+## 11. No crash on a failed comments read with a stored park (`uncertain` is one type, a set, `wave_watch.py`)
+
+- **Axis:** a comments read that fails with a stored park and no pull-request candidate returns the normal degraded result, never `internal-error`.
+- **Red without the fix:** the test was written first and run on head `2f63d9e`, where the no-candidate path left `uncertain` a `set()` and the cached-park check called `uncertain.get(...)`. The fix removes that check with the bound code (ruling 584734b4ec02), so `uncertain` is a set on every path.
+- **Raw red** (on `2f63d9e`, `-k "stored_park_and_no_pr_candidate"`):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_failed_comments_read_with_a_stored_park_and_no_pr_candidate_is_a_normal_degraded_result _
+>       assert result["ok"] is True, result
+E       AssertionError: {'ok': False, 'reason': 'internal-error', 'batchId': 'batch-cloud', 'detail': 'AttributeError'}
+E       assert False is True
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_a_failed_comments_read_with_a_stored_park_and_no_pr_candidate_is_a_normal_degraded_result
+1 failed, 96 deselected in 0.87s
+```
+
+- **Green after the fix:** in the element 5 green run above (the selector includes it).

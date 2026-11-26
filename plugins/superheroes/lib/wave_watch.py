@@ -2161,37 +2161,6 @@ def _cloud_close_kinds(comments, watched):
     return closes
 
 
-def _partial_bounds(comments, watched, uncertain):
-    """{launch id: ((created epoch, comment id), kind)}: for each reopened lane in `uncertain` (a lane a pull-request
-    comment the watch could not attribute may belong to, mapped to the created epochs of the unattributed builder notes
-    among them), its first ending at or after its reopenedAt that can be no superseded park.
-
-    An unattributed comment can only add an earlier ending or a note, so this ending is an upper bound on the lane's
-    close. A park is skipped when the observed comments show it superseded, as `_cloud_close_kinds` does, and also when
-    an unattributed note was created after it, since that note may be the lane's and supersede it; an unattributed
-    ending never supersedes a park."""
-    reopened = {lid for lid in uncertain if lid in watched and "reopenedAt" in watched[lid]}
-    if not reopened:
-        return {}
-    progress = _cloud_progress(comments, watched)
-    note_times = _cloud_note_times(comments, watched)
-    endings = sorted(
-        (created, comment["id"], lid, kind)
-        for lid, _number, created, comment, kind in _cloud_endings(comments, watched)
-        if lid in reopened and created >= watched[lid]["reopenedAt"]
-    )
-    bounds = {}
-    for created, comment_id, lid, kind in endings:
-        if lid in bounds:
-            continue
-        if kind == "park" and (
-                _park_superseded(lid, created, progress, note_times)
-                or any(time_ > created for time_ in uncertain[lid])):
-            continue
-        bounds[lid] = ((created, comment_id), kind)
-    return bounds
-
-
 def _cloud_terminals(comments, watched, answered, closes=None):
     """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
 
@@ -2582,43 +2551,35 @@ def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=fro
     watched lane's issue GitHub links the PR to, as a new list; no comment dict is mutated.
 
     `resolved` is `_read_candidate_prs`'s answer: the watched issues GitHub links each PR to, or None when the link
-    could not be read. A re-keyed copy carries `prNumber`. `uncertain` maps each launch id a candidate the watch
-    could not attribute might belong to, to the created epochs of the builder notes among those candidates: for a
-    link that was not read, every lane not issue-only whose `_pr_cutoff` the comment is at or after; for a PR linked
-    to two or more watched issues (no lane can be named, whether or not one of them is issue-only), the linked lanes
-    among those. An empty map is a complete attribution.
+    could not be read. A re-keyed copy carries `prNumber`. `uncertain` is the set of launch ids a candidate the
+    watch could not attribute might belong to: for a link that was not read, every lane not issue-only whose
+    `_pr_cutoff` the comment is at or after; for a PR linked to two or more watched issues (no lane can be named,
+    whether or not one of them is issue-only), the linked lanes among those. An empty set is a complete attribution.
     A PR linked to no watched issue, or a comment from before its lane's `_pr_cutoff`, leaves the comment as it
     was. A lane whose issue is in `issue_only` (a resumed lane read from its own issue) never takes a pull-request
     comment. Nothing pairs: an ending the builder posted on both the issue and its PR is two endings of the lane."""
     watched_issues = {info["issue"] for info in watched.values()}
     attributed = []
-    uncertain = {}
+    uncertain = set()
     for comment in comments:
         number = _pr_candidate(comment, watched_issues, earliest)
         if number is None or number not in resolved:
             attributed.append(comment)
             continue
         created = _parse_activity_time(comment.get("created_at"))
-        is_note = comment["body"].lstrip().startswith(cb.NOTE_HEADER)
 
         def could_be(info):
             return info["issue"] not in issue_only and created >= _pr_cutoff(info)
 
-        def unsure(lids):
-            for lid in lids:
-                times = uncertain.setdefault(lid, [])
-                if is_note:
-                    times.append(created)
-
         if resolved[number] is None:
             # axis: a pull-request comment whose link could not be read leaves partial only the lanes it could be, never the lanes whose window opened after it or which are read from their own issue — see bite-proof record i2651_pr_comments.md
-            unsure(lid for lid, info in watched.items() if could_be(info))
+            uncertain.update(lid for lid, info in watched.items() if could_be(info))
             attributed.append(comment)
             continue
         hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
         if len(hits) >= 2:
             # axis: a pull request GitHub links to two or more watched issues is no lane's and is disclosed for the linked lanes whose window it is in, never guessed onto one — see bite-proof record i2651_pr_comments.md
-            unsure(lid for lid, info in watched.items() if info["issue"] in hits and could_be(info))
+            uncertain.update(lid for lid, info in watched.items() if info["issue"] in hits and could_be(info))
             attributed.append(comment)
             continue
         # axis: a resumed lane read only from its own issue never takes a pull-request comment, whichever read returned it — see bite-proof record i2651_pr_comments.md
@@ -2768,9 +2729,7 @@ def _evaluate_cloud_comments(
     observed = _cloud_close_kinds(comments, watched) if state else {}
     close_kinds = {lid: value for lid, value in observed.items() if lid not in uncertain}
     closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
-    # axis: an unsure lane's close is the earliest upper bound it has: its first ending the issue read showed that no unattributed note may have superseded, or its stored close — see bite-proof record i2651_pr_comments.md
-    bounds = _partial_bounds(comments, watched, uncertain) if state else {}
-    stored = {}
+    # axis: a lane a pull-request comment the watch could not attribute may belong to is read as on a partial comments read: its stored close only, and nothing new stored for it — see bite-proof record i2651_pr_comments.md
     if not complete and known_closes:
         progress = _cloud_progress(comments, watched)
         note_times = _cloud_note_times(comments, watched)
@@ -2781,17 +2740,12 @@ def _evaluate_cloud_comments(
             if kind == "park" and _park_superseded(lid, close[0], progress, note_times):
                 del known_closes[lid]
                 continue
-            stored[lid] = (close, kind)
-            # axis: a stored park that an unattributed note created after it may have superseded bounds nothing this tick, though it stays stored — see bite-proof record i2651_pr_comments.md
-            if kind == "park" and any(time_ > close[0] for time_ in uncertain.get(lid, ())):
-                continue
-            if lid not in bounds or close < bounds[lid][0]:
-                bounds[lid] = (close, kind)
-    closes.update({lid: close for lid, (close, _kind) in bounds.items()})
+            closes[lid] = close
     # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
-    # axis: a complete comments read sets the closed slot even when a pull-request attribution was partial, an unsure lane storing its bound, else keeping its stored close — see bite-proof record i2651_pr_comments.md
+    # axis: a complete comments read sets the closed slot for the lanes the pull-request attribution left sure, and keeps each unsure lane's stored close as it was — see bite-proof record i2651_pr_comments.md
     if state and isinstance(closed_out, list) and closed_out:
-        closed_out[0] = {**close_kinds, **stored, **bounds}
+        kept = {lid: known_closes[lid] for lid in uncertain if known_closes and lid in known_closes}
+        closed_out[0] = {**close_kinds, **kept}
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
         (note for note in notes if note is not None),

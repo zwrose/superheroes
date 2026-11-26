@@ -474,11 +474,10 @@ a header comment, so a quiet tick makes no extra request. A link that cannot be 
 link: a read that fails, is refused (GitHub's GraphQL interface included), comes back truncated or malformed,
 or is skipped for budget is disclosed as `builder-note-unavailable`, naming in `unreadIssues` every lane the
 comment could belong to (each lane whose window it falls in, less a resumed lane read only from its own
-issue). For those lanes a reopened lane's close is the earliest of two bounds, and it is stored: the first
-ending the issue read showed, and the close stored from an earlier tick. A park counts as neither when a
-builder note the watch could not attribute was posted after it, because that note may be the lane's and
-supersede it; an unattributed ending never supersedes a park. Every other lane's close is what the issue read
-showed. The backstop has three
+issue). Those lanes are read as on a partial comments read: a reopened lane's window is bounded by its stored
+close only, and nothing new is stored for it, so on such a tick an ending the issue read shows does not yet
+bound the window and a later note can surface once (the tick is disclosed, never silent). Every other lane's
+close is what the issue read showed. The backstop has three
 limits. It does not read pull request review bodies or inline review comments. A resumed lane whose basis is
 older than the 24-hour shared lookback is read only from its own issue: no comment on a pull request is ever
 attributed to it, even one the shared read returns because another watched lane opened it, so its handback
