@@ -603,21 +603,23 @@ def _reopened_lane_and_comments(*, reopened_ago=500):
     return lanes, comments
 
 
-def test_row11_an_unresolved_pr_comment_sets_no_close_for_its_lane():
+def test_row11_an_unresolved_pr_comment_stores_the_issue_handback_as_its_lanes_close():
+    # axis: a handback the complete issue read showed is a firm close even when a PR comment could not be attributed
     lanes, comments = _reopened_lane_and_comments()
     gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
     closed_out, unread_out = [None], {}
     _evaluate(lanes, gh, closed_out=closed_out, unread_out=unread_out)
-    assert closed_out[0] == {}  # the issue handback (7) is not taken for the close of the lane the PR comment could be
+    assert set(closed_out[0]) == {"cloud-a"} and closed_out[0]["cloud-a"][0][1] == 7
+    assert closed_out[0]["cloud-a"][1] == "handback"
     assert unread_out == {"cloud-a": 101}
 
 
-def test_row11_a_refused_graphql_read_sets_no_close_for_its_lane():
+def test_row11_a_refused_graphql_read_stores_the_issue_handback_as_its_lanes_close():
     lanes, comments = _reopened_lane_and_comments()
     gh = _PrGh(comments, prs={501: _on_main(101)}, graphql="refused")
     closed_out, unread_out = [None], {}
     _evaluate(lanes, gh, closed_out=closed_out, unread_out=unread_out)
-    assert closed_out[0] == {}
+    assert set(closed_out[0]) == {"cloud-a"} and closed_out[0]["cloud-a"][0][1] == 7
     assert unread_out == {"cloud-a": 101}
 
 
@@ -651,7 +653,40 @@ def test_row11_an_issue_handback_still_bounds_the_window_when_a_pr_comment_is_un
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in degraded
     assert notes == []  # note 9 is after handback 7, the lane's observed close
     assert [t["commentId"] for t in terminals] == [7]
-    assert closed_out[0] == {}  # the close is not stored while the PR comment is unattributed
+    assert closed_out[0]["cloud-a"][0][1] == 7  # a firm close is stored, so a later partial read keeps the bound
+
+
+def test_row11_an_observed_park_is_not_a_close_while_a_pr_note_after_it_is_unread():
+    # axis: a park is never a firm close on a partial attribution: the unread PR note may supersede it, so the later issue stop is the close and surfaces
+    lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - 500)
+    comments = [
+        _comment(7, 101, _body("park"), age=300),
+        _pr_comment(8, 501, _NOTE_BODY, age=250),
+        _comment(9, 101, _body("stop"), age=200),
+    ]
+    gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
+    closed_out = [None]
+    (notes, terminals), degraded = _evaluate(lanes, gh, closed_out=closed_out)
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in degraded
+    assert [(t["commentId"], t["kind"]) for t in terminals] == [(9, "stop")]
+    assert closed_out[0]["cloud-a"][0][1] == 9 and closed_out[0]["cloud-a"][1] == "stop"
+
+
+def test_row11_a_stored_close_wins_over_a_park_a_partial_read_observes():
+    # axis: an unsure lane's stored close (a complete read's) is its bound, never an earlier park this partial read cannot judge
+    lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - 500)
+    comments = [
+        _comment(7, 101, _body("park"), age=300),
+        _pr_comment(8, 501, _NOTE_BODY, age=250),
+        _comment(9, 101, _body("stop"), age=200),
+    ]
+    stop_key = (ww._parse_activity_time(comments[2]["created_at"]), 9)
+    known = {"cloud-a": (stop_key, "stop")}
+    gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
+    closed_out = [None]
+    (notes, terminals), degraded = _evaluate(lanes, gh, closed_out=closed_out, known_closes=dict(known))
+    assert [(t["commentId"], t["kind"]) for t in terminals] == [(9, "stop")]
+    assert closed_out[0] == known
 
 
 def _reopened(issue, reopened_ago):
@@ -692,6 +727,31 @@ def test_a_pr_comment_from_before_every_lanes_fix_order_causes_no_read_and_no_di
     assert terminals == []
 
 
+def test_a_lane_read_only_from_its_own_issue_does_not_open_the_pr_cutoff(repo):
+    # axis: the candidate cutoff is taken over the lanes that can take a PR comment, never an old resumed lane read only from its own issue
+    from test_wave_watch_lookback_2333 import _ScopedGh, _dormant
+
+    _dormant(repo, "cloud-old", 301)
+    _cloud_lane(repo, "cloud-a", 101, start_age=200, reserve_lead=1)
+    # Created after the old lane's basis (2 days ago) but before cloud-a began (200 s ago), and edited since, so the
+    # shared read (which filters by update time) returns it; reading PR 501 fails here, so a read would be disclosed.
+    edited = dict(_pr_comment(7, 501, _body("handback"), age=600), updated_at=_pr_comment(9, 501, age=10)["created_at"])
+    scoped = _ScopedGh([edited])
+    links = _PrGh(prs={501: _on_main(101)}, fail_pulls={501})
+
+    def gh_run(argv, **kwargs):
+        argv = list(argv)
+        if argv[:3] == ["gh", "api", "graphql"] or (len(argv) == 3 and argv[:2] == ["gh", "api"] and (
+                argv[2] == "repos/%s" % _SLUG or _PULL.match(argv[2]))):
+            return links(argv, **kwargs)
+        return scoped(argv, **kwargs)
+
+    result = ww.run(repo, _BATCH, gh_run=gh_run)
+    assert links.pr_reads == []
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
+    assert "unreadIssues" not in result
+
+
 def test_a_pr_comment_from_before_its_lanes_fix_order_is_not_the_lanes():
     # axis: attribution re-keys a PR comment only to a lane whose window it is in
     lanes = {"cloud-a": _reopened(101, 100), "cloud-b": dict(_lanes({"cloud-b": (102, 700)})["cloud-b"])}
@@ -699,6 +759,18 @@ def test_a_pr_comment_from_before_its_lanes_fix_order_is_not_the_lanes():
     out, uncertain = ww._attribute_pr_comments([comment], lanes, {501: (101,)}, 0.0)
     assert uncertain == set()
     assert out == [comment]
+
+
+def test_an_ambiguous_pr_comment_is_unsure_only_for_linked_lanes_whose_window_it_is_in():
+    # axis: the ambiguity disclosure keeps each linked lane's window: a lane whose fix order came after the comment is not named
+    base = _lanes({"cloud-b": (102, 700), "cloud-c": (103, 700)})
+    lanes = {"cloud-a": _reopened(101, 100), **base}
+    comment = _pr_comment(8, 501, _body("handback"), age=300)
+    out, uncertain = ww._attribute_pr_comments([comment], lanes, {501: (101, 102)}, 0.0)
+    assert uncertain == {"cloud-b"}
+    assert out == [comment]
+    lanes["cloud-b"] = _reopened(102, 100)
+    assert ww._attribute_pr_comments([comment], lanes, {501: (101, 102)}, 0.0)[1] == set()
 
 
 def test_an_unread_pr_comment_is_unsure_only_for_lanes_whose_window_it_is_in():
@@ -752,7 +824,7 @@ def test_a_pr_linked_to_a_live_issue_and_an_old_resumed_issue_stays_ambiguous():
     lanes = _lanes({"cloud-a": (101, 700), "cloud-b": (102, 700)})
     out, uncertain = ww._attribute_pr_comments(
         [_pr_comment(7, 501, _body("handback"))], lanes, {501: (101, 102)}, 0.0, issue_only=frozenset({101}))
-    assert uncertain == {"cloud-a", "cloud-b"}
+    assert uncertain == {"cloud-b"}  # no lane is named; the disclosure names the live lane only
     assert "prNumber" not in out[0]
 
 
@@ -898,33 +970,14 @@ def test_the_closing_references_read_is_one_direct_graphql_call_with_the_pull_re
     [argv] = [call for call in gh.calls if call[:3] == ["gh", "api", "graphql"]]
     assert argv[3:9] == ["-f", "owner=owner", "-f", "name=repo", "-F", "number=501"]
     assert argv[9] == "-f" and argv[10].startswith("query=")
-    # The query sent asks for every field the answer is read by, independently of the module's own constant.
+    # The query sent asks for every field the answer is read by, independently of the module's own constant, in any order.
     query = " ".join(argv[10][len("query="):].split())
     assert "pullRequest(number: $number)" in query
     assert "closingIssuesReferences(first: 25)" in query
-    assert re.search(r"pageInfo \{ hasNextPage \}", query)
-    assert re.search(r"nodes \{ number repository \{ nameWithOwner \} \}", query)
+    assert re.search(r"pageInfo \{[^{}]*\bhasNextPage\b[^{}]*\}", query)
+    nodes = query[query.index("nodes {"):]
+    assert re.search(r"repository \{[^{}]*\bnameWithOwner\b[^{}]*\}", nodes)
+    assert re.search(r"\bnumber\b", re.sub(r"repository \{[^{}]*\}", "", nodes))
     assert ww._read_candidate_prs([501], _SLUG, {101}, "/", 100.0, lambda: 0.0, _PrGh(prs={501: _on_main(101)}), {}) \
         == {501: (101,)}
 
-
-def test_an_old_resumed_lanes_pr_handback_is_read_and_left_issue_only(repo):
-    # axis: the issue-only exclusion is what keeps the old resumed lane's PR handback off it: the PR link is read and names its issue
-    from test_wave_watch_lookback_2333 import _ScopedGh, _dormant, _live
-
-    _dormant(repo)
-    _live(repo)
-    scoped = _ScopedGh([_pr_comment(7, 501, _body("handback"), age=60)])
-    links = _PrGh(prs={501: _on_main(101)})
-
-    def gh_run(argv, **kwargs):
-        argv = list(argv)
-        if argv[:3] == ["gh", "api", "graphql"] or (len(argv) == 3 and argv[:2] == ["gh", "api"] and (
-                argv[2] == "repos/%s" % _SLUG or _PULL.match(argv[2]))):
-            return links(argv, **kwargs)
-        return scoped(argv, **kwargs)
-
-    result = ww.run(repo, _BATCH, gh_run=gh_run)
-    assert links.reads["graphql"] == [501]
-    assert result["event"] == ww.EVENT_TIMER, result
-    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]

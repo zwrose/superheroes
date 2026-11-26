@@ -2161,6 +2161,22 @@ def _cloud_close_kinds(comments, watched):
     return closes
 
 
+def _firm_closes(comments, watched, lids):
+    """{launch id: ((created epoch, comment id), kind)} of each reopened lane in `lids` whose comments show a handback,
+    stop or handover at or after its reopenedAt: the first such ending. A park is never firm: a note the watch could not
+    attribute may have superseded it, and an ending it could not attribute can only be earlier, so the first firm ending
+    is an upper bound on the lane's close."""
+    firm = {}
+    endings = sorted(
+        (created, comment["id"], lid, kind)
+        for lid, _number, created, comment, kind in _cloud_endings(comments, watched)
+        if lid in lids and "reopenedAt" in watched[lid] and created >= watched[lid]["reopenedAt"] and kind != "park"
+    )
+    for created, comment_id, lid, kind in endings:
+        firm.setdefault(lid, ((created, comment_id), kind))
+    return firm
+
+
 def _cloud_terminals(comments, watched, answered, closes=None):
     """One lane-terminal entry per watched lane whose newest ending comment is unanswered.
 
@@ -2567,18 +2583,18 @@ def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=fro
             attributed.append(comment)
             continue
         created = _parse_activity_time(comment.get("created_at"))
+        def could_be(info):
+            return info["issue"] not in issue_only and created >= _pr_cutoff(info)
+
         if resolved[number] is None:
             # axis: a pull-request comment whose link could not be read leaves partial only the lanes it could be, never the lanes whose window opened after it or which are read from their own issue — see bite-proof record i2651_pr_comments.md
-            uncertain.update(
-                lid for lid, info in watched.items()
-                if info["issue"] not in issue_only and created >= _pr_cutoff(info)
-            )
+            uncertain.update(lid for lid, info in watched.items() if could_be(info))
             attributed.append(comment)
             continue
         hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
         if len(hits) >= 2:
-            # axis: a pull request GitHub links to two or more watched issues is no lane's and is disclosed, never guessed onto one — see bite-proof record i2651_pr_comments.md
-            uncertain.update(lid for lid, info in watched.items() if info["issue"] in hits)
+            # axis: a pull request GitHub links to two or more watched issues is no lane's and is disclosed for the linked lanes whose window it is in, never guessed onto one — see bite-proof record i2651_pr_comments.md
+            uncertain.update(lid for lid, info in watched.items() if info["issue"] in hits and could_be(info))
             attributed.append(comment)
             continue
         # axis: a resumed lane read only from its own issue never takes a pull-request comment, whichever read returned it — see bite-proof record i2651_pr_comments.md
@@ -2691,11 +2707,12 @@ def _evaluate_cloud_comments(
     if not requested:
         return [], []
     watched_issues = {info["issue"] for info in watched.values()}
-    # axis: a pull-request comment from before every watched lane's window (a reopened lane's fix order, a dormant lane's basis) selects no pull request to read — see bite-proof record i2651_pr_comments.md
-    earliest = min(_pr_cutoff(info) for info in watched.values())
+    # axis: a pull-request comment from before the window of every lane that can take one (a reopened lane's fix order, a dormant lane's basis; a lane read only from its own issue takes none) selects no pull request to read — see bite-proof record i2651_pr_comments.md
+    pr_lanes = [info for lid, info in watched.items() if lid not in old_dormant]
+    earliest = min(_pr_cutoff(info) for info in pr_lanes) if pr_lanes else None
     candidates = sorted({
         n for n in (_pr_candidate(c, watched_issues, earliest) for c in comments) if n is not None
-    })
+    }) if pr_lanes else []
     uncertain = set()
     # No candidate, no request: the common tick reads nothing new.
     if candidates:
@@ -2726,8 +2743,9 @@ def _evaluate_cloud_comments(
     complete = state and not uncertain
     observed = _cloud_close_kinds(comments, watched) if state else {}
     close_kinds = {lid: value for lid, value in observed.items() if lid not in uncertain}
-    # axis: a close the complete issue read observed still bounds an unsure lane's window this tick, since a comment the watch could not attribute can only be an earlier ending — see bite-proof record i2651_pr_comments.md
-    closes = {lid: close for lid, (close, _kind) in observed.items()}
+    closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
+    # axis: an unsure lane's first handback, stop or handover the complete issue read showed bounds its window and is stored, never a park, which a pull-request note the watch could not attribute may have superseded — see bite-proof record i2651_pr_comments.md
+    firm = _firm_closes(comments, watched, uncertain) if state else {}
     if not complete and known_closes:
         progress = _cloud_progress(comments, watched)
         note_times = _cloud_note_times(comments, watched)
@@ -2738,12 +2756,15 @@ def _evaluate_cloud_comments(
             if kind == "park" and _park_superseded(lid, close[0], progress, note_times):
                 del known_closes[lid]
                 continue
-            closes[lid] = min(close, closes.get(lid, close))
+            # axis: an unsure lane's stored close, which a complete read showed, wins over what this partial read observed — see bite-proof record i2651_pr_comments.md
+            closes[lid] = close
+            firm.pop(lid, None)
+    closes.update({lid: close for lid, (close, _kind) in firm.items()})
     # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
     # axis: a complete comments read sets the closed slot even when a pull-request attribution was partial, keeping the known close of each lane the partial attribution leaves unsure — see bite-proof record i2651_pr_comments.md
     if state and isinstance(closed_out, list) and closed_out:
         kept = {lid: known_closes[lid] for lid in uncertain if known_closes and lid in known_closes}
-        closed_out[0] = {**close_kinds, **kept}
+        closed_out[0] = {**close_kinds, **firm, **kept}
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
         (note for note in notes if note is not None),
