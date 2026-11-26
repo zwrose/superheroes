@@ -489,7 +489,7 @@ def test_row6_a_stack_upper_layers_pr_comment_is_the_upper_lanes_only(repo):
 
 @pytest.mark.parametrize("row", [
     {"event": "cross-referenced", "source": {"issue": {
-        "number": 503, "pull_request": {"url": "u"}, "repository": {"full_name": "other/repo"}}}},
+        "number": 502, "pull_request": {"url": "u"}, "repository": {"full_name": "other/repo"}}}},
     {"event": "cross-referenced", "source": {"issue": {
         "number": 504, "pull_request": {"url": "u"}, "repository": {"full_name": _SLUG}}}},
     {"event": "cross-referenced", "source": {"issue": {
@@ -983,6 +983,17 @@ def test_a_malformed_closing_references_answer_is_unknown(stdout):
     assert ww._read_candidate_prs([501], _SLUG, {101}, "/", 100.0, lambda: 0.0, gh, {}) == {501: None}
 
 
+def test_a_pull_request_is_routed_by_the_repositorys_own_default_branch():
+    # axis: the base branch is compared with the default branch the repository read serves, never a hard-coded name
+    gh = _PrGh(
+        prs={501: {"base": "trunk", "closes": [101]}, 502: {"base": "main", "closes": [102]}}, repo_default="trunk",
+    )
+    resolved = ww._read_candidate_prs([501, 502], _SLUG, {101, 102}, "/", 100.0, lambda: 0.0, gh, {})
+    assert resolved == {501: (101,), 502: (102,)}
+    assert gh.reads["graphql"] == [501]  # based on the default branch `trunk`: closing references
+    assert gh.reads["timeline"] == [101, 102]  # based on `main`, not the default here: a stack layer
+
+
 def test_the_closing_references_read_is_one_direct_graphql_call_with_the_pull_request_number():
     gh = _PrGh(prs={501: _on_main(101)})
     ww._read_candidate_prs([501], _SLUG, {101}, "/", 100.0, lambda: 0.0, gh, {})
@@ -992,6 +1003,10 @@ def test_the_closing_references_read_is_one_direct_graphql_call_with_the_pull_re
     # The query sent asks for every field the answer is read by, independently of the module's own constant, in any order.
     query = " ".join(argv[10][len("query="):].split())
     assert "pullRequest(number: $number)" in query
+    # No alias renames a selection on the path the reader walks (data.repository.pullRequest...).
+    assert not re.search(
+        r"\w+\s*:\s*(repository|pullRequest|closingIssuesReferences|pageInfo|hasNextPage|nodes|number|nameWithOwner)\b",
+        query)
     assert "closingIssuesReferences(first: 25)" in query
     assert re.search(r"pageInfo \{[^{}]*\bhasNextPage\b[^{}]*\}", query)
     # The `nodes` selection directly under the unaliased closingIssuesReferences, braces balanced, so a field selected
