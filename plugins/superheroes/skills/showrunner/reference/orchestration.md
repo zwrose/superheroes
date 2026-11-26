@@ -388,9 +388,11 @@ owner question, a vet. Then anything waiting on the owner, or that nothing is.
 the note first, then runs the liveness sweep (§ Liveness sweep and wave watch), then acts on the
 event and re-arms. An event is news, so the owner hears it in that note.
 
-**The ceiling.** Arm every wave watch with `--max-seconds` at most 1500 and `--max-total-seconds` at
-most 1500 (25 minutes), so the loop ends on its `timer` and wakes you inside the 30 minutes.
-`--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
+**The ceiling.** Arm every wave watch with `--max-seconds` and `--max-total-seconds` both set to the
+seconds left until 25 minutes after the last note you sent, never above 1500 (25 minutes), so the
+loop ends on its `timer` and wakes you inside the 30 minutes. The budget counts from the last note,
+not from the arm: the sweep and the event's handling after a note use part of it. When under five
+minutes are left, send the note now and arm a fresh 1500. `--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
 `--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). The 5 minutes of slack covers
 the loop's overrun of its total and the note itself. These values replace the example values in
 `wave-watch.md` (`--max-seconds 2400` in its arming snippet, `--max-total-seconds 1680` under a
