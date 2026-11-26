@@ -918,8 +918,8 @@ def _in_stack(stack, position):
     return {"ok": True, "reason": None, "detail": None, "stack": {"number": stack}, "queried": {"position": position}}
 
 
-NOT_LINKED = {"ok": False, "reason": "not-linked", "detail": "pull request is not in a stack"}
-STACK_UNREADABLE = {"ok": False, "reason": "stack-unreadable", "detail": "stackEntry is missing"}
+NOT_LINKED = {"ok": False, "reason": ic.stack_check.REASON_NOT_LINKED, "detail": "pull request is not in a stack"}
+STACK_UNREADABLE = {"ok": False, "reason": ic.stack_check.REASON_STACK_UNREADABLE, "detail": "stackEntry is missing"}
 
 
 class _Members:
@@ -1118,7 +1118,7 @@ def test_case2_a_ready_vet_pinned_to_an_earlier_head_holds(tmp_path, capsys):
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["accepted"] == []
     assert out["blockers"]["held"][0]["why"] == (
-        "its pull request #101's vet does not read READY, or held only for a card on the stack sheet of #50,"
+        "its pull request #101's vet does not read READY, or PARKED " + ic.STACK_CARD_QUALIFIER + "50,"
         " at its current head " + _head(101)
     )
     assert members.calls == []
@@ -1327,7 +1327,7 @@ def test_case8_a_stack_card_mark_for_another_parent_holds_naming_it(tmp_path, ca
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["held"][0]["why"] == (
-        "its pull request #101's vet holds it for a card on the stack sheet of #77, not this stack's #50"
+        "its pull request #101's vet card mark names feature #77, not this stack's #50"
     )
 
 
@@ -1335,7 +1335,7 @@ def test_case8_a_plain_parked_line_holds_with_the_reason(tmp_path, capsys):
     fake = _world(prs=[_pr_row(101, closes=12, vet=_vet("PARKED", _head(101)))])
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
-    assert "does not read READY, or held only for a card on the stack sheet of #50" in out["blockers"]["held"][0]["why"]
+    assert "does not read READY, or PARKED " + ic.STACK_CARD_QUALIFIER + "50" in out["blockers"]["held"][0]["why"]
 
 
 def test_case8_the_card_mark_at_a_stale_head_holds_with_the_reason(tmp_path, capsys):
@@ -1358,8 +1358,9 @@ def test_stack_card_parent_reads_only_the_exact_mark(tmp_path):
     assert ic.stack_card_parent(_card(head, 50), _head(8)) is None
     assert ic.stack_card_parent(_vet("READY", head), head) is None
     assert ic.stack_card_parent(_vet("PARKED", head), head) is None
-    assert ic.stack_card_parent(_card(head, 50).replace("sheet of #50", "sheet of #"), head) is None
-    assert ic.stack_card_parent(_card(head, 50).replace("held only", "Held only"), head) is None
+    qualifier = ic.STACK_CARD_QUALIFIER
+    assert ic.stack_card_parent(_card(head, 50).replace(qualifier + "50", qualifier), head) is None
+    assert ic.stack_card_parent(_card(head, 50).replace(qualifier, qualifier[0].swapcase() + qualifier[1:]), head) is None
     assert ic.stack_card_parent("no marker at all", head) is None
     assert ic.stack_card_parent(None, head) is None
 
@@ -1445,6 +1446,8 @@ def test_case9_a_bad_pr_row_after_a_matching_one_is_unreadable(tmp_path, capsys)
         dict(_pr_row(102, closes=99), head={"sha": "ABC"}),
         dict(_pr_row(102, closes=99), head=None),
         dict(_pr_row(102, closes=99), body=5),
+        # axis: an omitted body key is unreadable, unlike an explicit null body (which reads as empty)
+        {key: value for key, value in _pr_row(102, closes=99).items() if key != "body"},
     )
     for bad in bad_rows:
         fake = _world(prs=[good, bad])
@@ -1469,7 +1472,7 @@ def test_case9_a_vet_form_refusal_is_unreadable_not_not_ready(tmp_path, capsys, 
 
 
 def test_case9_a_membership_refusal_other_than_not_linked_is_unreadable(tmp_path, capsys):
-    for result in (STACK_UNREADABLE, {"ok": False, "reason": "bad-argument", "detail": "x"}, None, "x",
+    for result in (STACK_UNREADABLE, {"ok": False, "reason": ic.stack_check.REASON_BAD_ARGUMENT, "detail": "x"}, None, "x",
                    {"ok": True, "stack": None, "queried": None},
                    {"ok": True, "stack": {"number": True}, "queried": {"position": 1}}):
         fake = _world(prs=[_pr_row(101, closes=12)])

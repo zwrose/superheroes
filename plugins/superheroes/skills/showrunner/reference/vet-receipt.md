@@ -74,7 +74,8 @@ shape is wrong and the thinking wins.
    That line **begins, at its start**, with exactly one of `**Verdict: READY**`,
    `**Verdict: NOT-READY**`, `**Verdict: PARKED**`, followed by ` · ` and the **full 40-character
    head sha** the verdict is pinned to. Qualifiers ("as a layer", "held with the stack") follow on
-   that same line and **never replace the token**. **For the purpose of extracting a verdict, every
+   that same line and **never replace the token**. A stack layer whose only hold is an owner card gets
+   the card mark on this line (`routing.md` § Native dependency edges, "The card mark"). **For the purpose of extracting a verdict, every
    other slot content is non-authoritative** — dispositions, probes, prose, fenced blocks and
    `<details>` regions are not read for a verdict. That scoping is about **verdict extraction only**.
    It does not make the owner half's *what accepting it means* or *what is theirs to decide* any less

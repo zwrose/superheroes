@@ -76,7 +76,7 @@ _ISSUE_PATTERN = re.compile(r"^[0-9]+$")
 _BLOCKER_STATES = ("open", "closed")
 
 def _load_stack_card_qualifier():
-    """The qualifier that marks a PARKED vet line as held only for a card on the stack sheet of #<parent>.
+    """The qualifier that, followed by the parent issue's number, marks a PARKED vet line as a stack-card hold.
 
     Its one home is `rubric/vet-verdict-form.json` (`stackCardQualifier`), beside the verdict tokens; None when
     the form cannot be read, and then no vet line reads as the card mark (the blocker holds)."""
@@ -692,15 +692,15 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
         if card is not None and card != parent:
             decided[index] = (
                 "held",
-                "its pull request #%d's vet holds it for a card on the stack sheet of #%d, not this stack's #%d"
+                "its pull request #%d's vet card mark names feature #%d, not this stack's #%d"
                 % (pr["number"], card, parent),
             )
             return None
         if card is None:
             decided[index] = (
                 "held",
-                "its pull request #%d's vet does not read READY, or held only for a card on the stack sheet of #%d, at its current head %s"
-                % (pr["number"], parent, pr["head"]),
+                "its pull request #%d's vet does not read READY, or PARKED %s%d, at its current head %s"
+                % (pr["number"], STACK_CARD_QUALIFIER or "with the card mark for #", parent, pr["head"]),
             )
             return None
         form = "stack-card"

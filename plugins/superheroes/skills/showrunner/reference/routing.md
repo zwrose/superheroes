@@ -116,8 +116,8 @@ dependency gate pins the base to that pull request's head.
 **The card mark** is durable and never guessed. The lower layer's vet slot has a PARKED verdict line
 at its current head, in the verdict form, followed by one space, the stack-card qualifier and the
 feature issue's number, where the feature issue is the stack's parent issue. The qualifier's one home
-is `stackCardQualifier` in `rubric/vet-verdict-form.json`, beside the verdict tokens; today it reads
-`held only for a card on the stack sheet of #`. A mark naming another feature holds, as does a plain
+is `stackCardQualifier` in `rubric/vet-verdict-form.json`, beside the verdict tokens: copy it from
+there. A mark naming another feature holds, as does a plain
 PARKED line or a mark at an earlier head. The advisor writes the mark at vet, in the vet slot, when
 the layer's only hold is an owner card that its review record leaves for the owner: that card rides
 the feature's stack sheet once the stack is complete enough to have one, so the sheet need not exist
