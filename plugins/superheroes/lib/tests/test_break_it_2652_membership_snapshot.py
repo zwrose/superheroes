@@ -11,4 +11,6 @@ def test_newer_membership_head_cannot_use_the_vet_from_the_pull_list(tmp_path, c
         tmp_path, {"stack": 900, "layerPosition": 2},
     )
     assert result["ok"] is False
+    assert result["reason"] == "blockers-unreadable"
+    assert result["blockers"]["checked"] is False
     assert result["blockers"]["accepted"] == []

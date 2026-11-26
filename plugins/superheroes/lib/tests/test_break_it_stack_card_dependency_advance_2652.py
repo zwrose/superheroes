@@ -27,7 +27,7 @@ def test_card_dependency_advancing_after_preflight_refuses_before_worktree(tmp_p
     world = _world(prs=[_pr_row(701, closes=12, head=old_head, vet=card_body)])
     blockers = issue_contract.read_judged_blockers(
         7, "acme/widgets", world, premise={"dependency": 701},
-        membership_reader=_Members({701: NOT_LINKED}),
+        membership_reader=_Members({701: dict(NOT_LINKED, queried={"headRefOid": old_head})}),
     )
     assert blockers["held"] == []
     assert [row["head"] for row in blockers["accepted"]] == [old_head]

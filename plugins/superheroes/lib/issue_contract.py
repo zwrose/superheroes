@@ -30,7 +30,6 @@ import git_origin
 import launch_ledger
 import md_fence
 import pr_body_regions
-import review_record
 import stack_check
 
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
@@ -90,7 +89,6 @@ def _load_stack_card_qualifier():
 
 
 STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
-_SHA40_RE = re.compile(r"[0-9a-fA-F]{40}")
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
@@ -445,10 +443,13 @@ def stack_card_mark(body):
     if token is None or not line.startswith(token + separator):
         return None
     sha = line[len(token) + len(separator):][:40]
+    # axis: the line must read PARKED, pinned to its own sha, by the canonical vet parser (no second verdict token) before its pin is trusted — see bite-proof record wo_2652_stack_layer_blockers
+    if stack_check._parse_vet_verdict_line(line, sha, separator, tokens) != stack_check.VERDICT_PARKED:
+        return None
     tail = line[len(token) + len(separator) + 40:]
     prefix = " " + STACK_CARD_QUALIFIER
     # axis: a PARKED line without the exact qualifier and a parent number is a plain park, not a card mark — see bite-proof record wo_2652_stack_layer_blockers
-    if not _SHA40_RE.fullmatch(sha) or not tail.startswith(prefix):
+    if not tail.startswith(prefix):
         return None
     digits = tail[len(prefix):].split(" ", 1)[0]
     if not digits.isascii() or not digits.isdigit() or int(digits) < 1:
@@ -572,17 +573,33 @@ def _read_open_prs(run, repo):
 
 
 def _first_prose_line(body):
-    """The body's first non-empty line as GitHub reads it as prose, or None.
+    """The prose GitHub renders from the body's first non-empty line, read from that line alone, or None.
 
-    The line is masked by `review_record._markdown_prose`, the closing-issue reader's own prose rule, so a
-    closing keyword in an HTML comment, a code span or a quote on that line counts for nothing."""
+    A line that opens indented code, a quote, a fence or an HTML block holds no prose. An HTML comment or a code
+    span on the line is cut out, and the line ends at one left open on it, which a later line could close."""
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    masked = review_record._markdown_prose(body).split("\n")
-    for index, line in enumerate(lines):
-        if line.strip():
-            # axis: the first non-empty line counts only as the prose GitHub reads — a masked line closes nothing
-            return masked[index] if index < len(masked) and masked[index].strip() else None
-    return None
+    rest = next((line for line in lines if line.strip()), None)
+    # axis: a first line that is code, a quote, a fence or an HTML block closes nothing — see bite-proof record wo_2652_stack_layer_blockers
+    if rest is None or rest.startswith(("    ", "\t")) or rest.lstrip().startswith((">", "<", "```", "~~~")):
+        return None
+    prose = ""
+    while True:
+        starts = [at for at in (rest.find("<!--"), rest.find("`")) if at >= 0]
+        if not starts:
+            return (prose + rest).strip() or None
+        at = min(starts)
+        prose += rest[:at] + " "
+        if rest.startswith("<!--", at):
+            end = rest.find("-->", at + 4)
+            skip = end + 3 if end >= 0 else -1
+        else:
+            run = len(rest[at:]) - len(rest[at:].lstrip("`"))
+            close = re.search(r"(?<!`)`{%d}(?!`)" % run, rest[at + run:])
+            skip = at + run + close.end() if close else -1
+        # axis: a comment or code span left open on the first line may close on a later one, so the line's prose ends there — see bite-proof record wo_2652_stack_layer_blockers
+        if skip < 0:
+            return prose.strip() or None
+        rest = rest[skip:]
 
 
 def _closes_issue(pr, repo, number):
@@ -621,27 +638,28 @@ def _accepted_row(row, layer):
 
 def _read_layer_membership(membership_reader, run, repo, pr, head):
     """(stack number or None, position or None) of a pull request read at `head`; any read other than not-linked
-    failing raises, and so does an ok read taken at another head than the one the vet was read at."""
+    failing raises, and so does an ok or not-linked read taken at another head than the one the vet was read at."""
     result = membership_reader(pr=pr, repo=repo, run=run)
-    if isinstance(result, dict) and result.get("ok") is True:
-        stack = result.get("stack")
-        queried = result.get("queried")
-        number = stack.get("number") if isinstance(stack, dict) else None
-        position = queried.get("position") if isinstance(queried, dict) else None
-        read_head = queried.get("headRefOid") if isinstance(queried, dict) else None
-        # axis: an ok membership read without an int stack number and position is unreadable — see bite-proof record wo_2652_stack_layer_blockers
-        if not _is_int(number) or not _is_int(position):
-            raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
-        # axis: membership read at another head than the vet joins two snapshots; it is unreadable, never accepted
-        if not stack_check.same_commit(read_head, head):
-            raise _Unreadable(
-                "pull request #%d moved between reads (vet read at %s, stack membership at %s)" % (pr, head, read_head)
-            )
-        return number, position
+    ok = isinstance(result, dict) and result.get("ok") is True
     # axis: only not-linked means "in no stack"; every other membership refusal is unreadable — see bite-proof record wo_2652_stack_layer_blockers
-    if isinstance(result, dict) and result.get("reason") == stack_check.REASON_NOT_LINKED:
+    if not ok and not (isinstance(result, dict) and result.get("reason") == stack_check.REASON_NOT_LINKED):
+        raise _Unreadable("the stack membership of pull request #%d could not be read" % pr)
+    queried = result.get("queried")
+    read_head = queried.get("headRefOid") if isinstance(queried, dict) else None
+    # axis: a membership answer, linked or not-linked, read at another head than the vet joins two snapshots; it is unreadable, never accepted — see bite-proof record wo_2652_stack_layer_blockers
+    if not stack_check.same_commit(read_head, head):
+        raise _Unreadable(
+            "pull request #%d moved between reads (vet read at %s, stack membership at %s)" % (pr, head, read_head)
+        )
+    if not ok:
         return None, None
-    raise _Unreadable("the stack membership of pull request #%d could not be read" % pr)
+    stack = result.get("stack")
+    number = stack.get("number") if isinstance(stack, dict) else None
+    position = queried.get("position")
+    # axis: an ok membership read without an int stack number and position is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if not _is_int(number) or not _is_int(position):
+        raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
+    return number, position
 
 
 def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index):

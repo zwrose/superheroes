@@ -1,6 +1,8 @@
 """Tests for issue_contract (#932)."""
 import json
 
+import pytest
+
 import issue_contract as ic
 
 
@@ -932,10 +934,12 @@ class _Members:
         self.calls.append(pr)
         result = self.table[pr]
         queried = result.get("queried") if isinstance(result, dict) else None
-        # A real membership read names the head it read; default it to the PR row's default head.
+        # A real ok or not-linked membership read names the head it read; default it to the PR row's default head.
         if isinstance(result, dict) and result.get("ok") is True and isinstance(queried, dict) \
                 and "headRefOid" not in queried:
             result = dict(result, queried=dict(queried, headRefOid=_head(pr)))
+        if isinstance(result, dict) and result.get("reason") == "not-linked" and queried is None:
+            result = dict(result, queried={"headRefOid": _head(pr)})
         return result
 
 
@@ -1078,6 +1082,28 @@ def test_first_line_means_the_first_non_empty_line(tmp_path, capsys):
     body = "\n\nCloses #12\n\n" + _vet("READY", _head(101))
     out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
+
+
+@pytest.mark.parametrize("opening", [
+    "Closes #12.\n## What's changing, and why\nIt reads `stack_check` first.",
+    "Closes #12\nPart of #50. See [plan](plan.md).",
+    "Closes #12 `code` <!-- note --> after",
+])
+def test_first_line_is_read_alone_so_later_markdown_cannot_hide_its_close(tmp_path, capsys, opening):
+    body = opening + "\n\n" + _vet("READY", _head(101))
+    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
+    assert out["ok"] is True, opening
+
+
+@pytest.mark.parametrize("opening", [
+    "`Closes #12`", "> Closes #12", "    Closes #12", "<!-- x\nCloses #12 -->", "Done <!-- Closes #12",
+    "Done `x\nCloses #12`", "<details>Closes #12</details>",
+])
+def test_first_line_close_in_code_quote_comment_or_html_closes_nothing(tmp_path, capsys, opening):
+    body = opening + "\n\n" + _vet("READY", _head(101))
+    out = _build_ready(tmp_path, capsys, _world(prs=[_pr_row(101, body=body)]), members=_Members({101: _in_stack(900, 1)}))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN, opening
+    assert out["blockers"]["accepted"] == [], opening
 
 
 def test_case2_a_ready_vet_pinned_to_an_earlier_head_holds(tmp_path, capsys):
@@ -1332,6 +1358,16 @@ def test_stack_card_parent_reads_only_the_exact_mark(tmp_path):
     assert ic.stack_card_parent(_card(head, 50).replace("held only", "Held only"), head) is None
     assert ic.stack_card_parent("no marker at all", head) is None
     assert ic.stack_card_parent(None, head) is None
+
+
+def test_stack_card_mark_reads_only_a_line_the_vet_parser_reads_as_parked():
+    # axis: a card-shaped line the canonical parser rejects (a second verdict token) is no card mark at any head
+    head = _head(7)
+    ready = next(entry["token"] for entry in json.load(open(ic.stack_check._vet_verdict_form_path()))["tokens"]
+                 if entry["verdict"] == "READY")
+    assert ic.stack_card_mark(_card(head, 50)) == (head, 50)
+    assert ic.stack_card_mark(_card(head, 50) + " " + ready) is None
+    assert ic.stack_card_parent(_card(head, 50) + " " + ready, head) is None
 
 
 def _assert_unreadable_and_no_pass(out):

@@ -220,7 +220,7 @@ def _graphql_argv(owner, name, pr, first, after=None):
     return argv
 
 
-def _refusal(reason, detail, repo=None, pr=None, pages=0):
+def _refusal(reason, detail, repo=None, pr=None, pages=0, queried=None):
     return {
         "ok": False,
         "reason": reason,
@@ -228,7 +228,7 @@ def _refusal(reason, detail, repo=None, pr=None, pages=0):
         "repo": repo,
         "pr": pr,
         "stack": None,
-        "queried": None,
+        "queried": queried,
         "members": [],
         "pages": pages,
     }
@@ -497,8 +497,9 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
     stack_entry = pull_request.get("stackEntry")
     # axis: stackEntry is null
     if stack_entry is None:
-        return None, _refusal(REASON_NOT_LINKED,
-            "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+        # axis: a not-linked answer keeps the head it was read at, so a caller can tie it to its own snapshot — see bite-proof record wo_2652_stack_layer_blockers
+        return None, _refusal(REASON_NOT_LINKED, "pull request is not in a stack", repo=repo, pr=pr, pages=pages,
+            queried={"headRefOid": pr_head_oid})
 
     entry_position = stack_entry.get("position") if isinstance(stack_entry, dict) else None
     # axis: stackEntry is present but not an object, or position is missing/not an int
@@ -1274,8 +1275,8 @@ def _parse_rest_pull(pull, repo, pr, pages):
     stack = pull.get("stack")
     # axis: REST stack key is absent or null
     if stack is None:
-        return None, _refusal(REASON_NOT_LINKED,
-            "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+        return None, _refusal(REASON_NOT_LINKED, "pull request is not in a stack", repo=repo, pr=pr, pages=pages,
+            queried={"headRefOid": head_sha})
 
     stack_number = stack.get("number") if isinstance(stack, dict) else None
     stack_position = stack.get("position") if isinstance(stack, dict) else None
