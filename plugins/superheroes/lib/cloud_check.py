@@ -472,7 +472,8 @@ def _start_record(env):
         return None
     # axis: a start module that ran without its source being opened (its code came from a cache the
     # recorder cannot see) leaves the record incomplete, so it is not read; a malformed list is not either
-    unattributed = record.get("unattributed", [])
+    # axis: a record with no `unattributed` list (the hook always writes one) reads as unreadable, never whole — see bite-proof record i2659_unknown_reads
+    unattributed = record.get("unattributed")
     if not (isinstance(unattributed, list) and all(isinstance(u, str) for u in unattributed)) \
             or unattributed:
         return None

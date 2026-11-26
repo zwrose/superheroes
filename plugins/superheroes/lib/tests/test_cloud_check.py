@@ -106,7 +106,8 @@ def _start_env(session="session-fixture"):
     machine's own plugin copy (#2612), so the start part of a judgment agrees."""
     record = {"schema": cloud_pass.START_COPY_SCHEMA, "session": session,
               "roots": [cloud_setup_text._plugin_root()],
-              "parts": {part: [0] for part in cloud_setup_text.START_HOOK_READS}}
+              "parts": {part: [0] for part in cloud_setup_text.START_HOOK_READS},
+              "unattributed": []}
     return {cloud_pass.START_COPY_ENV: json.dumps(record), "CLAUDE_CODE_SESSION_ID": session}
 
 

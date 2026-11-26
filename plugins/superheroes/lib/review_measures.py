@@ -339,15 +339,20 @@ def _release_measures(inp, prs, every, sessions, reason, miss):
                      and not review_learning._merged_member(f)}
             put("ownerCardsPerMergedPr", pr_release, len(cards))
         for sid, last in sessions[pr].items():
-            ends = last.get("silenceWatchdogEnds", [])
+            answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
+            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
+            # axis: the writers omit the ends when empty, so absent ends beside a row that did not run, in a session that did not certify, read unresolved, never clear — see bite-proof record i2659_unknown_reads
+            absent = "silenceWatchdogEnds" not in last
+            unseen = absent and bool(not_run) and not review_record.cleared(last.get("status"))
+            ends = [] if absent else last["silenceWatchdogEnds"]
             # axis: a silence end that is not a dict naming a seat, or a status the writer does not record, reads unmeasured — see bite-proof record i2498_by_release
             whole = (isinstance(ends, list) and last.get("status") in review_record.STATUSES
                      and all(isinstance(e, dict) and isinstance(e.get("seat"), str) and e["seat"].strip() for e in ends))
-            answered = {x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN}
-            not_run = {x["name"] for x in last["reviewers"] if x["ran"] == review_record.RAN_NOT_RUN}
             silent = [e["seat"] for e in ends if e["seat"] not in answered] if whole else []
             if not whole:
                 state = None
+            elif unseen:
+                state = "unresolved"
             elif review_record.cleared(last.get("status")) or not not_run or not silent:
                 # axis: a session that certified, or whose every silent seat answered, or with no reviewer row that did not run, is no void — see bite-proof record i2498_by_release
                 state = "clear"
