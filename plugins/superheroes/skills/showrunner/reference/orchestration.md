@@ -392,7 +392,10 @@ event and re-arms. An event is news, so the owner hears it in that note.
 seconds left until 25 minutes after the last note you sent, never above 1500 (25 minutes), so the
 loop ends on its `timer` and wakes you inside the 30 minutes. The budget counts from the last note,
 not from the arm: the sweep and the event's handling after a note use part of it. When under five
-minutes are left, send the note now and arm a fresh 1500. `--max-seconds` alone never wakes you:
+minutes are left, send the note now and arm a fresh 1500. With no note sent yet (the first arm of a
+wave, or a resumed seat that cannot read its last note), count from the arm itself: arm a full 1500
+and send the first note within five minutes of it (at a resume, right after the report).
+`--max-seconds` alone never wakes you:
 under `loop` a per-arm timer re-arms internally, and only `--max-total-seconds` ends the loop
 (`wave-watch.md` § Timing flags). The 5 minutes of slack covers the loop's overrun of its total and
 the note itself. These values replace the example values in

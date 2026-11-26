@@ -3,10 +3,11 @@
 The check-in's cadence, the note's shape and the watch ceiling live in one home, the
 `## Owner check-in while lanes run` section of `skills/showrunner/reference/orchestration.md`.
 These tests pin structure only, never the home's sentences (`rubric/review-discipline.md`
-§ The pin rule): the home heading exists once as a real heading outside any code fence, the
-page's `# Contents` lists it, and the charter's duty 9 and showrunner-resume Step 6 cite it.
+§ The pin rule): the home heading exists once as a level-2 heading that renders visible (read by
+`lib/md_hidden.py`, so a code fence or an HTML comment hides it), the page's `# Contents` lists it,
+and the charter's duty 9 and showrunner-resume Step 6 cite it.
 
-Bites on: the home heading renamed, removed, duplicated or hidden in a code fence; the
+Bites on: the home heading renamed, removed, duplicated, or hidden in a code fence; the
 Contents entry or its anchor dropped; the charter's duty 9 or resume Step 6 losing its
 citation of the home.
 
@@ -15,8 +16,11 @@ citation that names the home but no longer says what to do with it passes.
 """
 import os
 import re
+import sys
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(_PLUGIN, "lib"))
+import md_hidden  # noqa: E402
 _SKILLS = os.path.join(_PLUGIN, "skills")
 _ORCHESTRATION = os.path.join(_SKILLS, "showrunner", "reference", "orchestration.md")
 _CHARTER = os.path.join(_SKILLS, "showrunner", "SKILL.md")
@@ -33,22 +37,13 @@ def _read(path):
         return handle.read()
 
 
-def _headings_outside_fences(text):
-    """(level, title) for every ATX heading line that is not inside a fenced code block."""
-    found, fence = [], None
-    for line in text.split("\n"):
-        stripped = line.lstrip()
-        marker = re.match(r"(`{3,}|~{3,})", stripped)
-        if marker:
-            if fence is None:
-                fence = marker.group(1)[0] * 3
-            elif stripped.startswith(fence):
-                fence = None
-            continue
-        if fence is None:
-            heading = re.match(r"(#{1,6}) +(.*?)\s*$", line)
-            if heading:
-                found.append((len(heading.group(1)), heading.group(2)))
+def _visible_headings(text):
+    """(level, title) for every document-level ATX heading that renders visible, read by the repository's
+    Markdown scanner (`lib/md_hidden.py`), which closes a fence only on a run at least as long as its opener."""
+    found = []
+    for offset, title, state in md_hidden.scan(text).headings:
+        if state == md_hidden.VISIBLE:
+            found.append((len(re.match(r" {0,3}(#{1,6})", text[offset:]).group(1)), title))
     return found
 
 
@@ -60,8 +55,8 @@ def _block(path, start_pattern, end_pattern):
 
 
 def test_home_heading_exists_once():
-    # axis: the one home is a real level-2 heading, once, outside any code fence
-    headings = _headings_outside_fences(_read(_ORCHESTRATION))
+    # axis: the one home is a level-2 heading that renders visible, once
+    headings = _visible_headings(_read(_ORCHESTRATION))
     assert headings.count((2, _HOME_TITLE)) == 1, f"orchestration.md must carry '## {_HOME_TITLE}' once"
 
 
