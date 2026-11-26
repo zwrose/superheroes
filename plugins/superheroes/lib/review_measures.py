@@ -48,7 +48,9 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     session among all its records: certified when that session's latest record is `reviewed`. `silentReviewerVoids` reads each in-window session's latest record
     that is not `reviewed` and has a reviewer row that did not run: `voided` when a silence-watchdog end names that
     row, `unresolved` when an end names no row (a forfeited or recovered seat's run dir binds no row, so its end
-    carries its role and run dir and cannot be tied to the row that did not run), else neither. `voided` is what the
+    carries its role and run dir and cannot be tied to the row that did not run), also `unresolved` when the
+    record holds no `silenceWatchdogEnds` at all (the record writers leave the field out when it is empty, so
+    absence cannot be told from none; an explicitly present empty list reads clear), else neither. `voided` is what the
     held in-session reviewer retry waits on (a session on 0.50.0 or later voided by a silent reviewer); an
     `unresolved` session is read in its record before it counts. A release before 0.48.0, which recorded no watchdog
     ends, reads unmeasured; a status the writer does not record, or a malformed end, makes that release's figure

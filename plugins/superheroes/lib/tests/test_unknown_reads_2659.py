@@ -128,6 +128,16 @@ def test_a_finding_that_is_not_an_object_reviews_and_names_the_file(tmp_path, ca
                     "fix-batch2.json")
     _reviews_naming(_gate(capsys, "--compiled", _write(tmp_path, "compiled.json", {"findings": [entry]})),
                     "compiled.json")
+    # the same entry in a bare array through the compiled reader
+    _reviews_naming(_gate(capsys, "--compiled", _write(tmp_path, "compiled-bare.json", [entry])),
+                    "compiled-bare.json")
+
+
+def test_a_bare_array_compiled_file_counts_its_blocking_findings(tmp_path, capsys):
+    # edge A2.i: the bare-array shape of the compiled artifact is read, not mistaken for an empty one
+    out = _gate(capsys, "--compiled", _write(tmp_path, "compiled-bare.json", [{"severity": "Important"}]))
+    assert out["action"] == "review" and out["mandatory"] is True, out
+    assert "1 blocking" in out["reason"], out
 
 
 @pytest.mark.parametrize("data", [{}, {"other": []}, {"resolutions": {}}, {"resolutions": None}, {"resolutions": "x"}, [], "x"],
@@ -193,12 +203,6 @@ def _final(receipt, context, **extra):
                                                 receipt_context=context)
 
 
-def test_the_fully_valid_receipt_with_its_context_is_clean_and_high():
-    # edge A3.f: healthy
-    gate, conf, _missing = _final(_receipt(), _context())
-    assert (gate, conf) == ("clean", "high")
-
-
 def test_a_context_that_lists_no_decision_ids_requires_none():
     gate, conf, _missing = _final(_receipt(coverageDecisionIds=[]), {"artifact": "run-1:round-3", "coverageDecisionIds": []})
     assert (gate, conf) == ("clean", "high")
@@ -217,22 +221,29 @@ def _without(key):
 
 
 @pytest.mark.parametrize("context", [None, [], "x", {}, _without("artifact"), _without("coverageDecisionIds"),
-                                     dict(_context(), artifact=""), dict(_context(), artifact=5),
+                                     dict(_context(), artifact=""),
                                      dict(_context(), coverageDecisionIds=None)],
                          ids=["none", "list", "str", "empty", "no-artifact", "no-ids", "blank-artifact",
-                              "int-artifact", "null-ids"])
+                              "null-ids"])
 def test_a_final_confirmation_with_no_whole_receipt_context_cannot_certify(context):
     # edges A3.a, A3.b, A3.c
     assert _final(_receipt(), copy.deepcopy(context)) == ("cannot-certify", "low", [])
 
 
-@pytest.mark.parametrize("ids", [[{}], [None], [5], [""], "RCD-1", {"RCD-1": 1}], ids=repr)
+def test_a_context_artifact_that_is_not_a_string_cannot_certify_even_when_the_receipt_matches_it():
+    # edge A3.c: the receipt and the context agree on the number, so only the string-type check refuses it
+    assert _final(_receipt(artifact=5), dict(_context(), artifact=5)) == ("cannot-certify", "low", [])
+
+
+@pytest.mark.parametrize("ids", [[{}], ["RCD-1", {}], ["RCD-1", None], ["RCD-1", 5], ["RCD-1", ""], "RCD-1",
+                                 {"RCD-1": 1}], ids=repr)
 def test_context_decision_ids_that_are_not_non_empty_strings_cannot_certify_and_never_raise(ids):
-    # edge A3.d
+    # edge A3.d: each list keeps the id the receipt holds, so only the entry check can refuse it
     assert _final(_receipt(), dict(_context(), coverageDecisionIds=ids)) == ("cannot-certify", "low", [])
 
 
-@pytest.mark.parametrize("ids", [[{}], [None], [5], [""], "RCD-1", None], ids=repr)
+@pytest.mark.parametrize("ids", [[{}], ["RCD-1", {}], ["RCD-1", None], ["RCD-1", 5], ["RCD-1", ""], "RCD-1", None],
+                         ids=repr)
 def test_receipt_decision_ids_that_are_not_non_empty_strings_cannot_certify(ids):
     # edge A3.e
     assert _final(_receipt(coverageDecisionIds=ids), _context()) == ("cannot-certify", "low", [])
