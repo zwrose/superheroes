@@ -740,24 +740,53 @@ def check_costly_accepted(body):
             "the " + pr_sheet.costly_unlisted_problem(label, text) for label, text in missing))
 
 
-def _handback_file(body_file):
+HANDBACK_PR_CHECKS = ("caught-up", "leftovers", "calibration-disclosures")
+
+
+def _handback_checks(body_source, payload=None, pr=None, repo=None, run=None):
+    """The one handback check set. ``body_source`` is a zero-argument callable returning the body text (it may raise
+    ``_Refusal``). With a PR ``payload``: check_caught_up, the body, check_handback, then (only once it passed) the
+    comments read once, check_leftovers and check_calibration_disclosures; without one, only check_handback. Always last,
+    check_costly_accepted. Raises ``_Refusal`` on a refusal from any check; returns check_handback's result."""
+    # axis: every handback path with a PR runs caught-up, leftovers and calibration through this one function — see bite-proof record i2660_handback_one_check_set.md
+    if payload is not None:
+        check_caught_up(run, repo, payload)
+    body = body_source()
+    result = check_handback(body)
+    if not result["ok"]:
+        return result
+    if payload is not None:
+        comments = _read_comments(run, pr, repo)
+        check_leftovers(pr, repo, body, comments, run)
+        # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
+        check_calibration_disclosures(pr, repo, body, comments)
+    check_costly_accepted(body)
+    return result
+
+
+def _read_body_file(body_file):
+    """The text of ``body_file``, or a ``read-failed`` refusal when it cannot be read."""
     try:
         with open(body_file, encoding="utf-8") as handle:
-            body = handle.read()
+            return handle.read()
     except (OSError, UnicodeDecodeError) as exc:
-        return _refusal("read-failed", "body file unreadable: %s" % exc)
+        raise _Refusal("read-failed", "body file unreadable: %s" % exc)
+
+
+def _handback_file(body_file):
+    try:
+        body = _read_body_file(body_file)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
     return handback_body(body)
 
 
 def handback_body(body):
-    """``handback --body-file`` over a body already read: check_handback, then check_costly_accepted."""
-    result = check_handback(body)
-    if result["ok"]:
-        try:
-            check_costly_accepted(body)
-        except _Refusal as exc:
-            return _refusal(exc.reason, exc.detail)
-    return result
+    """``handback --body-file`` over a body already read: the one handback check set with no PR to read."""
+    try:
+        return _handback_checks(lambda: body)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
 
 
 def _claim_name(claim):
@@ -1115,9 +1144,14 @@ def _normalize(text):
 
 def run_verb(verb, pr, repo, slot_file=None, run=None, body_file=None):
     if body_file is not None:
-        if verb != "handback" or pr is not None or repo is not None or slot_file is not None:
-            return _refusal("bad-argument", "--body-file goes with handback alone")
-        return _handback_file(body_file)
+        if verb != "handback" or slot_file is not None or (pr is None) != (repo is None):
+            return _refusal("bad-argument", "--body-file goes with handback alone, or with both --pr and --repo")
+        if pr is None:
+            result = _handback_file(body_file)
+            # axis: a file-only handback that passes says which three checks it did not run — see bite-proof record i2660_handback_one_check_set.md
+            if result["ok"]:
+                result["notRun"] = list(HANDBACK_PR_CHECKS)
+            return result
     if not isinstance(pr, int) or isinstance(pr, bool) or pr < 1:
         return _refusal("bad-argument", "pr must be a positive integer")
     if not isinstance(repo, str) or not _REPO_RE.match(repo):
@@ -1125,26 +1159,19 @@ def run_verb(verb, pr, repo, slot_file=None, run=None, body_file=None):
     if verb not in VERBS or (verb == "write") != (slot_file is not None):
         return _refusal("bad-argument", "write needs --slot-file; check and handback take none")
     try:
-        return _run_verb(verb, pr, repo, slot_file, run or subprocess.run)
+        return _run_verb(verb, pr, repo, slot_file, run or subprocess.run, body_file=body_file)
     except _Refusal as exc:
         return _refusal(exc.reason, exc.detail)
 
 
-def _run_verb(verb, pr, repo, slot_file, run):
+def _run_verb(verb, pr, repo, slot_file, run, body_file=None):
     if not shutil.which("gh"):
         raise _Refusal("read-failed", "gh not on PATH")
     payload = _read_pr(run, pr, repo)
     if verb == "handback":
-        check_caught_up(run, repo, payload)
-        body = _body_of(payload)
-        result = check_handback(body)
-        if result["ok"]:
-            comments = _read_comments(run, pr, repo)
-            check_leftovers(pr, repo, body, comments, run)
-            # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
-            check_calibration_disclosures(pr, repo, body, comments)
-            check_costly_accepted(body)
-        return result
+        # with --body-file the PR is still read (catch-up needs it) but its body is never used: the file's is checked
+        source = (lambda: _read_body_file(body_file)) if body_file is not None else (lambda: _body_of(payload))
+        return _handback_checks(source, payload, pr, repo, run)
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
     if no_build_record(body):
@@ -1213,7 +1240,7 @@ def main(argv=None, run=None):
         verbs = parser.add_subparsers(dest="verb")
         for name in VERBS:
             sub = verbs.add_parser(name, add_help=False)
-            required = name != "handback"  # handback takes --pr/--repo or --body-file
+            required = name != "handback"  # handback takes --pr/--repo, --body-file, or all three
             sub.add_argument("--pr", type=int, required=required)
             sub.add_argument("--repo", required=required)
             if name == "write":

@@ -1047,7 +1047,8 @@ def test_handback_hint_ignores_a_fenced_hyphen_line(tmp_path):
 @pytest.mark.parametrize("body,ids", [(BODY, ["FU1", "FU2"]), (NONE_BODY, [])])
 def test_handback_ok_from_body_file(tmp_path, body, ids):
     result = vs.run_verb("handback", None, None, body_file=_body_file(tmp_path, body))
-    assert result == {"ok": True, "verb": "handback", "followups": ids}
+    assert result == {"ok": True, "verb": "handback", "followups": ids,
+                      "notRun": list(vs.HANDBACK_PR_CHECKS)}
 
 
 @pytest.mark.parametrize("token,detail,body", BODY_CASES)
