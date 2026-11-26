@@ -464,15 +464,19 @@ to the lane's issue. When it is based on the repository's default branch, the li
 references (GitHub's GraphQL interface). When it is a stack layer based on another branch, the link is a
 cross-reference GitHub records on the lane's issue timeline (REST). The pull request's description text is
 never read for the link. Only a builder note or a handback, stop or park comment on such a pull request
-counts, under the same started-at cutoff as the issue: a pull request comment from before the lane began is
-not the lane's. A progress comment or a handover there is no lane's. A comment on a pull request that GitHub
-links to no watched lane's issue is no lane's. A pull request GitHub links to two watched lanes' issues is no
-lane's, and it is disclosed as `builder-note-unavailable` with every watched lane named in `unreadIssues`.
-The watch reads a candidate pull request's link only on a tick whose comments read holds such a header
-comment, so a quiet tick makes no extra request. A link that cannot be read is never read as no link: a read
-that fails, is refused (GitHub's GraphQL interface included), comes back truncated or malformed, or is
-skipped for budget is disclosed as `builder-note-unavailable` with every watched lane named in
-`unreadIssues`, and the closes of reopened lanes are then kept as on a partial read. The backstop has three
+counts, and only inside the lane's window: a pull request comment from before the lane began, before a
+reopened lane's fix order, or before a resumed lane's basis is not the lane's, and one from before every
+watched lane's window makes no read. A progress comment or a handover there is no lane's. A comment on a pull
+request that GitHub links to no watched lane's issue is no lane's. A pull request GitHub links to two watched
+lanes' issues is no lane's, and it is disclosed as `builder-note-unavailable` with those lanes named in
+`unreadIssues`. The watch reads a candidate pull request's link only on a tick whose comments read holds such
+a header comment, so a quiet tick makes no extra request. A link that cannot be read is never read as no
+link: a read that fails, is refused (GitHub's GraphQL interface included), comes back truncated or malformed,
+or is skipped for budget is disclosed as `builder-note-unavailable`, naming in `unreadIssues` every lane the
+comment could belong to (each lane whose window it falls in, less a resumed lane read only from its own
+issue). For those lanes a reopened lane's stored close is kept as on a partial read, and a close the issue
+read showed still ends the lane's window for that tick but is not stored; every other lane's close is what the
+issue read showed. The backstop has three
 limits. It does not read pull request review bodies or inline review comments. A resumed lane whose basis is
 older than the 24-hour shared lookback is read only from its own issue: no comment on a pull request is ever
 attributed to it, even one the shared read returns because another watched lane opened it, so its handback
@@ -576,7 +580,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; it is also recorded when the link from a candidate pull request to a lane's issue could not be read, or the pull request is linked to two watched issues, every watched lane then named in `unreadIssues`; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; it is also recorded when the link from a candidate pull request to a lane's issue could not be read, or the pull request is linked to two watched issues, every lane the comment could belong to then named in `unreadIssues`; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
 - `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
@@ -586,11 +590,11 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 builder note may be waiting unseen, so read the comments of every issue the event names
 (`unreadIssues`; when the event names none, every watched cloud lane's issue) through REST
 yourself, now. Read each named lane's own pull request conversation too, not only its issue. Find that
-pull request from the issue's closing pull requests when the watch could not read the link; an upper stack
-layer's pull request targets the layer below, so GitHub lists no closing link for it, and you find it by
-searching the repository's pull request descriptions for the issue number
-(`gh api -X GET search/issues -f q='repo:<o>/<r> is:pr in:body <issue number>'`). Answer any builder note
-there inside the builder's 15-minute reply window
+pull request the way the watch does, from a link GitHub records: read the issue's timeline
+(`gh api repos/<o>/<r>/issues/<n>/timeline`) and take the pull requests its `cross-referenced` events name
+(an event whose `source.issue` carries `pull_request`). This finds an upper stack layer's pull request too,
+though it targets the layer below and so closes nothing. Never search pull request descriptions for the
+issue number. Answer any builder note there inside the builder's 15-minute reply window
 (`rubric/review-discipline.md` § Size). Never wait for the next tick to read them.
 
 ## Answering a builder note
