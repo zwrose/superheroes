@@ -171,7 +171,7 @@ def test_row5b_a_file_body_with_an_unlisted_costly_degradation_refuses_costly_no
     costly, clean = K.REFUSED["costly"], K.PASSED["no-degradations"]
     (rc_c, out_c), (rc_p, out_p), _, _ = _both(capsys, tmp_path, costly, clean, costly, CAL_RECORD)
     assert (rc_c, rc_p) == (1, 1)
-    assert out_c["ok"] is False and out_c["reason"] == "costly-not-accepted"
+    assert out_c["ok"] is False and out_c["reason"] == vs.REASON_COSTLY_NOT_ACCEPTED
     assert out_c == out_p
 
 
