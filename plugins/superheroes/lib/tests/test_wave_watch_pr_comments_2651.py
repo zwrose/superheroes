@@ -433,6 +433,91 @@ def test_a_pr_copy_not_named_by_any_issue_comment_is_still_the_lanes(repo):
     assert launch["pr"] == 501
 
 
+# --- review round 2 --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("body", [
+    "The work.\n\n```\npytest -q\n```\n\nCloses #101.",
+    "Closes #101.\n<!-- Template guidance: Fixes #102 -->",
+    "Closes #101. <!-- Fixes #102 --> and `Fixes #102` in a span",
+])
+def test_a_visible_closing_keyword_beside_hidden_text_or_after_a_closed_fence_still_counts(repo, body):
+    # axis: masking removes only what is surely not prose, so a visible close beside it still names the lane
+    _cloud_lane(repo, "cloud-a", 101)
+    _cloud_lane(repo, "cloud-b", 102)
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, body)})
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert _only_launch(result)["launchId"] == "cloud-a"
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
+
+
+def test_a_pointer_line_in_a_free_form_issue_comment_hides_nothing(repo):
+    # axis: only an ending whose last line is the pointer pairs with a PR copy; free-form text names nothing
+    _cloud_lane(repo, "cloud-a", 101)
+    pr_note = _pr_comment(7, 501, _NOTE_BODY, age=200)
+    pasted = "Looking at this:\n\n%s%s" % (cb.ALSO_ON_LINE, pr_note["html_url"])
+    gh = _PrGh([pr_note, _comment(8, 101, pasted, age=100)], prs={501: _pr(501, "Closes #101.")})
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+
+
+def test_an_issue_ending_of_another_kind_does_not_pair_with_the_pr_copy(repo):
+    # axis: a pair needs the same ending kind on both copies
+    _cloud_lane(repo, "cloud-a", 101)
+    pr_park = _pr_comment(7, 501, _body("park"), age=100)
+    issue_stop = cb.terminal_text("stop", "Stopped.", also_on=pr_park["html_url"])["comment"]
+    gh = _PrGh([pr_park, _comment(8, 101, issue_stop, age=200)], prs={501: _pr(501, "Closes #101.")})
+    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
+    assert launch["commentId"] == 7
+    assert launch["pr"] == 501
+
+
+def test_an_answer_recorded_for_the_pr_copy_answers_the_issue_copy_that_arrives_later(repo):
+    # axis: the pair shares one answer, so the issue copy does not fire again after the PR copy was answered
+    _cloud_lane(repo, "cloud-a", 101)
+    pr_copy = _pr_comment(7, 501, _body("handback"), age=200)
+    prs = {501: _pr(501, "Closes #101.")}
+    assert _only_launch(ww.run(repo, _BATCH, gh_run=_PrGh([pr_copy], prs=prs)))["commentId"] == 7
+    assert _note_answered(repo, 7)["ok"] is True
+    issue_body = cb.terminal_text("handback", "Done with the work.", also_on=pr_copy["html_url"])["comment"]
+    later = _PrGh([pr_copy, _comment(8, 101, issue_body, age=100)], prs=prs)
+    assert ww.run(repo, _BATCH, gh_run=later)["event"] == ww.EVENT_TIMER
+
+
+def test_a_paired_issue_copy_keeps_the_pr_copys_earlier_posting_time():
+    # axis: the pair's ending is dated by its first posting, so a reopened window closes where it first ended
+    lanes = _lanes({"cloud-a": (101, 700)})
+    pr_copy = _pr_comment(7, 501, _body("handback"), age=300)
+    issue_body = cb.terminal_text("handback", "Done.", also_on=pr_copy["html_url"])["comment"]
+    issue_copy = _comment(8, 101, issue_body, age=100)
+    aliases = {}
+    out, complete = ww._attribute_pr_comments(
+        [pr_copy, issue_copy], lanes, {501: (101,)}, 0.0, aliases_out=aliases)
+    assert complete is True
+    assert [c["id"] for c in out] == [8]
+    assert out[0]["created_at"] == pr_copy["created_at"]
+    assert aliases == {8: 7}
+
+
+def test_a_pr_closing_a_live_issue_and_an_old_resumed_issue_stays_ambiguous():
+    # axis: ambiguity is counted over every watched issue before an issue-only lane is excluded
+    lanes = _lanes({"cloud-a": (101, 700), "cloud-b": (102, 700)})
+    out, complete = ww._attribute_pr_comments(
+        [_pr_comment(7, 501, _body("handback"))], lanes, {501: (101, 102)}, 0.0, issue_only=frozenset({101}))
+    assert complete is False
+    assert "prNumber" not in out[0]
+
+
+def test_an_oversized_permalink_number_is_no_permalink():
+    # axis: a number past the digit limit reads as no permalink, never an exception
+    huge = "9" * 5000
+    assert cb.comment_permalink("https://github.com/acme/widgets/pull/%s#issuecomment-1" % huge) is None
+    bad = dict(_pr_comment(7, 501, _body("handback")), html_url="https://github.com/%s/pull/501#issuecomment-%s"
+               % (_SLUG, huge))
+    assert ww._pr_candidate(bad, {101}, 0.0) is None
+
+
 # --- units ---------------------------------------------------------------------------------------
 
 

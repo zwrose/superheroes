@@ -474,9 +474,12 @@ request review bodies or inline review comments. A resumed lane whose basis is o
 shared lookback is read only from its own issue: no comment on a pull request is ever attributed to it,
 even one the shared read returns because another watched lane opened it. A pull
 request the lane did not open that closes the lane's issue and carries one of these headers after the lane
-began is read as the lane's. An ending the builder posted on both, with the issue copy naming the pull
-request copy on its `--also-on` line (`skills/workhorse/reference/cloud.md` § Terminal comments), is one
-ending, read from the issue; record that issue comment's id with `note-answered`.
+began is read as the lane's. An ending the builder posted on both, with the issue copy (a handback,
+stop or park of the same kind) naming the pull request copy on its last line, the `--also-on` pointer
+(`skills/workhorse/reference/cloud.md` § Terminal comments), is one ending: it is read from the issue,
+dated by the earlier of the two postings, and a `note-answered` for either comment's id answers both. A
+pointer line in any other comment pairs nothing. A closing keyword counts in the pull request's body
+except inside an HTML comment, a code block or span, a quote or an indented code line.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the

@@ -662,7 +662,11 @@ def comment_permalink(url):
     match = _COMMENT_PERMALINK_RE.fullmatch(url) if isinstance(url, str) else None
     if match is None or not _REPO_RE.match(match.group(1)):
         return None
-    return match.group(1), match.group(2), int(match.group(3)), int(match.group(4))
+    try:
+        return match.group(1), match.group(2), int(match.group(3)), int(match.group(4))
+    except ValueError:
+        # A number past the interpreter's digit limit is no comment GitHub serves.
+        return None
 
 
 def terminal_text(kind, text, also_on=None):
