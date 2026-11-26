@@ -10,7 +10,7 @@ import pytest
 
 import issue_contract as ic
 from test_issue_contract import (
-    NO_LINK_WHY, PARENT, REPO_PATH, SUBS, _assert_unreadable_and_no_pass, _build_ready, _closing_answer, _cross_ref,
+    NO_LINK_WHY, PARENT, PULLS, REPO_PATH, SUBS, _assert_unreadable_and_no_pass, _build_ready, _closing_answer, _cross_ref,
     _head, _in_stack, _Members, _pr_row, _row, _sub, _timeline_path, _vet, _world,
 )
 
@@ -43,10 +43,15 @@ def test_default_base_pr_is_linked_when_its_closing_references_name_the_blocker(
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
-    assert _graphql_calls(fake) == [[
-        "gh", "api", "graphql", "-f", "owner=acme", "-f", "name=widgets", "-F", "number=101",
-        "-f", "query=" + ic._PR_LINKS_QUERY,
-    ]]
+    assert fake.responses[PULLS][1].count("Closes") == 0
+    [call] = _graphql_calls(fake)
+    assert call[:9] == ["gh", "api", "graphql", "-f", "owner=acme", "-f", "name=widgets", "-F", "number=101"]
+    assert call[9] == "-f" and call[10].startswith("query=")
+    # axis: the GitHub GraphQL names are pinned as literals, never against the production query constant
+    query = " ".join(call[10].split())
+    for literal in ("repository(owner: $owner, name: $name)", "pullRequest(number: $number)",
+                    "closingIssuesReferences(", "pageInfo { hasNextPage }", "nodes { number repository { nameWithOwner } }"):
+        assert literal in query, literal
 
 
 def test_default_base_pr_whose_closing_references_omit_the_blocker_is_not_linked(tmp_path, capsys):
@@ -61,6 +66,22 @@ def test_default_base_pr_whose_closing_references_omit_the_blocker_is_not_linked
     assert out["blockers"]["accepted"] == []
     assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
     assert members.calls == []
+
+
+def test_the_default_branch_is_the_one_github_names_not_main(tmp_path, capsys):
+    # axis: with default branch `trunk`, a pull request based on `trunk` needs a closing reference, and one based on
+    # `main` is a stack layer linked by its timeline cross-reference
+    trunk = {REPO_PATH: (0, json.dumps({"default_branch": "trunk"})), ("graphql", 101): _closing_answer([13])}
+    fake = _world(prs=[_pr_row(101, closes=12, base="trunk")], responses=trunk)
+    out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["accepted"] == []
+    assert [call[8] for call in _graphql_calls(fake)] == ["number=101"]
+    layer = _world(prs=[_pr_row(101, closes=12, base="main")], responses={REPO_PATH: trunk[REPO_PATH]})
+    out = _build_ready(tmp_path, capsys, layer, members=_Members({101: _in_stack(900, 1)}))
+    assert out["ok"] is True
+    assert _accepted_prs(out) == [101]
+    assert _graphql_calls(layer) == []
 
 
 def test_a_closing_reference_in_another_repository_is_not_this_blockers_link(tmp_path, capsys):

@@ -2,6 +2,7 @@
 import json
 
 import issue_contract as ic
+import pr_body_regions
 
 
 def _check(body):
@@ -878,7 +879,7 @@ FEATURE = 50
 SUBS = "repos/acme/widgets/issues/50/sub_issues?per_page=100&page=1"
 PULLS = "repos/acme/widgets/pulls?state=open&per_page=100&page=1"
 REPO_PATH = "repos/acme/widgets"
-MARKER = "<!-- superheroes:advisor-vet -->"
+MARKER = pr_body_regions.REGION_MARKERS["advisor-vet"]
 
 
 def _head(n):
@@ -900,10 +901,11 @@ def _card(head, parent=FEATURE):
 def _pr_row(number, closes=None, vet=None, draft=False, head=None, body=None, base="layer-base", links=None):
     """An open-PR row. `base` is its base branch (default: a stack layer, so its timeline cross-reference is its
     link). `links` are the issue numbers GitHub links to it (default `[closes]`, or none); the fake world reads
-    them off the row's "links" key, and the judge ignores that key."""
+    them off the row's "links" key, and the judge ignores that key. The default body is the vet alone, with no
+    closing text, so a positive case shows the GitHub link suffices without any body hint."""
     head = head or _head(number)
     if body is None:
-        body = "Closes #%d\n\n%s" % (closes, vet if vet is not None else _vet("READY", head))
+        body = vet if vet is not None else _vet("READY", head)
     if links is None:
         links = [closes] if closes is not None else []
     return {
@@ -1076,7 +1078,7 @@ NO_LINK_WHY = (
 
 def test_case1_ready_text_in_the_blocker_issue_itself_is_never_read(tmp_path, capsys):
     # axis: READY text in the blocker issue's own title or body is never evidence; no linked pull request still holds
-    row = _row(12, "open", title="**Verdict: READY** · " + _head(12))
+    row = _row(12, "open", title=_vet("READY", _head(12)).split("\n", 1)[1])
     row["body"] = _vet("READY", _head(12))
     fake = _world(rows=[row], subs=(12, 7), prs=[])
     out = _build_ready(tmp_path, capsys, fake, members=_Members({}))
