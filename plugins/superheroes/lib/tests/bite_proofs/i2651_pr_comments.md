@@ -20,8 +20,8 @@ sites cite this record with `# axis:` comments. The file is uncommitted, so the 
 quoted, from a `grep -n` over the restored line.
 
 Disclosures:
-- Element 7: the order's named red, `test_wave_watch_pr_old_resumed_2651.py`, passes under the neutralization (see
-  the entry). The red there comes from a unit test added to the detector file.
+- Element 7: an earlier run found the order's named red, `test_wave_watch_pr_old_resumed_2651.py`, passing under the
+  neutralization. Its fixture was reworked in review, and the entry carries the refreshed red.
 - Element 9: the `row6` fixture was extended after elements 1 to 8 were run, so test-file line numbers in those
   captures for tests after `row6` are 5 lower than in the final file (see the entry).
 
@@ -409,42 +409,45 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 2 passed, 178 deselected in 1.06s
 ```
 
-## 7. Issue-only lane (`hits[0] in issue_only`, `_attribute_pr_comments`, `wave_watch.py:2567`)
+## 7. Issue-only lane (`hits[0] in issue_only`, `_attribute_pr_comments`, `wave_watch.py:2625`)
 
 - **Axis:** a resumed lane read only from its own issue never takes a pull-request comment, whichever read returned it.
 - **Neutralization:** `        if not hits or hits[0] in issue_only:` became `        if not hits:`.
-- **Disclosure, the order's named red did not bite.** The order named `test_wave_watch_pr_old_resumed_2651.py` as the red. Under this neutralization it **passes** (the `.` in the capture below), so it no longer discriminates this element. Its `gh_run` serves only `repos/<slug>/issues/501`, the body read this change removes. The pull request therefore reads as unknown (the watch's own repository, pulls and closing-references reads fall through to a fixture that raises, which the reader turns into None), so the candidate is never resolved to lane 101 and never reaches the issue-only check. That file may not be edited under the order. The red comes from the added unit test `test_a_pr_linked_to_an_issue_only_lane_is_not_rekeyed_but_one_linked_to_a_live_lane_is` in `test_wave_watch_pr_comments_2651.py`, which calls `_attribute_pr_comments` with `issue_only=frozenset({101})` directly, so it does reach the guard. Who owns the outstanding receipt: the orchestrator decides whether to rework the old-resumed test's fixture so it serves a GitHub link.
-- **Raw red** (one run over both files, `-k "issue_only"`; 1 passed, 1 red):
+- **Refreshed in review session 2, round 3** (head `40b5b01` plus the round-3 fix, uncommitted at the run). The earlier
+  disclosure is resolved: the test role's `test_wave_watch_pr_old_resumed_2651.py` fixture no longer serves the retired
+  `repos/<slug>/issues/501` body read. It answers the repository, pulls and GraphQL closing-references reads the watch
+  makes, so PR 501 resolves to the old lane's issue 101 and the test asserts that read (`links.reads["graphql"] == [501]`).
+  It now goes red under the neutralization, as the unit test does.
+- **Raw red** (both files, `-k "issue_only or old_resumed"`; 2 red, 1 passing control):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-.F                                                                       [100%]
+F.F                                                                      [100%]
 =================================== FAILURES ===================================
+_ test_old_resumed_lane_stays_issue_only_when_another_lane_opens_the_shared_read _
+>       assert result["event"] == ww.EVENT_TIMER, result
+E       AssertionError: {'ok': True, 'event': 'lane-terminal', 'batchId': 'batch-cloud', 'degraded': [], ...}
+E       assert 'lane-terminal' == 'timer'
+plugins/superheroes/lib/tests/test_wave_watch_pr_old_resumed_2651.py:28: AssertionError
 _ test_a_pr_linked_to_an_issue_only_lane_is_not_rekeyed_but_one_linked_to_a_live_lane_is _
-
-    def test_a_pr_linked_to_an_issue_only_lane_is_not_rekeyed_but_one_linked_to_a_live_lane_is():
-        # axis: a resumed lane read only from its own issue never takes a pull-request comment
-        lanes = _lanes({"cloud-a": (101, 700), "cloud-b": (102, 700)})
-        comments = [_pr_comment(7, 501, _body("handback")), _pr_comment(8, 502, _body("handback"))]
-        out, complete = ww._attribute_pr_comments(
-            comments, lanes, {501: (101,), 502: (102,)}, 0.0, issue_only=frozenset({101}))
-        assert complete is True
 >       assert "prNumber" not in out[0] and out[0]["issue_url"] == comments[0]["issue_url"]
-E       AssertionError: assert ('prNumber' not in {'id': 7, 'html_url': 'https://github.com/owner/repo/pull/501#issuecomment-7', 'issue_url': 'https://api.github.com/repos/owner/repo/issues/101', 'created_at': '2026-11-26T16:31:21Z', ...})
-
-/home/user/superheroes/.claude/worktrees/b2651/plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py:692: AssertionError
+E       AssertionError: assert ('prNumber' not in {'id': 7, 'html_url': 'https://github.com/owner/repo/pull/501#issuecomment-7', 'issue_url': 'https://api.github.com/repos/owner/repo/issues/101', 'created_at': '2026-11-26T18:10:03Z', ...})
+plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py:892: AssertionError
 =========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_old_resumed_2651.py::test_old_resumed_lane_stays_issue_only_when_another_lane_opens_the_shared_read
 FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_a_pr_linked_to_an_issue_only_lane_is_not_rekeyed_but_one_linked_to_a_live_lane_is
-1 failed, 1 passed, 82 deselected in 1.61s
+2 failed, 1 passed, 94 deselected in 0.96s
 ```
 
-- **Restore:** inverse Edit. **Restore receipt:** the restored line, `        if not hits or hits[0] in issue_only:` (a `grep -n "hits\[0\] in issue_only\|if not hits"` printed line 2567 only).
-- **Raw green** (same command and selector; both selected tests pass):
+  (The capture keeps each failure's assertion and error lines and drops the repeated test source above them.)
+- **Restore:** inverse Edit. **Restore receipt:** a `grep -n "hits\[0\] in issue_only\|if not hits"` printed
+  `2625:        if not hits or hits[0] in issue_only:` only.
+- **Raw green** (same command and selector):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-..                                                                       [100%]
-2 passed, 82 deselected in 1.28s
+...                                                                      [100%]
+3 passed, 94 deselected in 1.54s
 ```
 
 ## 8. GitHub link only, default branch (the `closingIssuesReferences` read, `_closing_issue_links`, `wave_watch.py:2427`)

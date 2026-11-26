@@ -474,10 +474,11 @@ a header comment, so a quiet tick makes no extra request. A link that cannot be 
 link: a read that fails, is refused (GitHub's GraphQL interface included), comes back truncated or malformed,
 or is skipped for budget is disclosed as `builder-note-unavailable`, naming in `unreadIssues` every lane the
 comment could belong to (each lane whose window it falls in, less a resumed lane read only from its own
-issue). For those lanes a reopened lane's stored close is kept, as on a partial read. A lane with none takes
-as its close the first handback, stop or handover the issue read showed, and stores it; a park is never taken,
-because the comment the watch could not attribute may be the note that superseded it. Every other lane's close
-is what the issue read showed. The backstop has three
+issue). For those lanes a reopened lane's close is the earliest of two bounds, and it is stored: the first
+ending the issue read showed, and the close stored from an earlier tick. A park counts as neither when a
+builder note the watch could not attribute was posted after it, because that note may be the lane's and
+supersede it; an unattributed ending never supersedes a park. Every other lane's close is what the issue read
+showed. The backstop has three
 limits. It does not read pull request review bodies or inline review comments. A resumed lane whose basis is
 older than the 24-hour shared lookback is read only from its own issue: no comment on a pull request is ever
 attributed to it, even one the shared read returns because another watched lane opened it, so its handback
@@ -597,9 +598,10 @@ the issue's page). For a stack layer, read the issue's timeline page by page wit
 (`gh api 'repos/<o>/<r>/issues/<n>/timeline?per_page=100&page=<k>'` for k = 1, 2, … until a page comes back
 empty) and take the pull requests of this repository its `cross-referenced` events name (an event whose
 `source.issue` carries `pull_request` and whose `source.issue.repository.full_name` is `<o>/<r>`). Never
-search pull request descriptions for the issue number. A pull request that two lanes' issues both link is
-neither lane's for the watch: read its conversation, but answer a note there on a lane only when the note's
-own text shows it is that lane's. Answer any builder note there inside the builder's 15-minute reply window
+search pull request descriptions for the issue number. Check each pull request you find against every
+watched lane's issue, not only the named ones: one that two lanes' issues both link is neither lane's for the
+watch, so read its conversation, but answer a note there on a lane only when the note's own text shows it is
+that lane's. Answer any builder note there inside the builder's 15-minute reply window
 (`rubric/review-discipline.md` § Size). Never wait for the next tick to read them.
 
 ## Answering a builder note

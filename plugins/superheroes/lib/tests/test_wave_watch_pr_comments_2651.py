@@ -689,6 +689,60 @@ def test_row11_a_stored_close_wins_over_a_park_a_partial_read_observes():
     assert closed_out[0] == known
 
 
+def test_row11_an_unread_pr_ending_does_not_displace_an_issue_park():
+    # axis: only an unattributed note can supersede a park, so an unattributed PR ending leaves the issue park the lane's close
+    lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - 500)
+    comments = [
+        _comment(7, 101, _body("park"), age=300),
+        _pr_comment(8, 501, _body("handback"), age=250),
+        _comment(9, 101, _body("stop"), age=200),
+    ]
+    gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
+    closed_out = [None]
+    (notes, terminals), degraded = _evaluate(lanes, gh, closed_out=closed_out)
+    assert [(t["commentId"], t["kind"]) for t in terminals] == [(7, "park")]
+    assert closed_out[0]["cloud-a"][0][1] == 7 and closed_out[0]["cloud-a"][1] == "park"
+
+
+def test_row11_an_earlier_ending_the_read_shows_wins_over_a_later_stored_close():
+    # axis: an unsure lane's close is its earliest upper bound, so a stored later close never hides an earlier ending this read shows
+    lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - 500)
+    comments = [
+        _comment(6, 101, _body("handback"), age=300),
+        _pr_comment(8, 502, _NOTE_BODY, age=250),
+        _comment(9, 101, _body("stop"), age=100),
+    ]
+    later = {"cloud-a": ((ww._parse_activity_time(comments[2]["created_at"]), 9), "stop")}
+    gh = _PrGh(comments, prs={502: _on_main(101)}, fail_pulls={502})
+    closed_out = [None]
+    (notes, terminals), degraded = _evaluate(lanes, gh, closed_out=closed_out, known_closes=dict(later))
+    assert [(t["commentId"], t["kind"]) for t in terminals] == [(6, "handback")]
+    assert closed_out[0]["cloud-a"][0][1] == 6
+
+
+def test_row11_a_stored_park_an_unread_note_may_supersede_bounds_nothing():
+    # axis: a stored park an unattributed note created after it may have superseded is no bound this tick, so the later issue stop surfaces
+    lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - 500)
+    comments = [
+        _comment(7, 101, _body("park"), age=300),
+        _pr_comment(8, 501, _NOTE_BODY, age=250),
+        _comment(9, 101, _body("stop"), age=200),
+    ]
+    park = {"cloud-a": ((ww._parse_activity_time(comments[0]["created_at"]), 7), "park")}
+    gh = _PrGh(comments, prs={501: _on_main(101)}, fail_pulls={501})
+    closed_out = [None]
+    (notes, terminals), degraded = _evaluate(lanes, gh, closed_out=closed_out, known_closes=dict(park))
+    assert [(t["commentId"], t["kind"]) for t in terminals] == [(9, "stop")]
+    assert closed_out[0]["cloud-a"][0][1] == 9
+
+
+def test_an_unattributed_note_records_its_time_and_an_unattributed_ending_none():
+    lanes = _lanes({"cloud-a": (101, 700)})
+    note, ending = _pr_comment(7, 501, _NOTE_BODY, age=300), _pr_comment(8, 502, _body("handback"), age=200)
+    _out, uncertain = ww._attribute_pr_comments([note, ending], lanes, {501: None, 502: None}, 0.0)
+    assert uncertain == {"cloud-a": [ww._parse_activity_time(note["created_at"])]}
+
+
 def _reopened(issue, reopened_ago):
     now = time.time()
     return {
@@ -757,7 +811,7 @@ def test_a_pr_comment_from_before_its_lanes_fix_order_is_not_the_lanes():
     lanes = {"cloud-a": _reopened(101, 100), "cloud-b": dict(_lanes({"cloud-b": (102, 700)})["cloud-b"])}
     comment = _pr_comment(8, 501, _body("handback"), age=300)
     out, uncertain = ww._attribute_pr_comments([comment], lanes, {501: (101,)}, 0.0)
-    assert uncertain == set()
+    assert uncertain == {}
     assert out == [comment]
 
 
@@ -767,17 +821,17 @@ def test_an_ambiguous_pr_comment_is_unsure_only_for_linked_lanes_whose_window_it
     lanes = {"cloud-a": _reopened(101, 100), **base}
     comment = _pr_comment(8, 501, _body("handback"), age=300)
     out, uncertain = ww._attribute_pr_comments([comment], lanes, {501: (101, 102)}, 0.0)
-    assert uncertain == {"cloud-b"}
+    assert uncertain == {"cloud-b": []}
     assert out == [comment]
     lanes["cloud-b"] = _reopened(102, 100)
-    assert ww._attribute_pr_comments([comment], lanes, {501: (101, 102)}, 0.0)[1] == set()
+    assert ww._attribute_pr_comments([comment], lanes, {501: (101, 102)}, 0.0)[1] == {}
 
 
 def test_an_unread_pr_comment_is_unsure_only_for_lanes_whose_window_it_is_in():
     lanes = {"cloud-a": _reopened(101, 100), "cloud-b": dict(_lanes({"cloud-b": (102, 700)})["cloud-b"])}
     comment = _pr_comment(8, 501, _body("handback"), age=300)
     out, uncertain = ww._attribute_pr_comments([comment], lanes, {501: None}, 0.0)
-    assert uncertain == {"cloud-b"}
+    assert uncertain == {"cloud-b": []}
     assert out == [comment]
 
 
@@ -824,7 +878,7 @@ def test_a_pr_linked_to_a_live_issue_and_an_old_resumed_issue_stays_ambiguous():
     lanes = _lanes({"cloud-a": (101, 700), "cloud-b": (102, 700)})
     out, uncertain = ww._attribute_pr_comments(
         [_pr_comment(7, 501, _body("handback"))], lanes, {501: (101, 102)}, 0.0, issue_only=frozenset({101}))
-    assert uncertain == {"cloud-b"}  # no lane is named; the disclosure names the live lane only
+    assert uncertain == {"cloud-b": []}  # no lane is named; the disclosure names the live lane only
     assert "prNumber" not in out[0]
 
 
@@ -834,7 +888,7 @@ def test_a_pr_linked_to_an_issue_only_lane_is_not_rekeyed_but_one_linked_to_a_li
     comments = [_pr_comment(7, 501, _body("handback")), _pr_comment(8, 502, _body("handback"))]
     out, uncertain = ww._attribute_pr_comments(
         comments, lanes, {501: (101,), 502: (102,)}, 0.0, issue_only=frozenset({101}))
-    assert uncertain == set()
+    assert uncertain == {}
     assert "prNumber" not in out[0] and out[0]["issue_url"] == comments[0]["issue_url"]
     assert out[1]["prNumber"] == 502 and out[1]["issue_url"].endswith("/issues/102")
 
@@ -898,7 +952,7 @@ def test_attribution_never_mutates_the_comments_it_is_given():
     before = dict(comment)
     comments = [comment]
     out, uncertain = ww._attribute_pr_comments(comments, lanes, {501: (101,)}, 0.0)
-    assert uncertain == set()
+    assert uncertain == {}
     assert comment == before and comments == [comment]
     assert out[0] is not comment
     assert out[0]["issue_url"].endswith("/issues/101") and out[0]["prNumber"] == 501
@@ -975,7 +1029,14 @@ def test_the_closing_references_read_is_one_direct_graphql_call_with_the_pull_re
     assert "pullRequest(number: $number)" in query
     assert "closingIssuesReferences(first: 25)" in query
     assert re.search(r"pageInfo \{[^{}]*\bhasNextPage\b[^{}]*\}", query)
-    nodes = query[query.index("nodes {"):]
+    # The closing-reference node selection itself, braces balanced, so a field selected elsewhere does not count.
+    start = query.index("nodes {") + len("nodes {")
+    depth, end = 1, start
+    while depth:
+        depth += {"{": 1, "}": -1}.get(query[end], 0)
+        end += 1
+    nodes = query[start:end - 1]
+    assert ":" not in nodes  # no alias renames a key the reader reads
     assert re.search(r"repository \{[^{}]*\bnameWithOwner\b[^{}]*\}", nodes)
     assert re.search(r"\bnumber\b", re.sub(r"repository \{[^{}]*\}", "", nodes))
     assert ww._read_candidate_prs([501], _SLUG, {101}, "/", 100.0, lambda: 0.0, _PrGh(prs={501: _on_main(101)}), {}) \
