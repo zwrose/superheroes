@@ -20,6 +20,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import test_calibration_disclosure_2364 as C  # noqa: E402
+import test_handback_costly_unlisted_2633 as K  # noqa: E402
 import test_vet_slot_leftovers_2280 as L  # noqa: E402
 import vet_slot as vs  # noqa: E402
 
@@ -160,6 +161,17 @@ def test_row5_leftovers_refuse_before_calibration_on_both_paths(capsys, tmp_path
     (rc_c, out_c), (rc_p, out_p), _, _ = _both(capsys, tmp_path, both_failing, C.body(None), both_failing, record)
     assert (rc_c, rc_p) == (1, 1)
     assert out_c["reason"] == "leftover-not-accepted"
+    assert out_c == out_p
+
+
+# --- row 5b: costly-not-accepted reads the file's body, last ------------------------------------------------------
+
+def test_row5b_a_file_body_with_an_unlisted_costly_degradation_refuses_costly_not_accepted(capsys, tmp_path):
+    # Bites on: the combined form passing the REST body, not the file's, to check_costly_accepted.
+    costly, clean = K.REFUSED["costly"], K.PASSED["no-degradations"]
+    (rc_c, out_c), (rc_p, out_p), _, _ = _both(capsys, tmp_path, costly, clean, costly, CAL_RECORD)
+    assert (rc_c, rc_p) == (1, 1)
+    assert out_c["ok"] is False and out_c["reason"] == "costly-not-accepted"
     assert out_c == out_p
 
 
