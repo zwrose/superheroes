@@ -26,6 +26,8 @@ import subprocess
 import sys
 
 import gh_pages
+import git_origin
+import launch_ledger
 import md_fence
 import pr_body_regions
 import review_record
@@ -751,7 +753,8 @@ def _judge(open_rows, issue, repo, run, premise, membership_reader):
     live = []
     for index, row in enumerate(open_rows):
         # axis: a blocker in another repository is never a layer of this repository's stack — see bite-proof record wo_2652_stack_layer_blockers
-        if row["ref"].rsplit("#", 1)[0] != repo:
+        # axis: GitHub repository names ignore case, so a differently cased same repository is not another one
+        if not git_origin.same_repository(row["ref"].rsplit("#", 1)[0], repo):
             decided[index] = ("held", "it is in another repository, so it is not a layer of this stack")
         else:
             live.append(index)
@@ -763,15 +766,16 @@ def _judge(open_rows, issue, repo, run, premise, membership_reader):
                 decided[index] = ("held", "this issue is not a sub-issue of a feature, so it is not a stack layer")
             live = []
     if live:
-        siblings = _read_sibling_refs(run, repo, parent)
-        own = "%s#%d" % (repo, issue)
+        # Refs are compared with the repository part folded to lower case (GitHub names ignore case).
+        siblings = [ref.lower() for ref in _read_sibling_refs(run, repo, parent)]
+        own = ("%s#%d" % (repo, issue)).lower()
         # axis: the blocked issue must itself be listed under its parent, or the order of layers is unknown — see bite-proof record wo_2652_stack_layer_blockers
         if own not in siblings:
             raise _Unreadable("the sub-issue list of #%d does not list #%d" % (parent, issue))
         own_at = siblings.index(own)
         still = []
         for index in live:
-            ref = open_rows[index]["ref"]
+            ref = open_rows[index]["ref"].lower()
             if ref not in siblings:
                 decided[index] = ("held", "it is not a sub-issue of #%d, so it is not a layer of this stack" % parent)
             # axis: a blocker listed at or after the blocked issue is not a lower layer — see bite-proof record wo_2652_stack_layer_blockers
@@ -831,7 +835,7 @@ def read_premise(path):
         if key in data:
             value = data[key]
             # axis: stack, layerPosition and dependency must each be a positive int (a bool is not) — see bite-proof record wo_2652_stack_layer_blockers
-            if not _is_int(value) or value < 1:
+            if not launch_ledger.is_positive_premise_int(value):
                 return None, "--premise %s: %s is not a positive integer" % (path, key)
             premise[key] = value
     return premise, None
