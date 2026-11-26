@@ -1905,6 +1905,17 @@ def _read_cutoff(info):
     return _note_cutoff(info)
 
 
+def _pr_cutoff(info):
+    """The earliest pull-request comment that can be the lane's: its note cutoff, moved to a reopened lane's
+    reopenedAt or a dormant lane's dormantSince when either is later, so a comment from before the lane's window
+    selects no pull request to read and is never attributed to the lane."""
+    cutoff = _note_cutoff(info)
+    for key in ("reopenedAt", "dormantSince"):
+        if _finite_number(info.get(key)) and info[key] > cutoff:
+            cutoff = info[key]
+    return cutoff
+
+
 def _in_window(info, key, close):
     """Whether a comment keyed `key` (created epoch, comment id) is in the lane's window: at or after a
     reopened lane's reopenedAt or a dormant lane's dormantSince, and not after its close key (None when
@@ -1969,7 +1980,7 @@ def _builder_note(comment, watched, answered, closes=None):
     info = watched[lid]
     if not _in_window(info, (lane_created, comment_id), (closes or {}).get(lid)):
         return None
-    return {
+    note = {
         "launchId": lid,
         "issue": number,
         "commentId": comment_id,
@@ -1979,6 +1990,9 @@ def _builder_note(comment, watched, answered, closes=None):
         "cloudSessionId": info.get("cloudSessionId"),
         "configDir": info.get("configDir"),
     }
+    if "prNumber" in comment:
+        note["pr"] = comment["prNumber"]
+    return note
 
 
 _TERMINAL_STATE = {"handback": "handback", "stop": "stopped", "park": "parked"}
@@ -2187,7 +2201,7 @@ def _cloud_terminals(comments, watched, answered, closes=None):
         if kind == "park" and _park_superseded(lid, key[0], progress, note_times):
             continue
         info = watched[lid]
-        entries.append({
+        entry = {
             "launchId": lid,
             "state": _TERMINAL_STATE[kind],
             "kind": kind,
@@ -2199,7 +2213,10 @@ def _cloud_terminals(comments, watched, answered, closes=None):
             "cloudSessionName": info.get("cloudSessionName"),
             "cloudSessionId": info.get("cloudSessionId"),
             "configDir": info.get("configDir"),
-        })
+        }
+        if "prNumber" in comment:
+            entry["pr"] = comment["prNumber"]
+        entries.append(entry)
     return sorted(entries, key=lambda entry: entry["launchId"])
 
 
@@ -2323,6 +2340,262 @@ def _merge_comments(shared, lane_reads):
     return merged
 
 
+def _pr_attributed_kinds():
+    """The terminal kinds the builder composes, read from its header map (their one home) at each call. Progress and
+    handover comments stay issue-scoped: only a builder note or one of these endings moves to the lane GitHub links the PR to."""
+    return tuple(cb.TERMINAL_HEADERS)
+
+
+def _pr_candidate(comment, watched_issues, earliest):
+    """The number a comment is on when it may be a watched lane's builder note or ending posted on that lane's
+    pull request, else None. Never raises.
+
+    A candidate has a valid id, a string body, an issue_url ending `/issues/<n>` and an html_url ending
+    `/pull/<n>#issuecomment-<id>` with the same number (GitHub gives a comment on a pull request a `/pull/` page
+    url and a plain issue's comment an `/issues/` one, so a plain-issue comment is never a candidate), a readable
+    created time at or after `earliest`, a number no watched lane has, and a body that is a builder note or whose
+    first line is a handback, stop or park header.
+    """
+    try:
+        if not isinstance(comment, dict):
+            return None
+        body, issue_url = comment.get("body"), comment.get("issue_url")
+        if not _valid_positive_int(comment.get("id")):
+            return None
+        if not isinstance(body, str) or not isinstance(issue_url, str):
+            return None
+        match = re.search(r"/issues/(\d+)$", issue_url)
+        if match is None:
+            return None
+        created = _parse_activity_time(comment.get("created_at"))
+        if created is None or created < earliest:
+            return None
+        number = int(match.group(1))
+        if number in watched_issues:
+            return None
+        html_url = comment.get("html_url")
+        # axis: only a comment on a pull request (its html_url is a /pull/<n> page with the issue_url's number) is a candidate, so a plain issue's comment causes no read and no disclosure — see bite-proof record i2651_pr_comments.md
+        permalink = cb.comment_permalink(html_url)
+        # The permalink must name this very comment: its repository (the one issue_url names), its pull request page
+        # and its own id, so a link to another comment or repository is never read as this one.
+        repo = re.search(r"/repos/([^/]+/[^/]+)/issues/\d+$", issue_url)
+        if permalink is None or permalink[1] != "pull" or permalink[2] != number or permalink[3] != comment["id"] \
+                or repo is None or permalink[0].lower() != repo.group(1).lower():
+            return None
+        # axis: only a builder note or a handback, stop or park is read onto a lane through its pull request; any other comment on one is no lane's — see bite-proof record i2651_pr_comments.md
+        if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _pr_attributed_kinds()):
+            return None
+        return number
+    except Exception:
+        return None
+
+
+_PR_LINKS_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
+    "{ pullRequest(number: $number) { closingIssuesReferences(first: 25) "
+    "{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }"
+)
+
+
+class _PrLinkUnknown(Exception):
+    """A pull request's GitHub link could not be read: the read failed, was refused, or came back malformed."""
+
+
+class _PrBudgetSpent(Exception):
+    """The watch's budget ran out before a pull-request read could start."""
+
+
+def _closing_issue_links(proc, slug, watched_issues):
+    """Sorted tuple of the watched issues of this repository GitHub's closing references name for one pull request
+    (a `gh api graphql` process). Raises _PrLinkUnknown on a non-zero exit (the proxy's GraphQL refusal included), output
+    that is not JSON, an `errors` key, a missing closing-references object, more than one page, or a node without an
+    int number and a string repository name."""
+    if proc.returncode != 0:
+        raise _PrLinkUnknown("graphql exit %s" % proc.returncode)
+    try:
+        parsed = json.loads(proc.stdout)
+    except (TypeError, ValueError):
+        raise _PrLinkUnknown("graphql output is not JSON")
+    if not isinstance(parsed, dict) or "errors" in parsed:
+        raise _PrLinkUnknown("graphql errors")
+    data = parsed.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull = repository.get("pullRequest") if isinstance(repository, dict) else None
+    refs = pull.get("closingIssuesReferences") if isinstance(pull, dict) else None
+    page_info = refs.get("pageInfo") if isinstance(refs, dict) else None
+    nodes = refs.get("nodes") if isinstance(refs, dict) else None
+    if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not False or not isinstance(nodes, list):
+        raise _PrLinkUnknown("closing references unreadable or paged")
+    linked = set()
+    for node in nodes:
+        number = node.get("number") if isinstance(node, dict) else None
+        node_repo = node.get("repository") if isinstance(node, dict) else None
+        name = node_repo.get("nameWithOwner") if isinstance(node_repo, dict) else None
+        if not _valid_positive_int(number) or not isinstance(name, str):
+            raise _PrLinkUnknown("closing reference node malformed")
+        if name.lower() == slug.lower() and number in watched_issues:
+            linked.add(number)
+    return tuple(sorted(linked))
+
+
+def _timeline_links(rows, slug, number):
+    """True when a REST issue timeline holds a cross-reference whose source is pull request `number` of this
+    repository. Raises _PrLinkUnknown for a row or cross-reference that cannot be read."""
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            raise _PrLinkUnknown("timeline row")
+        if row.get("event") != "cross-referenced":
+            continue
+        source = row.get("source")
+        issue = source.get("issue") if isinstance(source, dict) else None
+        if not isinstance(issue, dict):
+            raise _PrLinkUnknown("cross-reference without an issue")
+        if "pull_request" not in issue:
+            continue
+        ref_number = issue.get("number")
+        repository = issue.get("repository")
+        full_name = repository.get("full_name") if isinstance(repository, dict) else None
+        if not _valid_positive_int(ref_number) or not isinstance(full_name, str):
+            raise _PrLinkUnknown("cross-reference malformed")
+        if ref_number == number and full_name.lower() == slug.lower():
+            found = True
+    return found
+
+
+def _read_candidate_prs(numbers, slug, watched_issues, repo_root, deadline, monotonic, gh_run, env):
+    """{number: tuple of the watched issues GitHub links the pull request to, or None} for each number, read in
+    sorted order. Never raises.
+
+    A pull request based on the repository's default branch is linked by its closing issue references (GitHub
+    GraphQL); one based on any other branch (a stack layer) by a cross-reference to it on a watched issue's REST
+    timeline. The pull request's body text is never read. None is unknown: a link that could not be read (a failed
+    or refused read, a truncated page, malformed data), or a number skipped for budget (that number and every later
+    one)."""
+    resolved = {}
+    spent = False
+    default_branch = None
+    owner, _sep, name = slug.partition("/")
+    run_kwargs = dict(cwd=repo_root, env=_gh_scrub_env(env))
+
+    def budget():
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise _PrBudgetSpent()
+        return remaining
+
+    def get(path):
+        remaining = budget()
+        payload, refusal = sc._transport_rest(
+            ["gh", "api", path], max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)), gh_run, None, None, 0,
+            deadline_at=_stack_deadline_at(remaining), run_kwargs=run_kwargs,
+        )
+        if refusal is not None:
+            raise _PrLinkUnknown(path)
+        return payload
+
+    def get_list(path):
+        remaining = budget()
+        rows, refusal = sc.read_rest_list(
+            path, run=gh_run, timeout=max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)),
+            deadline_at=_stack_deadline_at(remaining), run_kwargs=run_kwargs,
+        )
+        if refusal is not None:
+            raise _PrLinkUnknown(path)
+        return rows
+
+    for number in sorted(numbers):
+        resolved[number] = None
+        if spent:
+            continue
+        try:
+            if default_branch is None:
+                default_branch = ""
+                value = get("repos/%s" % slug).get("default_branch")
+                if isinstance(value, str):
+                    default_branch = value
+            if not default_branch:
+                continue
+            pull_base = get("repos/%s/pulls/%d" % (slug, number)).get("base")
+            base_ref = pull_base.get("ref") if isinstance(pull_base, dict) else None
+            if not isinstance(base_ref, str) or not base_ref:
+                continue
+            if base_ref == default_branch:
+                remaining = budget()
+                # axis: the closing issue references of a default-branch pull request are read from GitHub's GraphQL, and a read that fails, is refused by the proxy, or comes back truncated or malformed is unknown (None), never "no link" — see bite-proof record i2651_pr_comments.md
+                proc = gh_run(
+                    ["gh", "api", "graphql", "-f", "owner=%s" % owner, "-f", "name=%s" % name,
+                     "-F", "number=%d" % number, "-f", "query=" + _PR_LINKS_QUERY],
+                    capture_output=True, text=True, timeout=max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)),
+                    cwd=repo_root, env=_gh_scrub_env(env),
+                )
+                resolved[number] = _closing_issue_links(proc, slug, watched_issues)
+            else:
+                linked = []
+                # axis: a stack layer belongs to a lane only through a cross-reference GitHub records on the lane's issue timeline whose source is this very pull request of this repository, and a timeline that cannot be read is unknown (None), never "no link" — see bite-proof record i2651_pr_comments.md
+                for issue in sorted(watched_issues):
+                    rows = get_list("repos/%s/issues/%d/timeline" % (slug, issue))
+                    if _timeline_links(rows, slug, number):
+                        linked.append(issue)
+                resolved[number] = tuple(linked)
+        except _PrBudgetSpent:
+            spent = True
+            resolved[number] = None
+        except Exception:
+            resolved[number] = None
+    return resolved
+
+
+def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=frozenset()):
+    """(comments, uncertain): the comments with each builder note or ending on a pull request re-keyed to the one
+    watched lane's issue GitHub links the PR to, as a new list; no comment dict is mutated.
+
+    `resolved` is `_read_candidate_prs`'s answer: the watched issues GitHub links each PR to, or None when the link
+    could not be read. A re-keyed copy carries `prNumber`. `uncertain` is the set of launch ids a candidate the
+    watch could not attribute might belong to: for a link that was not read, every lane not issue-only whose
+    `_pr_cutoff` the comment is at or after; for a PR linked to two or more watched issues (no lane can be named,
+    whether or not one of them is issue-only), the linked lanes among those. An empty set is a complete attribution.
+    A PR linked to no watched issue, or a comment from before its lane's `_pr_cutoff`, leaves the comment as it
+    was. A lane whose issue is in `issue_only` (a resumed lane read from its own issue) never takes a pull-request
+    comment. Nothing pairs: an ending the builder posted on both the issue and its PR is two endings of the lane."""
+    watched_issues = {info["issue"] for info in watched.values()}
+    attributed = []
+    uncertain = set()
+    for comment in comments:
+        number = _pr_candidate(comment, watched_issues, earliest)
+        if number is None or number not in resolved:
+            attributed.append(comment)
+            continue
+        created = _parse_activity_time(comment.get("created_at"))
+
+        def could_be(info):
+            return info["issue"] not in issue_only and created >= _pr_cutoff(info)
+
+        if resolved[number] is None:
+            # axis: a pull-request comment whose link could not be read leaves partial only the lanes it could be, never the lanes whose window opened after it or which are read from their own issue — see bite-proof record i2651_pr_comments.md
+            uncertain.update(lid for lid, info in watched.items() if could_be(info))
+            attributed.append(comment)
+            continue
+        hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
+        if len(hits) >= 2:
+            # axis: a pull request GitHub links to two or more watched issues is no lane's and is disclosed for the linked lanes whose window it is in, never guessed onto one — see bite-proof record i2651_pr_comments.md
+            uncertain.update(lid for lid, info in watched.items() if info["issue"] in hits and could_be(info))
+            attributed.append(comment)
+            continue
+        # axis: a resumed lane read only from its own issue never takes a pull-request comment, whichever read returned it — see bite-proof record i2651_pr_comments.md
+        if not hits or hits[0] in issue_only:
+            attributed.append(comment)
+            continue
+        # axis: a pull-request comment from before the lane's window (a reopened lane's fix order, a dormant lane's basis) is not the lane's — see bite-proof record i2651_pr_comments.md
+        if not any(info["issue"] == hits[0] and created >= _pr_cutoff(info) for info in watched.values()):
+            attributed.append(comment)
+            continue
+        # axis: a note or ending on a pull request GitHub links to exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
+        issue_url = re.sub(r"/issues/\d+$", "/issues/%d" % hits[0], comment["issue_url"])
+        attributed.append(dict(comment, issue_url=issue_url, prNumber=number))
+    return attributed, uncertain
+
+
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     note_state, known_slug=None, slug_cell=None, progress_out=None, closed_out=None, unread_out=None,
@@ -2418,6 +2691,31 @@ def _evaluate_cloud_comments(
     comments = _merge_comments(comments, lane_reads)
     if not requested:
         return [], []
+    watched_issues = {info["issue"] for info in watched.values()}
+    # axis: a pull-request comment from before the window of every lane that can take one (a reopened lane's fix order, a dormant lane's basis; a lane read only from its own issue takes none) selects no pull request to read — see bite-proof record i2651_pr_comments.md
+    pr_lanes = [info for lid, info in watched.items() if lid not in old_dormant]
+    earliest = min(_pr_cutoff(info) for info in pr_lanes) if pr_lanes else None
+    candidates = sorted({
+        n for n in (_pr_candidate(c, watched_issues, earliest) for c in comments) if n is not None
+    }) if pr_lanes else []
+    uncertain = set()
+    # No candidate, no request: the common tick reads nothing new.
+    if candidates:
+        pr_slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
+        if pr_slug is not None:
+            resolved = _read_candidate_prs(
+                candidates, pr_slug, watched_issues, repo_root, deadline, monotonic, gh_run, env,
+            )
+        else:
+            resolved = {n: None for n in candidates}
+        comments, uncertain = _attribute_pr_comments(
+            comments, watched, resolved, earliest,
+            issue_only=frozenset(info["issue"] for info in old_dormant.values()),
+        )
+    if uncertain:
+        # axis: a note or ending on a pull request the watch could not attribute to one lane is disclosed and names every lane it could be, never read as no note — see bite-proof record i2651_pr_comments.md
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        _record_unread(unread_out, {lid: watched[lid] for lid in uncertain})
     observed_progress = _cloud_progress(comments, watched)
     if isinstance(progress_out, list) and progress_out:
         progress_out[0] = observed_progress
@@ -2426,13 +2724,17 @@ def _evaluate_cloud_comments(
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
-    close_kinds = _cloud_close_kinds(comments, watched) if state else {}
+    # axis: an incomplete pull-request attribution is a partial read for the lanes it could be only, while every other lane's close is what the complete read shows — see bite-proof record i2651_pr_comments.md
+    complete = state and not uncertain
+    observed = _cloud_close_kinds(comments, watched) if state else {}
+    close_kinds = {lid: value for lid, value in observed.items() if lid not in uncertain}
     closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
-    if not state and known_closes:
+    # axis: a lane a pull-request comment the watch could not attribute may belong to is read as on a partial comments read: its stored close only, and nothing new stored for it — see bite-proof record i2651_pr_comments.md
+    if not complete and known_closes:
         progress = _cloud_progress(comments, watched)
         note_times = _cloud_note_times(comments, watched)
         for lid, (close, kind) in list(known_closes.items()):
-            if lid not in watched:
+            if lid not in watched or (state and lid not in uncertain):
                 continue
             # axis: a cached park close that the comments a partial read observed show superseded is dropped from the cache, never kept to filter out the note that superseded it — see bite-proof record wo_2148_fix_order.md
             if kind == "park" and _park_superseded(lid, close[0], progress, note_times):
@@ -2440,8 +2742,10 @@ def _evaluate_cloud_comments(
                 continue
             closes[lid] = close
     # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
+    # axis: a complete comments read sets the closed slot for the lanes the pull-request attribution left sure, and keeps each unsure lane's stored close as it was — see bite-proof record i2651_pr_comments.md
     if state and isinstance(closed_out, list) and closed_out:
-        closed_out[0] = dict(close_kinds)
+        kept = {lid: known_closes[lid] for lid in uncertain if known_closes and lid in known_closes}
+        closed_out[0] = {**close_kinds, **kept}
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
         (note for note in notes if note is not None),

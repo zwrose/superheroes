@@ -55,7 +55,7 @@ def _section(path, heading):
 def test_terminal_text_is_the_header_a_blank_line_and_the_trimmed_text(kind):
     # axis: the comment's first line is the kind's fixed header and nothing else
     assert cb.terminal_text(kind, "  Done.\nAll of it.\n") == {
-        "ok": True, "comment": cb.TERMINAL_HEADERS[kind] + "\n\nDone.\nAll of it."}
+        "ok": True, "comment": cb.TERMINAL_HEADERS[kind] + "\n\nDone.\nAll of it.", "target": "issue"}
 
 
 @pytest.mark.parametrize("kind", ["handover", "Stop", None, "", "note"])
