@@ -986,8 +986,7 @@ def walk_preflight(
             # base-state evidence given as JSON itself (the accepted-rows array, or anything else) is kept as its JSON
             # text, never dropped, so the launch's acceptance reader sees and judges it
             "evidence": entry["evidence"] if isinstance(entry.get("evidence"), str) else (
-                json.dumps(entry["evidence"]) if check_id == "base-state" and entry.get("evidence") is not None
-                else ""),
+                json.dumps(entry["evidence"]) if check_id == "base-state" and "evidence" in entry else ""),
         }
         if state == "fail":
             out_checks.append(entry_out)

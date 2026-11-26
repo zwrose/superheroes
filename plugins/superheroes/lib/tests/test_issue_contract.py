@@ -1109,6 +1109,8 @@ def test_first_line_is_read_alone_so_later_markdown_cannot_hide_its_close(tmp_pa
     # axis: markup left on the line (code, a list-nested quote, a link title, an attribute, tab indent) holds
     "-     Closes #12", "Closes `x` #12", "- > Closes #12", '[plan](plan.md "Closes #12")',
     '<a title="Closes #12">x</a>', " \tCloses #12", "Closes <!-- x --> #12", "$Closes #12$",
+    # axis: comment syntax inside a code span, and a list-nested tilde fence's info string, hold
+    "`<!--` <!-- note --> `Closes #12`", "- ~~~ Closes #12",
 ])
 def test_first_line_close_in_code_quote_comment_or_html_closes_nothing(tmp_path, capsys, opening):
     body = opening + "\n\n" + _vet("READY", _head(101))

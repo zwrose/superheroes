@@ -585,7 +585,8 @@ def _first_prose_line(body):
     keeps it waiting. Later Markdown never changes the reading."""
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     line = next((line for line in lines if line.strip()), None)
-    if line is None:
+    # axis: a line holding both a backtick and a comment opener is not read, as either can hide the other — see bite-proof record wo_2652_stack_layer_blockers
+    if line is None or ("`" in line and "<!--" in line):
         return None
     text = _HTML_COMMENT_RE.sub("\x00", line).split("<!--", 1)[0]
     text = _CODE_SPAN_RE.sub("\x00", text).split("`", 1)[0]
@@ -593,7 +594,7 @@ def _first_prose_line(body):
     indents = [part[:len(part) - len(part.lstrip())] for part in (text, item)]
     # axis: only a plain first line can carry the closing reference; any markup left on it holds the blocker — see bite-proof record wo_2652_stack_layer_blockers
     if any("\t" in indent or len(indent) >= 4 for indent in indents) or any(mark in text for mark in "<>[]\\") \
-            or text.count("$") >= 2 or text.lstrip().startswith("~~~"):
+            or text.count("$") >= 2 or any(part.lstrip().startswith("~~~") for part in (text, item)):
         return None
     return text.strip() or None
 

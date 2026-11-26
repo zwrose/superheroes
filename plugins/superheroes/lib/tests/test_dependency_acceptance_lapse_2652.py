@@ -84,7 +84,7 @@ def test_an_unaccepted_draft_keeps_the_ungated_pass_even_with_a_stale_card(tmp_p
     assert result == {"ok": True, "dependencyGate": {"applied": False, "reason": "dependency-not-ready"}}
 
 
-@pytest.mark.parametrize("evidence", [[{"pr": 701, "form": "ready"}], {"pr": 701, "form": "ready"}])
+@pytest.mark.parametrize("evidence", [[{"pr": 701, "form": "ready"}], {"pr": 701, "form": "ready"}, None])
 def test_walk_preflight_keeps_base_state_json_evidence_as_its_json_text(tmp_path, evidence):
     # axis: base-state evidence given as JSON (array or not) is kept for the acceptance reader, never dropped
     repo = _init_repo(tmp_path / "repo")
