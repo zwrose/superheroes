@@ -540,31 +540,57 @@ files read exactly as at `HEAD`. No residue remains.
 
 ## Replay on the reviewed head (review session 2)
 
-**Head:** `56c1c4f260a577962e02dc9b45c1962699a65ff9`, checked out detached in a separate probe worktree.
-E7 and E9 above quote code that review fixes have since replaced: `_closes_issue` now reads
-`_first_prose_line`, and forcing E9's outer card check now hits the stale-card refusal first. **E7r and
-E9r supersede them.** E10-E16 prove the guards added after the first record (the stale-card refusal and
-review session 2's fixes). Same method and command as above. Each neutralization is one exact,
-single-match edit to the guarded code, never to a test. Each is undone by writing back the file's
-original text, and the nodes are re-run. Line numbers are at this head. Captures keep pytest's summary
-line and FAILED lines; the `UV_NATIVE_TLS` warning line is omitted.
+**Head:** `2abfb41a88f6808a6bb3cb3ecf18192234b558f9`, checked out detached in a separate probe worktree.
+E7 and E9 above quote code that review fixes have since replaced (`_closes_issue` now reads
+`_first_prose_line`, and E9's outer card check is gone). **E7r and E9r supersede them.** E10-E19 prove the
+guards added after the first record: the stale-card refusal and review session 2's fixes. The method and
+command are as above, plus `--tb=line -rf`. Each neutralization is one exact, single-match edit to the
+guarded code, never to a test. Each is undone by writing back the file's original text, and the same nodes
+are re-run. Line numbers are at this head. The raw red lines are pytest's own `E` / assertion lines,
+trimmed to the first failures, with the probe path prefix shortened to `tests/`. The `UV_NATIVE_TLS`
+warning line is omitted.
 
 | ID | Guarded element (file:line) | Neutralization | Proving nodes | Red | Green after restore |
 |---|---|---|---|---|---|
-| E7r | issue_contract.py:581 `_first_prose_line` | `rest = next((line for line in lines if line.strip()), None)` → `rest = " ".join(lines)` (read the whole body) | `test_issue_contract.py::test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | 1 failed | 1 passed |
-| E9r | launcher.py:2674 `_apply_dependency_gate` | `if stack_check.same_commit(resolved_base_commit, head_sha):` → `if True:` | `test_launcher.py::test_dependency_gate_stack_card_base_mismatch_refuses` | 1 failed | 1 passed |
-| E10 | launcher.py:2657 `_apply_dependency_gate` | `if issue_contract.stack_card_mark(pr_state["body"]) is not None:` → `if False:` | `test_break_it_stack_card_dependency_advance_2652.py` | 1 failed | 1 passed |
-| E11 | issue_contract.py:650 `_read_layer_membership` | `if not stack_check.same_commit(read_head, head):` → `if False:` | `test_break_it_2652_unlinked_membership_head.py`, `test_break_it_unlinked_membership_snapshot_2652.py` | 2 failed, 1 passed | 3 passed |
-| E12 | issue_contract.py:447 `stack_card_mark` | the `_parse_vet_verdict_line(...) != VERDICT_PARKED` test → `if False:` | `test_issue_contract.py::test_stack_card_mark_reads_only_a_line_the_vet_parser_reads_as_parked` | 1 failed | 1 passed |
-| E13 | issue_contract.py:587 `_first_prose_line` | the comment/code-span `starts = [...]` scan → `starts = []` | `test_issue_contract.py::test_first_line_close_in_code_quote_comment_or_html_closes_nothing` | 2 failed, 5 passed | 7 passed |
-| E14 | issue_contract.py:600 `_first_prose_line` | an open construct's `return prose.strip() or None` → `return (prose + rest[at:]).strip() or None` | same node as E13 | 1 failed, 6 passed | 7 passed |
-| E15 | launcher.py:2630 `_apply_dependency_gate` | `lapsed = None if accepted_form is None else {` → `lapsed = None if True else {` | `test_break_it_draft_card_dependency_2652.py`, `test_break_it_2652_card_withdrawn.py`, `test_dependency_acceptance_lapse_2652.py` | 3 failed, 3 passed | 6 passed |
-| E16 | launcher.py:4501 `_check_premises` | `accepted_form=_preflight_accepted_form(...)` → `accepted_form=None,` | `test_break_it_draft_card_dependency_2652.py`, `test_break_it_2652_card_withdrawn.py` | 2 failed | 2 passed |
+| E7r | issue_contract.py:584 `_first_prose_line` | `line = next((line for line in lines if line.strip()), None)` → `line = " ".join(lines)` (read the whole body) | `test_issue_contract.py::test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | 1 failed | 1 passed |
+| E9r | launcher.py:2681 `_apply_dependency_gate` | `if stack_check.same_commit(resolved_base_commit, head_sha):` → `if True:` | `test_launcher.py::test_dependency_gate_stack_card_base_mismatch_refuses` | 1 failed | 1 passed |
+| E10 | launcher.py:2639 `_apply_dependency_gate` | `if mark is not None and not stack_check.same_commit(mark[0], head_sha):` → `if False:` | `test_break_it_stack_card_dependency_advance_2652.py`, `test_break_it_draft_card_dependency_2652.py` | 2 failed | 2 passed |
+| E11 | issue_contract.py:641 `_read_layer_membership` | `if not stack_check.same_commit(read_head, head):` → `if False:` | `test_break_it_2652_unlinked_membership_head.py`, `test_break_it_unlinked_membership_snapshot_2652.py` | 2 failed, 1 passed | 3 passed |
+| E12 | issue_contract.py:448 `stack_card_mark` | the `_parse_vet_verdict_line(...) != VERDICT_PARKED` test → `if False:` | `test_issue_contract.py::test_stack_card_mark_reads_only_a_line_the_vet_parser_reads_as_parked` | 1 failed | 1 passed |
+| E13 | issue_contract.py:590 `_first_prose_line` | the plain-line test (indent, markup characters, `~~~`) → `if False:` | `test_issue_contract.py::test_first_line_close_in_code_quote_comment_or_html_closes_nothing` | 11 failed, 4 passed | 15 passed |
+| E14 | issue_contract.py:587 `_first_prose_line` | `_HTML_COMMENT_RE.sub("\x00", line)` → `_HTML_COMMENT_RE.sub("", line)` (a dropped comment no longer breaks a reference) | same node as E13 | 1 failed, 14 passed | 15 passed |
+| E15 | launcher.py:2643 `_apply_dependency_gate` | `lapsed = None if accepted is None else {` → `lapsed = None if True else {` | `test_break_it_2652_card_withdrawn.py`, `test_dependency_acceptance_lapse_2652.py` | 3 failed, 4 passed | 7 passed |
+| E16 | launcher.py:4504 `_check_premises` | `accepted=accepted` → `accepted=None` in the gate call | `test_break_it_2652_card_withdrawn.py` | 1 failed | 1 passed |
+| E17 | launcher.py:2556 `_preflight_accepted` | unreadable evidence `return False` → `return None` | `test_dependency_acceptance_lapse_2652.py::test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependency` | 1 failed | 1 passed |
+| E18 | launcher.py:2668 `_apply_dependency_gate` | the accepted card's feature test → `if False:` | `test_dependency_acceptance_lapse_2652.py::test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for` | 1 failed, 1 passed | 2 passed |
+| E19 | launcher.py:988 `walk_preflight` | the base-state array's `json.dumps(...) if check_id == "base-state" and ...` → `if False` | `test_dependency_acceptance_lapse_2652.py::test_walk_preflight_keeps_a_base_state_array_as_its_json_text` | 1 failed | 1 passed |
 
-The red runs' FAILED lines name exactly the proving nodes. E11's red:
-`test_unlinked_membership_at_a_new_head_cannot_use_the_old_vet` and
-`test_unstacked_dependency_uses_the_same_head_as_its_vet[...03e7-blockers-unreadable]`; its same-head
-case stays green. E13's red: the `` `Closes #12` `` and `Done <!-- Closes #12` cases. E14's red: the
-`Done <!-- Closes #12` case. E15's red: the draft, withdrawn-card and accepted-READY cases; the
-two no-acceptance cases and the accepted-form reader test stay green. After the last restore, the probe
-worktree's `git status --short` printed nothing.
+Raw red, per element:
+
+```
+E7r  tests/test_issue_contract.py:1074: AssertionError: assert None == 'blocker-open'
+E9r  tests/test_launcher.py:7668: AssertionError: a refused launch spawned a builder
+E10  tests/test_break_it_stack_card_dependency_advance_2652.py:49: Failed: launch reached worktree creation after its card-marked dependency advanced
+     tests/test_break_it_draft_card_dependency_2652.py:49: AssertionError: assert 'dependency-acceptance-lapsed' == 'dependency-card-stale'
+E11  E   assert True is False   (test_break_it_2652_unlinked_membership_head.py::test_unlinked_membership_at_a_new_head_cannot_use_the_old_vet)
+     tests/test_break_it_unlinked_membership_snapshot_2652.py:29: AssertionError: assert None == 'blockers-unreadable'   ([...03e7-blockers-unreadable]; the same-head case stays green)
+E12  tests/test_issue_contract.py:1379: AssertionError: assert ('0000000000000000000000000000000000000007', 50) is None
+E13  tests/test_issue_contract.py:1114: AssertionError: `Closes #12`
+     tests/test_issue_contract.py:1114: AssertionError: > Closes #12
+     tests/test_issue_contract.py:1114: AssertionError:     Closes #12   (11 of the 15 cases red; first three shown)
+E14  tests/test_issue_contract.py:1114: AssertionError: Closes <!-- x --> #12
+E15  tests/test_break_it_2652_card_withdrawn.py:49: Failed: launch reached worktree creation after the dependency lost its card mark
+     tests/test_dependency_acceptance_lapse_2652.py:37: AssertionError: assert {'ok': True, ...y-not-ready'}} == {'ok': False,...}
+     E   TypeError: 'NoneType' object is not subscriptable   (the [77-False] feature case: the gate returned the neutralized None)
+E16  tests/test_break_it_2652_card_withdrawn.py:49: Failed: launch reached worktree creation after the dependency lost its card mark
+E17  tests/test_dependency_acceptance_lapse_2652.py:69: AssertionError: Accepted PR #701 at abc
+E18  E   assert True is False   (test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for[77-False])
+E19  E   json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)   (the dropped array read back as "")
+```
+
+Each red fails on the element's own axis: the second-line close accepted (E7r); a mismatched base let
+through to a spawn (E9r); a stale card launched or misnamed (E10); the moved unlinked head accepted (E11);
+the two-token card line read as a mark (E12); markup-carried closes accepted (E13); a reference joined across
+a dropped comment (E14); a lapsed acceptance passed ungated (E15, E16); prose evidence read as "nothing
+accepted" (E17); a card for another feature passed (E18); a JSON array of evidence dropped (E19). After the
+last restore, the probe worktree's `git status --short` printed nothing.
