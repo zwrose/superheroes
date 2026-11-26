@@ -177,7 +177,9 @@ the premise shape change is in `TRANSITION.md`:
   earlier head than its current one: the layer moved after it was accepted, so the launch refuses
   until the advisor vets the new head.
 - `dependency-acceptance-lapsed` — preflight's base-state evidence accepted the dependency, and at
-  launch it no longer qualifies at its current head (back to draft, card withdrawn, or no READY line).
+  launch it no longer qualifies at its current head (back to draft, card withdrawn or naming another
+  feature, or no READY line). `dependency-acceptance-unreadable` — that evidence is not the accepted-rows
+  array, so the launch refuses rather than skip the recheck.
 - `dependency-read-unavailable` — the launcher could not read the dependency pull request or its
   vet and the gate could not run.
 

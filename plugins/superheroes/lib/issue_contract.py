@@ -623,6 +623,7 @@ def _accepted_row(row, layer):
         "head": layer["head"],
         "form": layer["form"],
         "stack": layer["stack"],
+        "feature": layer["feature"],
     }
 
 
@@ -695,7 +696,7 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
             return None
         form = "stack-card"
     stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"], pr["head"])
-    return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position}
+    return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position, "feature": parent}
 
 
 def _judge_with_premise(layers, premise, decided):

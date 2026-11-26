@@ -983,7 +983,10 @@ def walk_preflight(
             "class": check_class,
             "state": state,
             "reason": reason,
-            "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
+            # base-state's accepted-rows array may arrive as JSON itself; it is kept as its JSON text, never dropped
+            "evidence": entry["evidence"] if isinstance(entry.get("evidence"), str) else (
+                json.dumps(entry["evidence"]) if check_id == "base-state" and isinstance(entry.get("evidence"), list)
+                else ""),
         }
         if state == "fail":
             out_checks.append(entry_out)
@@ -2538,17 +2541,21 @@ def _apply_stack_gate(
     return {"ok": True, "stackGate": stack_gate}
 
 
-def _preflight_accepted_form(preflight_checks, dependency):
-    """The form preflight's base-state check accepted `dependency` in, read from its evidence (check-blockers'
-    accepted rows as JSON), or None when the evidence records no acceptance of it."""
+def _preflight_accepted(preflight_checks, dependency):
+    """The row preflight's base-state check accepted `dependency` in, read from its evidence (check-blockers'
+    `blockers.accepted` array as JSON); None when the evidence is empty or names no such row; False when the
+    evidence is not that array, so an acceptance recorded any other way is never silently ignored."""
     entry = next((c for c in preflight_checks or () if c.get("id") == "base-state"), None)
+    if entry is None or not entry.get("evidence"):
+        return None
     try:
-        rows = json.loads(entry["evidence"]) if entry is not None and entry["evidence"] else None
+        rows = json.loads(entry["evidence"])
     except ValueError:
-        return None
-    if not isinstance(rows, list):
-        return None
-    return next((row.get("form") for row in rows if isinstance(row, dict) and row.get("pr") == dependency), None)
+        rows = None
+    # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted" — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return False
+    return next((row for row in rows if row.get("pr") == dependency), None)
 
 
 def _apply_dependency_gate(
@@ -2558,12 +2565,12 @@ def _apply_dependency_gate(
     env,
     pr_vet_reader,
     deadline=None,
-    accepted_form=None,
+    accepted=None,
 ):
     """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing.
 
-    `accepted_form` is the form ("ready" or "stack-card") preflight's base-state check accepted the dependency in,
-    or None when it did not record one; an accepted dependency must still hold at launch."""
+    `accepted` is the row preflight's base-state check accepted the dependency in, or None when it recorded
+    none; an accepted dependency must still qualify at launch, a card one for the same feature."""
     dependency = stamped_premise["dependency"]
     if deadline is not None and time.monotonic() >= deadline:
         return {"ok": False, "reason": "dependency-read-unavailable"}
@@ -2633,7 +2640,7 @@ def _apply_dependency_gate(
         lapsed = {"ok": False, "reason": "dependency-card-stale", "detail": head_sha}
     else:
         # a dependency preflight accepted that no longer qualifies at its current head refuses, never passes ungated
-        lapsed = None if accepted_form is None else {
+        lapsed = None if accepted is None else {
             "ok": False, "reason": "dependency-acceptance-lapsed", "detail": head_sha,
         }
     # axis: draft dependency is work in flight — verdict is not consulted, unless its acceptance lapsed — see bite-proof record wo_2652_stack_layer_blockers
@@ -2656,7 +2663,11 @@ def _apply_dependency_gate(
     form = "ready"
     if verdict != stack_check.VERDICT_READY:
         # a dependency held only for a card on its stack's sheet, at its current head, is gated like a READY one
-        if issue_contract.stack_card_parent(pr_state["body"], head_sha) is None:
+        card_parent = issue_contract.stack_card_parent(pr_state["body"], head_sha)
+        # axis: an accepted dependency's card at launch must name the feature preflight accepted it for — see bite-proof record wo_2652_stack_layer_blockers
+        if accepted is not None and card_parent is not None and card_parent != accepted.get("feature"):
+            return lapsed
+        if card_parent is None:
             # axis: a stale card, or a withdrawn card or READY line left at an older head after acceptance, refuses — see bite-proof record wo_2652_stack_layer_blockers
             if lapsed is not None:
                 return lapsed
@@ -4487,14 +4498,11 @@ def _check_premises(
     resolved_base = premise_result["resolvedBaseCommit"]
     dependency_gate = None
     if "dependency" in stamped_premise:
-        gate_result = _apply_dependency_gate(
-            stamped_premise,
-            resolved_base,
-            repo_root,
-            env,
-            pr_vet_reader,
-            deadline=deadline,
-            accepted_form=_preflight_accepted_form(preflight_result["checks"], stamped_premise["dependency"]),
+        accepted = _preflight_accepted(preflight_result["checks"], stamped_premise["dependency"])
+        gate_result = {"ok": False, "reason": "dependency-acceptance-unreadable"} if accepted is False else (
+            _apply_dependency_gate(
+                stamped_premise, resolved_base, repo_root, env, pr_vet_reader, deadline=deadline, accepted=accepted,
+            )
         )
         if not gate_result["ok"]:
             extra = {}

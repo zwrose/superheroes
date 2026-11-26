@@ -989,6 +989,7 @@ def test_ready_lower_layer_as_only_blocker_passes_with_its_accepted_row(tmp_path
         "head": _head(101),
         "form": "ready",
         "stack": 900,
+        "feature": FEATURE,
     }]
     assert blockers["stack"] == 900
     assert blockers["requiredDependency"] is None

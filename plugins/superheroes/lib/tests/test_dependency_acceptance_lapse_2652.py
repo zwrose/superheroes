@@ -1,11 +1,13 @@
-"""A dependency preflight accepted must still hold at launch; without that acceptance the old gate stands."""
+"""A dependency preflight accepted must still qualify at launch; without a recorded acceptance the old gate stands."""
 import json
 
 import pytest
 
+from test_issue_contract import FEATURE
 from test_launcher import (
     L,
     _all_checks,
+    _card_vet_body,
     _dependency_premise,
     _head_sha,
     _init_repo,
@@ -15,38 +17,62 @@ from test_launcher import (
 )
 
 
-@pytest.mark.parametrize("evidence, expected", [
-    # axis: an accepted READY dependency whose READY line stayed at the old head refuses at launch
-    ("accepted", {"ok": False, "reason": "dependency-acceptance-lapsed"}),
-    # axis: base-state evidence that records no acceptance keeps the pre-existing ungated not-ready pass
-    ("", {"ok": True}),
-    ("not json", {"ok": True}),
-])
-def test_an_advanced_ready_dependency_lapses_only_a_recorded_acceptance(tmp_path, monkeypatch, evidence, expected):
+def _gate(tmp_path, monkeypatch, body_at, accepted, base=None):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    old_head = _head_sha(repo)
-    new_head = ("1" if old_head[0] == "0" else "0") + old_head[1:]
-    if evidence == "accepted":
-        evidence = json.dumps([{"pr": 701, "head": old_head, "form": "ready", "stack": None}])
+    head = _head_sha(repo)
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
     result = L._apply_dependency_gate(
-        _dependency_premise(repo, 701, issue=7), old_head, repo, {},
-        lambda pr, slug, **kwargs: (_pr_vet_state_ok(new_head, _ready_vet_body(old_head), pr_number=pr), None),
-        accepted_form=L._preflight_accepted_form(
-            [{"id": "base-state", "state": "pass", "evidence": evidence}], 701),
+        _dependency_premise(repo, 701, issue=7), base or head, repo, {},
+        lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, body_at(head), pr_number=pr), None),
+        accepted=accepted,
     )
-    assert {key: result[key] for key in expected} == expected
-    if not expected["ok"]:
-        assert result["detail"] == new_head
-    else:
-        assert result["dependencyGate"] == {"applied": False, "reason": "dependency-not-ready"}
+    return result, head
 
 
-def test_the_accepted_form_is_read_only_from_base_state_rows_naming_the_dependency():
-    rows = json.dumps([{"pr": 702, "form": "ready"}, {"pr": 701, "form": "stack-card"}])
-    assert L._preflight_accepted_form([{"id": "base-state", "evidence": rows}], 701) == "stack-card"
-    assert L._preflight_accepted_form([{"id": "base-state", "evidence": rows}], 703) is None
-    assert L._preflight_accepted_form([{"id": "engine-auth", "evidence": rows}], 701) is None
-    assert L._preflight_accepted_form([{"id": "base-state", "evidence": "{}"}], 701) is None
-    assert L._preflight_accepted_form(None, 701) is None
+def test_an_accepted_ready_dependency_whose_ready_line_stayed_behind_lapses(tmp_path, monkeypatch):
+    # axis: an accepted READY dependency that advanced past its READY line refuses at launch
+    stale = lambda head: _ready_vet_body(("1" if head[0] == "0" else "0") + head[1:])
+    result, head = _gate(tmp_path, monkeypatch, stale, {"pr": 701, "form": "ready", "feature": FEATURE})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_without_a_recorded_acceptance_the_ungated_not_ready_pass_stands(tmp_path, monkeypatch):
+    stale = lambda head: _ready_vet_body(("1" if head[0] == "0" else "0") + head[1:])
+    result, _ = _gate(tmp_path, monkeypatch, stale, None)
+    assert result["dependencyGate"] == {"applied": False, "reason": "dependency-not-ready"}
+
+
+@pytest.mark.parametrize("card_feature, expected_ok", [(FEATURE, True), (77, False)])
+def test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for(
+    tmp_path, monkeypatch, card_feature, expected_ok,
+):
+    # axis: a current-head card rewritten to name another feature lapses the acceptance
+    body = lambda head: _card_vet_body(head, parent=card_feature)
+    result, head = _gate(tmp_path, monkeypatch, body, {"pr": 701, "form": "stack-card", "feature": FEATURE})
+    assert result["ok"] is expected_ok
+    if not expected_ok:
+        assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependency():
+    rows = [{"pr": 702, "form": "ready"}, {"pr": 701, "form": "stack-card"}]
+    checks = lambda evidence, check="base-state": [{"id": check, "evidence": evidence}]
+    assert L._preflight_accepted(checks(json.dumps(rows)), 701) == rows[1]
+    assert L._preflight_accepted(checks(json.dumps(rows)), 703) is None
+    assert L._preflight_accepted(checks("[]"), 701) is None
+    assert L._preflight_accepted(checks(""), 701) is None
+    assert L._preflight_accepted(checks("Accepted PR #701 at abc", "engine-auth"), 701) is None
+    assert L._preflight_accepted(None, 701) is None
+    # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted"
+    for unreadable in ("Accepted PR #701 at abc", "{}", "[1]", "not json"):
+        assert L._preflight_accepted(checks(unreadable), 701) is False, unreadable
+
+
+def test_walk_preflight_keeps_a_base_state_array_as_its_json_text(tmp_path):
+    rows = [{"pr": 701, "form": "ready"}]
+    repo = _init_repo(tmp_path / "repo")
+    out = L.walk_preflight(_all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": rows}}), repo)
+    assert out["ok"] is True, out
+    entry = next(check for check in out["checks"] if check["id"] == "base-state")
+    assert json.loads(entry["evidence"]) == rows
