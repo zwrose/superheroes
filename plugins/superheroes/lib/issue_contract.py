@@ -5,8 +5,9 @@ Deterministic, stdlib-only, advisory decider for whether an issue body may be ma
 build-ready: the Anchor slot must be present, filled, and declare exactly one anchor
 kind in its slot header. What and DoD slots are reported but never blocking at this step.
 When an issue is named (`--issue` and `--repo`) the check also reads the issue's native
-`blocked_by` dependency edges in full: an open blocker refuses (`blocker-open`) and a read that
-fails or is malformed refuses (`blockers-unreadable`), never read as no blockers.
+`blocked_by` dependency edges in full: an open blocker refuses (`blocker-open`) unless `judge_open_blockers`
+accepts it as a lower layer of the same stack on evidence it read, and a read that fails or is malformed
+refuses (`blockers-unreadable`), never read as no blockers.
 
 This module is **advisory** — it always exits 0; the JSON result is the product, and a
 non-zero exit would let a caller treat a refusal as a crash. The Showrunner charter's
@@ -26,6 +27,8 @@ import sys
 
 import gh_pages
 import md_fence
+import pr_body_regions
+import stack_check
 
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
 
@@ -69,6 +72,15 @@ GH_TIMEOUT_SECONDS = 30
 _REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ISSUE_PATTERN = re.compile(r"^[0-9]+$")
 _BLOCKER_STATES = ("open", "closed")
+
+# The qualifier that marks a PARKED vet line as "held only for a card on the stack sheet of #<parent>"; its one home.
+STACK_CARD_QUALIFIER = "held only for a card on the stack sheet of #"
+_STACK_CARD_LINE_RE = re.compile(
+    r"\*\*Verdict: PARKED\*\* · [0-9a-fA-F]{40} " + re.escape(STACK_CARD_QUALIFIER) + r"([0-9]+)(?: .*)?",
+    re.DOTALL,
+)
+_PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
 SLOT_STATUS_MISSING = "missing"
 SLOT_STATUS_EMPTY = "empty"
@@ -269,8 +281,18 @@ def check_build_ready(body):
     )
 
 
-def _blockers_dict(checked, open_rows, detail):
-    return {"checked": checked, "open": open_rows, "detail": detail}
+def _blockers_dict(
+    checked, open_rows, detail, accepted=None, held=None, required_dependency=None, stack=None,
+):
+    return {
+        "checked": checked,
+        "open": open_rows,
+        "accepted": accepted if accepted is not None else [],
+        "held": held if held is not None else [],
+        "requiredDependency": required_dependency,
+        "stack": stack,
+        "detail": detail,
+    }
 
 
 def _result(ok, reason, anchor_kind, declared_kinds, slots, blockers=None):
@@ -364,13 +386,448 @@ def read_blockers(issue, repo, run):
     return _blockers_dict(True, open_rows, None)
 
 
+# --- the one judge of an open native blocker: is it an accepted lower layer of the same stack? ---
+
+
+def _first_nonempty_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return line
+    return None
+
+
+def stack_card_parent(body, head_sha):
+    """The parent issue number when `body`'s vet line is the stack-card mark at `head_sha`, else None.
+
+    The mark: the first non-empty line after the advisor-vet marker is `**Verdict: PARKED** · <head sha>`,
+    one space, STACK_CARD_QUALIFIER, the parent issue number in digits, then end of line or a space.
+    A vet the reader refuses returns None here; the caller that must tell a refusal apart reads the vet itself."""
+    verdict, refusal = stack_check.read_vet_verdict(body, head_sha)
+    # axis: only a PARKED vet pinned to the current head can carry the card mark; a refused or other verdict never does — see bite-proof record wo_2652_stack_layer_blockers
+    if refusal is not None or verdict != stack_check.VERDICT_PARKED:
+        return None
+    region_text, region_refusal = pr_body_regions.read_region(body, "advisor-vet")
+    if region_refusal is not None or region_text is None:
+        return None
+    line = _first_nonempty_line(region_text)
+    match = _STACK_CARD_LINE_RE.fullmatch(line) if line is not None else None
+    # axis: a PARKED line without the exact qualifier and a parent number is a plain park, not a card mark — see bite-proof record wo_2652_stack_layer_blockers
+    if match is None:
+        return None
+    parent = int(match.group(1))
+    return parent if parent >= 1 else None
+
+
+class _Unreadable(Exception):
+    """A read the judge needed could not complete; the whole judgement is then unreadable."""
+
+
+def _gh_call(run, endpoint):
+    """The completed process of one `gh api <endpoint>` call, or None when it timed out or could not start."""
+    try:
+        return run(
+            ["gh", "api", endpoint],
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _gh_fetch(run):
+    """A `gh_pages.read` fetch over `run`: stdout text, or None when the call failed."""
+
+    def fetch(endpoint):
+        proc = _gh_call(run, endpoint)
+        if proc is None or proc.returncode != 0 or not isinstance(proc.stdout, str):
+            return None
+        return proc.stdout
+
+    return fetch
+
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_not_found(proc):
+    """True when a failed `gh api` call answered HTTP 404 (stdout status "404" or stderr naming it)."""
+    stderr = getattr(proc, "stderr", None)
+    if isinstance(stderr, str) and "(HTTP 404)" in stderr:
+        return True
+    try:
+        payload = json.loads(proc.stdout) if isinstance(proc.stdout, str) else None
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("status") == "404"
+
+
+def _read_parent_number(run, repo, issue):
+    """The number of the issue's parent, or None when GitHub says it has none; unreadable raises."""
+    proc = _gh_call(run, "repos/%s/issues/%d/parent" % (repo, issue))
+    # axis: a parent read that times out or cannot start is unreadable, never "no parent" — see bite-proof record wo_2652_stack_layer_blockers
+    if proc is None:
+        raise _Unreadable("the parent of %s#%d could not be read" % (repo, issue))
+    if proc.returncode != 0:
+        # axis: only an HTTP 404 means "no parent"; any other failed read is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+        if _is_not_found(proc):
+            return None
+        raise _Unreadable("the parent of %s#%d could not be read" % (repo, issue))
+    try:
+        payload = json.loads(proc.stdout) if isinstance(proc.stdout, str) else None
+    except ValueError:
+        payload = None
+    # axis: a parent answer that is not an issue object with an int number is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(payload, dict) or not _is_int(payload.get("number")):
+        raise _Unreadable("the parent of %s#%d is not an issue object with a number" % (repo, issue))
+    return payload["number"]
+
+
+def _read_sibling_refs(run, repo, parent):
+    """The refs of the parent's sub-issues, in the parent's order; unreadable raises."""
+    rows = gh_pages.read(_gh_fetch(run), "repos/%s/issues/%d/sub_issues" % (repo, parent))
+    # axis: a sub-issue list that cannot be read in full is unreadable, never an empty list — see bite-proof record wo_2652_stack_layer_blockers
+    if rows is None:
+        raise _Unreadable("the sub-issues of #%d could not be read in full" % parent)
+    refs = []
+    for row in rows:
+        ref = _blocker_ref(row) if isinstance(row, dict) else None
+        # axis: a sub-issue row that cannot name itself fails the whole read, even beside valid rows — see bite-proof record wo_2652_stack_layer_blockers
+        if ref is None:
+            raise _Unreadable("a sub-issue row of #%d has no usable number or repository_url" % parent)
+        refs.append(ref)
+    return refs
+
+
+def _read_open_prs(run, repo):
+    """Every open pull request of `repo` as {number, draft, head, body}; unreadable raises."""
+    rows = gh_pages.read(_gh_fetch(run), "repos/%s/pulls?state=open" % repo)
+    # axis: an open-PR list that cannot be read in full is unreadable, never an empty list — see bite-proof record wo_2652_stack_layer_blockers
+    if rows is None:
+        raise _Unreadable("the open pull requests of %s could not be read in full" % repo)
+    prs = []
+    for row in rows:
+        head = row.get("head") if isinstance(row, dict) else None
+        sha = head.get("sha") if isinstance(head, dict) else None
+        body = row.get("body") if isinstance(row, dict) else None
+        # axis: any pull-request row that is malformed fails the whole read, even after a matching row — see bite-proof record wo_2652_stack_layer_blockers
+        if (
+            not isinstance(row, dict)
+            or not _is_int(row.get("number"))
+            or row.get("state") != "open"
+            or not isinstance(row.get("draft"), bool)
+            or not isinstance(sha, str)
+            or not _PR_HEAD_SHA_RE.fullmatch(sha)
+            or not (body is None or isinstance(body, str))
+        ):
+            raise _Unreadable("an open pull request row of %s is malformed" % repo)
+        prs.append({
+            "number": row["number"],
+            "draft": row["draft"],
+            "head": sha,
+            "body": body if body is not None else "",
+        })
+    return prs
+
+
+def _closes_issue(pr, repo, number):
+    """True when the PR body's first non-empty line holds a closing reference to `repo`#`number`."""
+    # axis: only the first non-empty body line counts — a closing reference lower in the body is not a handed-back layer — see bite-proof record wo_2652_stack_layer_blockers
+    line = _first_nonempty_line(pr["body"])
+    if line is None:
+        return False
+    for match in stack_check.CLOSING_REF_RE.finditer(line):
+        if match.group("bare") is not None:
+            if int(match.group("bare")) == number:
+                return True
+            continue
+        slug = match.group("slug") or match.group("uslug")
+        named = match.group("n") or match.group("un")
+        if slug is not None and slug.lower() == repo.lower() and int(named) == number:
+            return True
+    return False
+
+
+def _held_row(row, why):
+    return {"ref": row["ref"], "title": row["title"], "url": row["url"], "why": why}
+
+
+def _accepted_row(row, layer):
+    return {
+        "ref": row["ref"],
+        "title": row["title"],
+        "url": row["url"],
+        "pr": layer["pr"],
+        "head": layer["head"],
+        "form": layer["form"],
+        "stack": layer["stack"],
+    }
+
+
+def _read_layer_membership(membership_reader, run, repo, pr):
+    """(stack number or None, position or None) of a pull request; any read other than not-linked failing raises."""
+    result = membership_reader(pr=pr, repo=repo, run=run)
+    if isinstance(result, dict) and result.get("ok") is True:
+        stack = result.get("stack")
+        queried = result.get("queried")
+        number = stack.get("number") if isinstance(stack, dict) else None
+        position = queried.get("position") if isinstance(queried, dict) else None
+        # axis: an ok membership read without an int stack number and position is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+        if not _is_int(number) or not _is_int(position):
+            raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
+        return number, position
+    # axis: only not-linked means "in no stack"; every other membership refusal is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if isinstance(result, dict) and result.get("reason") == stack_check.REASON_NOT_LINKED:
+        return None, None
+    raise _Unreadable("the stack membership of pull request #%d could not be read" % pr)
+
+
+def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index):
+    """Steps 6-9 for one row: its handed-back layer {pr, head, form, stack, position}, or None once held."""
+    closing = [pr for pr in pulls if _closes_issue(pr, repo, number)]
+    if not closing:
+        decided[index] = ("held", "no open pull request's first line closes it, so no handed-back layer builds it")
+        return None
+    # axis: more than one open pull request closing the same blocker is ambiguous and holds — see bite-proof record wo_2652_stack_layer_blockers
+    if len(closing) > 1:
+        names = ", ".join("#%d" % pr["number"] for pr in closing)
+        decided[index] = ("held", "more than one open pull request closes it (%s)" % names)
+        return None
+    pr = closing[0]
+    # axis: a draft pull request is work in flight, never a handed-back layer — see bite-proof record wo_2652_stack_layer_blockers
+    if pr["draft"]:
+        decided[index] = ("held", "its pull request #%d is a draft" % pr["number"])
+        return None
+    verdict, refusal = stack_check.read_vet_verdict(pr["body"], pr["head"])
+    # axis: a vet the reader refuses is unreadable, never read as not-ready — see bite-proof record wo_2652_stack_layer_blockers
+    if refusal is not None:
+        raise _Unreadable(
+            "the vet of pull request #%d could not be read: %s"
+            % (pr["number"], refusal.get("detail") or refusal.get("reason"))
+        )
+    form = "ready"
+    if verdict != stack_check.VERDICT_READY:
+        card = stack_card_parent(pr["body"], pr["head"])
+        # axis: a card mark counts only for this stack's own parent; another parent's card holds — see bite-proof record wo_2652_stack_layer_blockers
+        if card is not None and card != parent:
+            decided[index] = (
+                "held",
+                "its pull request #%d's vet holds it for a card on the stack sheet of #%d, not this stack's #%d"
+                % (pr["number"], card, parent),
+            )
+            return None
+        if card is None:
+            decided[index] = (
+                "held",
+                "its pull request #%d's vet does not read READY, or held only for a card on the stack sheet of #%d, at its current head %s"
+                % (pr["number"], parent, pr["head"]),
+            )
+            return None
+        form = "stack-card"
+    stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"])
+    return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position}
+
+
+def _judge_with_premise(layers, premise, decided):
+    """Step 10 with a premise: accept a layer only as the launch's own stack's lower layer or its one dependency."""
+    required = None
+    if "stack" in premise and "layerPosition" in premise:
+        want, floor = premise["stack"], premise["layerPosition"]
+        for index, layer in layers:
+            n = layer["pr"]
+            # axis: a layer counts only in the launch's own stack and below the launch's position — see bite-proof record wo_2652_stack_layer_blockers
+            if layer["stack"] is None:
+                decided[index] = ("held", "its pull request #%d is in no stack" % n)
+            elif layer["stack"] != want:
+                decided[index] = (
+                    "held", "its pull request #%d is in stack %d, not the launch's stack %d" % (n, layer["stack"], want)
+                )
+            elif layer["position"] >= floor:
+                decided[index] = (
+                    "held",
+                    "its pull request #%d is at position %d, not below the launch's position %d"
+                    % (n, layer["position"], floor),
+                )
+            else:
+                decided[index] = ("accepted", dict(layer, stack=want))
+        return required, want
+    if "dependency" in premise:
+        dep = premise["dependency"]
+        for index, layer in layers:
+            n = layer["pr"]
+            # axis: without a launch stack only the launch's one named dependency, in no stack, is a lower layer — see bite-proof record wo_2652_stack_layer_blockers
+            if n != dep:
+                decided[index] = ("held", "its pull request #%d is not the launch's dependency #%d" % (n, dep))
+            elif layer["stack"] is not None:
+                decided[index] = (
+                    "held",
+                    "its pull request #%d is in stack %d; the launch premise must name that stack" % (n, layer["stack"]),
+                )
+            else:
+                decided[index] = ("accepted", dict(layer, stack=None))
+                required = n
+        return required, None
+    for index, _layer in layers:
+        decided[index] = (
+            "held", "the launch premise names no stack and no dependency, so this launch is not a stack layer"
+        )
+    return required, None
+
+
+def _judge_without_premise(layers, decided):
+    """Step 10 with no premise (build-ready): the lower layers must share one stack, or be one unstacked layer."""
+    stacks = sorted({layer["stack"] for _index, layer in layers if layer["stack"] is not None})
+    # axis: lower layers in more than one stack are never one stack's layers — see bite-proof record wo_2652_stack_layer_blockers
+    if len(stacks) > 1:
+        why = "the lower layers sit in more than one stack (%s)" % ", ".join(str(s) for s in stacks)
+        for index, _layer in layers:
+            decided[index] = ("held", why)
+        return None, None
+    if stacks:
+        for index, layer in layers:
+            if layer["stack"] is None:
+                decided[index] = (
+                    "held",
+                    "its pull request #%d is in no stack, while the other lower layers are in stack %d"
+                    % (layer["pr"], stacks[0]),
+                )
+            else:
+                decided[index] = ("accepted", layer)
+        return None, stacks[0]
+    if len(layers) == 1:
+        index, layer = layers[0]
+        decided[index] = ("accepted", layer)
+        return layer["pr"], None
+    for index, _layer in layers:
+        decided[index] = (
+            "held",
+            "more than one lower layer has a pull request but no stack is linked; a launch can depend on only one",
+        )
+    return None, None
+
+
+def judge_open_blockers(open_rows, issue, repo, run, premise=None, membership_reader=None):
+    """Judge every open native blocker of `repo`#`issue`: accepted as a lower layer of the same stack, or held.
+
+    `open_rows` are `read_blockers` rows; `run` is a `subprocess.run`-shaped callable; `premise` is the launch's
+    {stack, layerPosition, dependency} (None for the build-ready check); `membership_reader` defaults to
+    `stack_check.read_membership`. Returns the full blockers dict: every row ends in exactly one of `accepted` or
+    `held`, and a read that cannot complete returns the unreadable shape (checked False)."""
+    if membership_reader is None:
+        membership_reader = stack_check.read_membership
+    try:
+        return _judge(open_rows, issue, repo, run, premise, membership_reader)
+    except _Unreadable as exc:
+        return _blockers_dict(False, [], str(exc))
+
+
+def _judge(open_rows, issue, repo, run, premise, membership_reader):
+    decided = {}
+    live = []
+    for index, row in enumerate(open_rows):
+        # axis: a blocker in another repository is never a layer of this repository's stack — see bite-proof record wo_2652_stack_layer_blockers
+        if row["ref"].rsplit("#", 1)[0] != repo:
+            decided[index] = ("held", "it is in another repository, so it is not a layer of this stack")
+        else:
+            live.append(index)
+    required, stack = None, None
+    if live:
+        parent = _read_parent_number(run, repo, issue)
+        if parent is None:
+            for index in live:
+                decided[index] = ("held", "this issue is not a sub-issue of a feature, so it is not a stack layer")
+            live = []
+    if live:
+        siblings = _read_sibling_refs(run, repo, parent)
+        own = "%s#%d" % (repo, issue)
+        # axis: the blocked issue must itself be listed under its parent, or the order of layers is unknown — see bite-proof record wo_2652_stack_layer_blockers
+        if own not in siblings:
+            raise _Unreadable("the sub-issue list of #%d does not list #%d" % (parent, issue))
+        own_at = siblings.index(own)
+        still = []
+        for index in live:
+            ref = open_rows[index]["ref"]
+            if ref not in siblings:
+                decided[index] = ("held", "it is not a sub-issue of #%d, so it is not a layer of this stack" % parent)
+            # axis: a blocker listed at or after the blocked issue is not a lower layer — see bite-proof record wo_2652_stack_layer_blockers
+            elif siblings.index(ref) >= own_at:
+                decided[index] = ("held", "it is listed after this issue under #%d, so it is not a lower layer" % parent)
+            else:
+                still.append(index)
+        live = still
+    if live:
+        pulls = _read_open_prs(run, repo)
+        layers = []
+        for index in live:
+            number = int(open_rows[index]["ref"].rsplit("#", 1)[1])
+            layer = _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index)
+            if layer is not None:
+                layers.append((index, layer))
+        if premise is not None:
+            required, stack = _judge_with_premise(layers, premise, decided)
+        else:
+            required, stack = _judge_without_premise(layers, decided)
+    accepted, held = [], []
+    for index, row in enumerate(open_rows):
+        kind, detail = decided.get(index, ("held", "it could not be judged as a lower layer"))
+        if kind == "accepted":
+            accepted.append(_accepted_row(row, detail))
+        else:
+            held.append(_held_row(row, detail))
+    return _blockers_dict(True, open_rows, None, accepted, held, required, stack)
+
+
+def read_premise(path):
+    """(premise, detail): the launch premise's `stack`, `layerPosition` and `dependency`, or None and why not."""
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+    except (OSError, ValueError):
+        return None, "--premise %s could not be read as UTF-8 text" % path
+
+    def no_duplicates(pairs):
+        keys = [key for key, _value in pairs]
+        # axis: a premise object with a repeated key is ambiguous and refuses — see bite-proof record wo_2652_stack_layer_blockers
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate key")
+        return dict(pairs)
+
+    try:
+        data = json.loads(text, object_pairs_hook=no_duplicates)
+    except ValueError:
+        return None, "--premise %s is not JSON with unique keys" % path
+    if not isinstance(data, dict):
+        return None, "--premise %s is not a JSON object" % path
+    # axis: stack and layerPosition go together — exactly one given is a refusal — see bite-proof record wo_2652_stack_layer_blockers
+    if ("stack" in data) != ("layerPosition" in data):
+        return None, "--premise %s has stack without layerPosition or the reverse" % path
+    premise = {}
+    for key in _PREMISE_KEYS:
+        if key in data:
+            value = data[key]
+            # axis: stack, layerPosition and dependency must each be a positive int (a bool is not) — see bite-proof record wo_2652_stack_layer_blockers
+            if not _is_int(value) or value < 1:
+                return None, "--premise %s: %s is not a positive integer" % (path, key)
+            premise[key] = value
+    return premise, None
+
+
+def read_judged_blockers(issue, repo, run, premise=None, membership_reader=None):
+    """`read_blockers`, then `judge_open_blockers` over its open rows: the one reader both CLI verbs use."""
+    blockers = read_blockers(issue, repo, run)
+    if not blockers["checked"] or not blockers["open"]:
+        return blockers
+    return judge_open_blockers(blockers["open"], issue, repo, run, premise, membership_reader)
+
+
 def _blockers_verdict(blockers):
-    """(ok, reason) for a blockers read: unreadable, else open, else ok. The one home of this decision."""
+    """(ok, reason) for a blockers read: unreadable, else a held blocker, else ok. The one home of this decision."""
     # axis: an unread or malformed edge list refuses — never read as no blockers.
     if not blockers["checked"]:
         return False, REFUSAL_BLOCKERS_UNREADABLE
-    # axis: any open native blocker refuses the marking.
-    if blockers["open"]:
+    # axis: any open native blocker the judge did not accept as a lower layer refuses the marking — see bite-proof record wo_2652_stack_layer_blockers
+    if blockers["held"]:
         return False, REFUSAL_BLOCKER_OPEN
     return True, None
 
@@ -388,10 +845,10 @@ def _apply_blockers(result, blockers):
     return result
 
 
-def check_build_ready_with_blockers(body, issue, repo, run):
+def check_build_ready_with_blockers(body, issue, repo, run, membership_reader=None):
     """Body check plus the issue's native blocker edges; ok only when both clear."""
     result = check_build_ready(body)
-    return _apply_blockers(result, read_blockers(issue, repo, run))
+    return _apply_blockers(result, read_judged_blockers(issue, repo, run, None, membership_reader))
 
 
 def _fail_closed_unreadable_body():
@@ -436,7 +893,7 @@ def _blockers_refusal(detail):
     return _blockers_dict(False, [], detail)
 
 
-def main(argv=None, run=None):
+def main(argv=None, run=None, membership_reader=None):
     run = subprocess.run if run is None else run
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -454,14 +911,22 @@ def main(argv=None, run=None):
     )
     b.add_argument("--issue", default=None, help="issue number")
     b.add_argument("--repo", default=None, help="owner/name of the issue")
+    b.add_argument(
+        "--premise", default=None,
+        help="the launch's premise JSON: judges each open blocker as a layer of the launch's stack",
+    )
     args = p.parse_args(argv)
 
     if args.cmd == "check-blockers":
         number, repo, detail = _parse_edge_args(args.issue, args.repo)
+        premise = None
+        if detail is None and args.premise is not None:
+            # axis: a premise file that cannot be read or is malformed refuses before any gh call — see bite-proof record wo_2652_stack_layer_blockers
+            premise, detail = read_premise(args.premise)
         if detail is not None:
             blockers = _blockers_refusal(detail)
         else:
-            blockers = read_blockers(number, repo, run)
+            blockers = read_judged_blockers(number, repo, run, premise, membership_reader)
         ok, reason = _blockers_verdict(blockers)
         _emit({"ok": ok, "reason": reason, "blockers": blockers, "advisory": True})
         return 0
@@ -476,7 +941,7 @@ def main(argv=None, run=None):
         if detail is not None:
             result = _apply_blockers(check_build_ready(body), _blockers_refusal(detail))
         else:
-            result = check_build_ready_with_blockers(body, number, repo, run)
+            result = check_build_ready_with_blockers(body, number, repo, run, membership_reader)
     _emit(result)
     # Exit 0 always: the JSON result is the product; a non-zero exit would let a caller
     # treat a refusal as a crash. The advisor reads ok/reason, not the exit code.

@@ -7644,6 +7644,118 @@ def test_dependency_gate_ready_base_match_passes(tmp_path, monkeypatch):
         "dependency": 701,
         "dependencyHead": head,
         "verdict": L.stack_check.VERDICT_READY,
+        "form": "ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def _card_vet_body(head_sha, parent=656):
+    return (
+        _VET_MARKER + "\n**Verdict: PARKED** · " + head_sha + " "
+        + L.issue_contract.STACK_CARD_QUALIFIER + str(parent)
+    )
+
+
+def test_dependency_gate_stack_card_base_match_passes(tmp_path, monkeypatch):
+  # axis: a card-marked dependency with matching base passes an applied gate of form stack-card
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, _card_vet_body(head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": True,
+        "dependency": 701,
+        "dependencyHead": head,
+        "verdict": L.stack_check.VERDICT_PARKED,
+        "form": "stack-card",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_stack_card_base_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: a card-marked dependency with a different base refuses dependency-open-ready-pr — see bite-proof record wo_2652_stack_layer_blockers
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    dep_head = "a" * 40
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(dep_head, _card_vet_body(dep_head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-open-ready-pr"
+    assert result["detail"] == dep_head
+
+
+def test_dependency_gate_plain_parked_passes_not_gated(tmp_path, monkeypatch):
+  # axis: a plain PARKED dependency (no card mark) still passes as dependency-not-ready
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    plain_parked = _VET_MARKER + "\n**Verdict: PARKED** · " + head
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, plain_parked), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
     }
     try:
         os.kill(result["pid"], signal.SIGTERM)

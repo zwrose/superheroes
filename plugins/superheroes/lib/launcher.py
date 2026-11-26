@@ -42,6 +42,7 @@ import engine_pref  # noqa: E402
 import git_origin  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import host_model  # noqa: E402
+import issue_contract  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import launch_place  # noqa: E402
@@ -2623,14 +2624,18 @@ def _apply_dependency_gate(
         if detail:
             out["detail"] = detail
         return out
-    # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
+    form = "ready"
     if verdict != stack_check.VERDICT_READY:
-        return {
-            "ok": True,
-            "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
-        }
+        # a dependency held only for a card on its stack's sheet, at its current head, is gated like a READY one
+        if issue_contract.stack_card_parent(pr_state["body"], pr_state["headRefOid"]) is None:
+            # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
+            return {
+                "ok": True,
+                "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
+            }
+        form = "stack-card"
     head_sha = pr_state["headRefOid"]
-    # axis: READY dependency requires base exactly equal to dependency head
+    # axis: READY or card-marked dependency requires base exactly equal to dependency head — see bite-proof record wo_2652_stack_layer_blockers
     if stack_check.same_commit(resolved_base_commit, head_sha):
         return {
             "ok": True,
@@ -2639,6 +2644,7 @@ def _apply_dependency_gate(
                 "dependency": dependency,
                 "dependencyHead": head_sha,
                 "verdict": verdict,
+                "form": form,
             },
         }
     return {

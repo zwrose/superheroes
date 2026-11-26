@@ -489,6 +489,11 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
             "required pullRequest field is missing or of the wrong type",
             repo=repo, pr=pr, pages=pages)
 
+    # axis: stackEntry is missing altogether (an explicit null is not-linked, an absent key is unreadable) — see bite-proof record wo_2652_stack_layer_blockers
+    if "stackEntry" not in pull_request:
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "stackEntry is missing", repo=repo, pr=pr, pages=pages)
+
     stack_entry = pull_request.get("stackEntry")
     # axis: stackEntry is null
     if stack_entry is None:
