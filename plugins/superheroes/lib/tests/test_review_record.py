@@ -1174,7 +1174,10 @@ if a == ["api", "repos/{{owner}}/{{repo}}", "--jq", ".full_name"]:
 elif a == ["api", "repos/o/r/pulls/7"]:
     print(json.dumps({{"head": {{"sha": head}}, "body": "Closes #9.\\nmore"}}))
 elif a == ["api", "repos/o/r/issues/9"]:
-    print(json.dumps({{"body": "intro\\n**Lane call:** light because small\\n"}}))
+    print(json.dumps({{"number": 9, "body": "intro\\n**Lane call:** light because small\\n"}}))
+elif a == ["api", "repos/o/r/issues/9/timeline?per_page=100&page=1"]:
+    print(json.dumps([{{"event": "cross-referenced", "source": {{"issue": {{
+        "number": 7, "pull_request": {{}}, "repository": {{"full_name": "o/r"}}}}}}}}]))
 elif a[0] == "api" and "/check-runs?per_page=100&page=" in a[1]:
     page = int(a[1].rsplit("page=", 1)[1])
     rows = [{{"name": "v", "status": "completed", "conclusion": "success"}}] if page == 1 else []
@@ -1215,7 +1218,15 @@ NO_CALL = "no lane call here"
 def _meta_through_the_rest_reader(monkeypatch):
     """The meta the cloud writer builds: the real REST reader over a description that closes #9 on its first line
     and #50 only below it."""
-    monkeypatch.setattr(rr, "_gh_json", lambda *args: BELOW_FIRST_LINE_PR)
+    def gh_json(*args):
+        path = args[-1]
+        return BELOW_FIRST_LINE_PR if path.endswith("/pulls/7") else {"number": int(path.rsplit("/", 1)[1])}
+
+    # GitHub records both issues as linked from PR 7 of o/r
+    cross_reference = {"event": "cross-referenced",
+                       "source": {"issue": {"number": 7, "pull_request": {}, "repository": {"full_name": "o/r"}}}}
+    monkeypatch.setattr(rr, "_gh_json", gh_json)
+    monkeypatch.setattr(rr, "_read_pages", lambda path, key=None: [cross_reference])
     meta = rr._pr_meta_rest(7, "o/r")
     assert meta["issues"] == [9, 50]
     assert meta["laneIssues"] == [9]
