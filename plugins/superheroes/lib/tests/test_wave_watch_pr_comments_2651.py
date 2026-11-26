@@ -67,6 +67,17 @@ class _PrGh(_NoteGh):
         return super().__call__(argv, **kwargs)
 
 
+def _as_pr(comment):
+    """The comment as GitHub serves one on a pull request: its html_url is the PR's `/pull/<n>` page, while its
+    issue_url still ends `/issues/<n>`."""
+    number = int(comment["issue_url"].rsplit("/", 1)[1])
+    return dict(comment, html_url="https://github.com/%s/pull/%d#issuecomment-%d" % (_SLUG, number, comment["id"]))
+
+
+def _pr_comment(comment_id, pr, body=_NOTE_BODY, *, age=_FRESH):
+    return _as_pr(_comment(comment_id, pr, body, age=age))
+
+
 def _only_launch(result):
     assert result["event"] == ww.EVENT_LANE_TERMINAL, result
     [launch] = result["launches"]
@@ -105,20 +116,20 @@ def _failed(argv=()):
 
 def test_row1_a_handback_on_the_lanes_pr_is_lane_terminal_for_the_lane(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
     launch = _only_launch(_arm(repo, gh))
     assert launch["launchId"] == "cloud-a"
     assert launch["state"] == "handback"
     assert launch["issue"] == 101
     assert launch["pr"] == 501
     assert launch["commentId"] == 7
-    assert launch["url"].endswith("/issues/501#issuecomment-7")
+    assert launch["url"].endswith("/pull/501#issuecomment-7")
     assert gh.pr_reads == [501]
 
 
 def test_row2_a_builder_note_on_the_lanes_pr_is_the_lanes_note(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501)], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
+    gh = _PrGh([_pr_comment(7, 501)], prs={501: _pr(501, "Closes #101.\n\nThe work.")})
     result = _arm(repo, gh)
     assert result["event"] == ww.EVENT_BUILDER_NOTE
     assert result["launchId"] == "cloud-a"
@@ -126,7 +137,7 @@ def test_row2_a_builder_note_on_the_lanes_pr_is_the_lanes_note(repo):
     assert note["issue"] == 101
     assert note["pr"] == 501
     assert note["commentId"] == 7
-    assert note["url"].endswith("/issues/501#issuecomment-7")
+    assert note["url"].endswith("/pull/501#issuecomment-7")
 
 
 def test_an_issue_comment_entry_carries_no_pr_key(repo):
@@ -140,7 +151,7 @@ def test_an_issue_comment_entry_carries_no_pr_key(repo):
 
 def test_row3_a_handback_on_a_pr_that_closes_only_an_unwatched_issue_is_no_lanes(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: _pr(501, "Closes #999.")})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, "Closes #999.")})
     # One tick: a multi-tick arm reports builder-note-unavailable on its last tick for want of budget, with or without a PR.
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] == ww.EVENT_TIMER
@@ -149,15 +160,30 @@ def test_row3_a_handback_on_a_pr_that_closes_only_an_unwatched_issue_is_no_lanes
     assert gh.pr_reads == [501]
 
 
-def test_row9_a_handback_on_a_plain_issue_is_no_lanes_and_not_disclosed(repo):
+def test_row9_a_handback_on_a_plain_issue_causes_no_read_and_no_disclosure(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    plain = {"number": 777, "body": "Closes #101.", "title": "an issue, not a pull request"}
-    gh = _PrGh([_comment(7, 777, _body("handback"))], prs={777: plain})
+    # A plain issue's comment has an `/issues/` html_url; reading 777 would fail here, so a read would be disclosed.
+    gh = _PrGh([_comment(7, 777, _body("handback"))], prs={777: _failed()})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] == ww.EVENT_TIMER
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
     assert "unreadIssues" not in result
-    assert gh.pr_reads == [777]
+    assert gh.pr_reads == []
+    assert not [argv for argv in gh.calls if argv[-1:] == [_PR_PATH % (_SLUG, 777)]]
+
+
+def test_a_pr_comment_whose_page_number_differs_from_its_issue_number_is_no_candidate(repo):
+    _cloud_lane(repo, "cloud-a", 101)
+    odd = dict(
+        _pr_comment(7, 501, _body("handback")),
+        html_url="https://github.com/%s/pull/502#issuecomment-7" % _SLUG,
+    )
+    gh = _PrGh([odd], prs={501: _pr(501, "Closes #101."), 502: _pr(502, "Closes #101.")})
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
+    assert gh.pr_reads == []
+    assert ww._pr_candidate(odd, {101}, 0.0) is None
 
 
 # --- row 4: the started-at cutoff applies to the PR's comment ---------------------------------
@@ -166,7 +192,7 @@ def test_row9_a_handback_on_a_plain_issue_is_no_lanes_and_not_disclosed(repo):
 def test_row4_a_handback_on_the_lanes_pr_from_before_the_lane_started_is_not_reported(repo):
     _cloud_lane(repo, "cloud-a", 101, start_age=600, reserve_lead=100)
     gh = _PrGh(
-        [_comment(7, 501, _body("handback"), age=3000)], prs={501: _pr(501, "Closes #101.")},
+        [_pr_comment(7, 501, _body("handback"), age=3000)], prs={501: _pr(501, "Closes #101.")},
     )
     result = _arm(repo, gh)
     assert result["event"] == ww.EVENT_TIMER
@@ -178,7 +204,7 @@ def test_row4_a_handback_on_the_lanes_pr_from_before_the_lane_started_is_not_rep
 
 def test_row5_an_unreadable_pr_is_disclosed_and_names_the_lane(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: _failed()})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _failed()})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -188,7 +214,7 @@ def test_row5_an_unreadable_pr_is_disclosed_and_names_the_lane(repo):
 
 def test_a_pr_read_that_raises_is_disclosed_too(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: OSError("gh is gone")})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: OSError("gh is gone")})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -197,7 +223,7 @@ def test_a_pr_read_that_raises_is_disclosed_too(repo):
 
 def test_a_pr_payload_that_is_not_json_is_disclosed(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: _raw([], "<html>not json</html>")})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _raw([], "<html>not json</html>")})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -205,7 +231,7 @@ def test_a_pr_payload_that_is_not_json_is_disclosed(repo):
 
 def test_a_pr_body_that_is_not_a_string_is_disclosed(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, _body("handback"))], prs={501: _pr(501, 12345)})
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, 12345)})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -218,7 +244,7 @@ def test_row6_a_stack_upper_layers_pr_comment_is_the_upper_lanes_only(repo):
     _cloud_lane(repo, "cloud-lower", 101)
     _cloud_lane(repo, "cloud-upper", 102)
     gh = _PrGh(
-        [_comment(7, 502, _body("handback"))],
+        [_pr_comment(7, 502, _body("handback"))],
         prs={502: _pr(502, "Closes #102", base="layer-101-branch")},
     )
     result = _arm(repo, gh)
@@ -234,7 +260,7 @@ def test_row6_a_stack_upper_layers_pr_comment_is_the_upper_lanes_only(repo):
 def test_row7_a_pr_closing_two_watched_issues_is_no_lanes_and_is_disclosed(repo):
     _cloud_lane(repo, "cloud-a", 101)
     _cloud_lane(repo, "cloud-b", 102)
-    gh = _PrGh([_comment(7, 503, _body("handback"))], prs={503: _pr(503, "Closes #101\nCloses #102")})
+    gh = _PrGh([_pr_comment(7, 503, _body("handback"))], prs={503: _pr(503, "Closes #101\nCloses #102")})
     result = ww.run(repo, _BATCH, gh_run=gh)
     assert result["event"] != ww.EVENT_LANE_TERMINAL
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
@@ -248,7 +274,7 @@ def test_row7_a_pr_closing_two_watched_issues_is_no_lanes_and_is_disclosed(repo)
 
 def test_row8_a_progress_comment_on_the_lanes_pr_is_not_the_lanes_progress():
     lanes = _lanes({"cloud-a": (101, 600)})
-    gh = _PrGh([_progress(9, 501, updated_age=100)], prs={501: _pr(501, "Closes #101.")})
+    gh = _PrGh([_as_pr(_progress(9, 501, updated_age=100))], prs={501: _pr(501, "Closes #101.")})
     progress_out = [None]
     _evaluate(lanes, gh, progress_out=progress_out)
     assert progress_out[0] == {}
@@ -259,7 +285,7 @@ def test_row8_a_handover_on_the_lanes_pr_does_not_end_a_stop_on_the_issue(repo):
     _cloud_lane(repo, "cloud-a", 101)
     comments = [
         _comment(5, 101, _body("stop"), age=200),
-        _comment(6, 501, cb.handover_text("a" * 40), age=100),
+        _pr_comment(6, 501, cb.handover_text("a" * 40), age=100),
     ]
     gh = _PrGh(comments, prs={501: _pr(501, "Closes #101.")})
     launch = _only_launch(_arm(repo, gh))
@@ -275,7 +301,7 @@ def test_row8_a_handover_on_the_lanes_pr_does_not_end_a_stop_on_the_issue(repo):
 ])
 def test_row8_free_form_text_on_the_lanes_pr_is_no_lanes(repo, body):
     _cloud_lane(repo, "cloud-a", 101)
-    gh = _PrGh([_comment(7, 501, body)], prs={501: _pr(501, "Closes #101.")})
+    gh = _PrGh([_pr_comment(7, 501, body)], prs={501: _pr(501, "Closes #101.")})
     assert _arm(repo, gh)["event"] == ww.EVENT_TIMER
     assert gh.pr_reads == []
 
@@ -302,7 +328,7 @@ def _reopened_lane_and_comments(*, reopened_ago=500):
     lanes = _lanes({"cloud-a": (101, 700)}, reopenedAt=time.time() - reopened_ago)
     comments = [
         _comment(7, 101, _body("handback"), age=100),
-        _comment(8, 501, _body("handback"), age=50),
+        _pr_comment(8, 501, _body("handback"), age=50),
     ]
     return lanes, comments
 
@@ -339,7 +365,7 @@ def test_row11_an_unresolved_pr_comment_keeps_the_known_closes():
 
 def test_row12_an_answered_pr_handback_no_longer_surfaces(repo):
     _cloud_lane(repo, "cloud-a", 101)
-    comments = [_comment(7, 501, _body("handback"))]
+    comments = [_pr_comment(7, 501, _body("handback"))]
     prs = {501: _pr(501, "Closes #101.")}
     assert _only_launch(_arm(repo, _PrGh(comments, prs=prs)))["commentId"] == 7
     assert _note_answered(repo, 7)["ok"] is True
@@ -354,14 +380,16 @@ def test_a_malformed_element_is_skipped_and_the_rest_still_count(repo):
     good = _body("handback")
     broken = [
         "not a dict",
-        {**_comment(1, 501, good), "id": "1"},
-        {**_comment(2, 501, good), "id": True},
-        {k: v for k, v in _comment(3, 501, good).items() if k != "issue_url"},
-        {**_comment(4, 501, good), "created_at": "yesterday"},
-        {**_comment(5, 501, good), "body": None},
-        {**_comment(6, 501, good), "issue_url": "https://api.github.com/repos/owner/repo/pulls/501"},
+        {**_pr_comment(1, 501, good), "id": "1"},
+        {**_pr_comment(2, 501, good), "id": True},
+        {k: v for k, v in _pr_comment(3, 501, good).items() if k != "issue_url"},
+        {**_pr_comment(4, 501, good), "created_at": "yesterday"},
+        {**_pr_comment(5, 501, good), "body": None},
+        {**_pr_comment(6, 501, good), "issue_url": "https://api.github.com/repos/owner/repo/pulls/501"},
+        {k: v for k, v in _pr_comment(9, 501, good).items() if k != "html_url"},
+        {**_pr_comment(10, 501, good), "html_url": 501},
     ]
-    gh = _PrGh(broken + [_comment(8, 501, good)], prs={501: _pr(501, "Closes #101.")})
+    gh = _PrGh(broken + [_pr_comment(8, 501, good)], prs={501: _pr(501, "Closes #101.")})
     assert _only_launch(_arm(repo, gh))["commentId"] == 8
 
 
@@ -381,7 +409,7 @@ def test_pr_closing_issues_reads_this_repositorys_closing_keywords_only():
 
 def test_attribution_never_mutates_the_comments_it_is_given():
     lanes = _lanes({"cloud-a": (101, 600)})
-    comment = _comment(7, 501, _body("handback"))
+    comment = _pr_comment(7, 501, _body("handback"))
     before = dict(comment)
     comments = [comment]
     out, complete = ww._attribute_pr_comments(comments, lanes, {501: (101,)}, 0.0)

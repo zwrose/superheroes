@@ -2337,9 +2337,11 @@ def _pr_candidate(comment, watched_issues, earliest):
     """The number a comment is on when it may be a watched lane's builder note or ending posted on that lane's
     pull request, else None. Never raises.
 
-    A candidate has a valid id, a string body and issue_url ending `/issues/<n>`, a readable created time at or
-    after `earliest`, a number no watched lane has, and a body that is a builder note or whose first line is a
-    handback, stop or park header.
+    A candidate has a valid id, a string body, an issue_url ending `/issues/<n>` and an html_url ending
+    `/pull/<n>#issuecomment-<id>` with the same number (GitHub gives a comment on a pull request a `/pull/` page
+    url and a plain issue's comment an `/issues/` one, so a plain-issue comment is never a candidate), a readable
+    created time at or after `earliest`, a number no watched lane has, and a body that is a builder note or whose
+    first line is a handback, stop or park header.
     """
     try:
         if not isinstance(comment, dict):
@@ -2357,6 +2359,13 @@ def _pr_candidate(comment, watched_issues, earliest):
             return None
         number = int(match.group(1))
         if number in watched_issues:
+            return None
+        html_url = comment.get("html_url")
+        # axis: only a comment on a pull request (its html_url is a /pull/<n> page with the issue_url's number) is a candidate, so a plain issue's comment causes no read and no disclosure — see bite-proof record i2651_pr_comments.md
+        if not isinstance(html_url, str):
+            return None
+        pull = re.search(r"/pull/(\d+)#issuecomment-\d+$", html_url)
+        if pull is None or int(pull.group(1)) != number:
             return None
         # axis: only a builder note or a handback, stop or park is read onto a lane through its pull request; any other comment on one is no lane's — see bite-proof record i2651_pr_comments.md
         if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _PR_ATTRIBUTED_KINDS):
