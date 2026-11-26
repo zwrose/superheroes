@@ -471,9 +471,12 @@ comment, so a quiet tick makes no extra request. A read of it that fails or is s
 disclosed as `builder-note-unavailable` with every watched lane named in `unreadIssues`, and the closes of
 reopened lanes are then kept as on a partial read. The backstop has three limits. It does not read pull
 request review bodies or inline review comments. A resumed lane whose basis is older than the 24-hour
-shared lookback is read only from its own issue, so its pull request's comments are not read. A pull
+shared lookback is read only from its own issue: no comment on a pull request is ever attributed to it,
+even one the shared read returns because another watched lane opened it. A pull
 request the lane did not open that closes the lane's issue and carries one of these headers after the lane
-began is read as the lane's.
+began is read as the lane's. An ending the builder posted on both, with the issue copy naming the pull
+request copy on its `--also-on` line (`skills/workhorse/reference/cloud.md` § Terminal comments), is one
+ending, read from the issue; record that issue comment's id with `note-answered`.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
@@ -581,7 +584,10 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 builder note may be waiting unseen, so read the comments of every issue the event names
 (`unreadIssues`; when the event names none, every watched cloud lane's issue) through REST
 yourself, now. Read each named lane's own pull request conversation too, not only its issue. Find that
-pull request from the issue's closing pull requests when the watch could not. Answer any builder note
+pull request from the issue's closing pull requests when the watch could not; an upper stack layer's pull
+request targets the layer below, so GitHub lists no closing link for it, and you find it by searching the
+repository's pull request descriptions for the issue number
+(`gh api -X GET search/issues -f q='repo:<o>/<r> is:pr in:body <issue number>'`). Answer any builder note
 there inside the builder's 15-minute reply window
 (`rubric/review-discipline.md` § Size). Never wait for the next tick to read them.
 

@@ -386,6 +386,53 @@ def test_row12_an_answered_pr_handback_no_longer_surfaces(repo):
     assert _arm(repo, _PrGh(comments, prs=prs))["event"] == ww.EVENT_TIMER
 
 
+# --- review round 1: prose-only closing keywords, linked copies -----------------------------------
+
+
+@pytest.mark.parametrize("hidden", [
+    "<!-- Fixes #102 -->",
+    "```\nFixes #102\n```",
+    "> Fixes #102",
+])
+def test_a_closing_keyword_outside_the_prs_prose_names_no_lane(repo, hidden):
+    # axis: only a closing keyword on a prose line of the PR body names a lane; code, quotes and HTML comments do not
+    _cloud_lane(repo, "cloud-a", 101)
+    _cloud_lane(repo, "cloud-b", 102)
+    body = "Closes #101.\n\n%s\n\nThe work." % hidden
+    gh = _PrGh([_pr_comment(7, 501, _body("handback"))], prs={501: _pr(501, body)})
+    result = ww.run(repo, _BATCH, gh_run=gh)
+    launch = _only_launch(result)
+    assert launch["launchId"] == "cloud-a"
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"]
+
+
+def test_a_pr_copy_named_by_the_issue_copys_also_on_line_is_read_once_from_the_issue(repo):
+    # axis: an ending posted on the PR and on the issue with --also-on is one ending, the issue comment's
+    _cloud_lane(repo, "cloud-a", 101)
+    pr_copy = _pr_comment(7, 501, _body("handback"), age=200)
+    issue_body = cb.terminal_text("handback", "Done with the work.", also_on=pr_copy["html_url"])["comment"]
+    gh = _PrGh([pr_copy, _comment(8, 101, issue_body, age=100)], prs={501: _pr(501, "Closes #101.")})
+    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
+    assert launch["commentId"] == 8
+    assert "pr" not in launch
+    assert _note_answered(repo, 8)["ok"] is True
+    assert ww.run(repo, _BATCH, gh_run=_PrGh(
+        [pr_copy, _comment(8, 101, issue_body, age=100)], prs={501: _pr(501, "Closes #101.")},
+    ))["event"] == ww.EVENT_TIMER
+
+
+def test_a_pr_copy_not_named_by_any_issue_comment_is_still_the_lanes(repo):
+    # axis: only the copy an issue comment names is left out; any other PR ending still counts
+    _cloud_lane(repo, "cloud-a", 101)
+    other = _pr_comment(9, 501, _body("park"), age=200)
+    issue_body = cb.terminal_text(
+        "handback", "Done.", also_on="https://github.com/%s/pull/501#issuecomment-7" % _SLUG)["comment"]
+    gh = _PrGh([other, _comment(8, 101, issue_body, age=300)], prs={501: _pr(501, "Closes #101.")})
+    launch = _only_launch(ww.run(repo, _BATCH, gh_run=gh))
+    assert launch["commentId"] == 9
+    assert launch["pr"] == 501
+
+
 # --- units ---------------------------------------------------------------------------------------
 
 

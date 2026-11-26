@@ -211,6 +211,7 @@ if _LIB_DIR not in sys.path:
 import cloud_builder as cb  # noqa: E402
 import cloud_relay as cr  # noqa: E402
 import launch_ledger as ll  # noqa: E402
+import review_record as rr  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import stack_check as sc  # noqa: E402
 import store_core  # noqa: E402
@@ -2388,13 +2389,8 @@ def _pr_closing_issues(payload, slug):
         body = ""
     if not isinstance(body, str):
         return None
-    found = set()
-    for match in _CLOSING_REF_RE.finditer(body):
-        ref_number = match.group("n") or match.group("bare") or match.group("un")
-        target = match.group("slug") or match.group("uslug")
-        if target is None or target.lower() == slug.lower():
-            found.add(int(ref_number))
-    return tuple(sorted(found))
+    # axis: a closing keyword counts only on a prose line the review record's own reader keeps, never inside code, a quote or an HTML comment — see bite-proof record i2651_pr_comments.md
+    return tuple(sorted(rr.closing_issues(body, slug)))
 
 
 def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, env):
@@ -2423,13 +2419,36 @@ def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, e
     return resolved
 
 
-def _attribute_pr_comments(comments, watched, resolved, earliest):
+def _also_on_ids(comments, watched_issues):
+    """The comment ids a watched issue's comments name on their `--also-on` pointer line (`cb.ALSO_ON_LINE`): the
+    pull-request copies of an ending the builder also posted on the issue. Never raises."""
+    named = set()
+    for comment in comments:
+        body = comment.get("body") if isinstance(comment, dict) else None
+        issue_url = comment.get("issue_url") if isinstance(comment, dict) else None
+        if not isinstance(body, str) or not isinstance(issue_url, str):
+            continue
+        match = re.search(r"/issues/(\d+)$", issue_url)
+        if match is None or int(match.group(1)) not in watched_issues:
+            continue
+        for line in body.splitlines():
+            if line.startswith(cb.ALSO_ON_LINE):
+                permalink = cb.comment_permalink(line[len(cb.ALSO_ON_LINE):].strip())
+                if permalink is not None and permalink[1] == "pull":
+                    named.add(permalink[3])
+    return named
+
+
+def _attribute_pr_comments(comments, watched, resolved, earliest, issue_only=frozenset()):
     """(comments, complete): the comments with each builder note or ending on a pull request re-keyed to the one
     watched lane's issue the PR closes, as a new list; no comment dict is mutated.
 
     A re-keyed copy carries `prNumber`. `complete` is False when a candidate's PR was not read, or closes two or
-    more watched issues (no lane can be named); a PR that closes no watched issue leaves it as it was."""
+    more watched issues (no lane can be named); a PR that closes no watched issue leaves it as it was. A lane whose
+    issue is in `issue_only` (a resumed lane read from its own issue) never takes a pull-request comment, and a
+    pull-request copy an issue comment names on its `--also-on` line is that issue comment's, so it is left out."""
     watched_issues = {info["issue"] for info in watched.values()}
+    linked = _also_on_ids(comments, watched_issues)
     attributed = []
     complete = True
     for comment in comments:
@@ -2437,11 +2456,16 @@ def _attribute_pr_comments(comments, watched, resolved, earliest):
         if number is None or number not in resolved:
             attributed.append(comment)
             continue
+        # axis: a pull-request copy the issue copy names on its --also-on line is one ending with it, read once, from the issue — see bite-proof record i2651_pr_comments.md
+        if comment.get("id") in linked:
+            attributed.append(comment)
+            continue
         if resolved[number] is None:
             complete = False
             attributed.append(comment)
             continue
-        hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
+        # axis: a resumed lane read only from its own issue never takes a pull-request comment, whichever read returned it — see bite-proof record i2651_pr_comments.md
+        hits = sorted({issue for issue in resolved[number] if issue in watched_issues and issue not in issue_only})
         if len(hits) == 1:
             # axis: a note or ending on a pull request that closes exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
             issue_url = re.sub(r"/issues/\d+$", "/issues/%d" % hits[0], comment["issue_url"])
@@ -2562,7 +2586,10 @@ def _evaluate_cloud_comments(
             resolved = _read_candidate_prs(candidates, pr_slug, repo_root, deadline, monotonic, gh_run, env)
         else:
             resolved = {n: None for n in candidates}
-        comments, pr_complete = _attribute_pr_comments(comments, watched, resolved, earliest)
+        comments, pr_complete = _attribute_pr_comments(
+            comments, watched, resolved, earliest,
+            issue_only=frozenset(info["issue"] for info in old_dormant.values()),
+        )
     if not pr_complete:
         # axis: a note or ending on a pull request the watch could not attribute to one lane is disclosed and names every watched lane, never read as no note — see bite-proof record i2651_pr_comments.md
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
