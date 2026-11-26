@@ -37,6 +37,7 @@ Check these in a consuming project when it adopts 0.52.1. Each step names the no
 
 - **After switching.** Nothing is owed by a caller: a review that hands back only for the owner's choices now writes a record that reads `awaits-owner` with no withheld-certificate line, so the merge sheet asks no separate go-ahead for it; the record account's `uncertified` entry and the driver's certification gain optional keys. See [Review record: an owner-choice-only hand-back keeps its certificate](#review-record-an-owner-choice-only-hand-back-keeps-its-certificate).
 - **After switching.** Nothing is owed by a caller: a review record for an owner-choice-only hand-back whose waiting findings the owner has all ruled on now reads `reviewed` when it is written again with those rulings, so the merge sheet asks no separate go-ahead over the withheld certificate. See [Review record: a fully ruled owner-choice hand-back reads reviewed](#review-record-a-fully-ruled-owner-choice-hand-back-reads-reviewed).
+- **After switching.** A caller that reads why a decision a finding cites is not on record reads the finding's new optional `decisionNotOnRecord` key: the writer no longer adds that warning to the finding's `reason`. See [Review record: the not-on-record warning moves to its own field](#review-record-the-not-on-record-warning-moves-to-its-own-field).
 
 ### Review record: an owner-choice-only hand-back keeps its certificate
 
@@ -49,6 +50,13 @@ Check these in a consuming project when it adopts 0.52.1. Each step names the no
 - **The change.** A record whose session handed back `handed-back` / `owner-choice-open` with the driver's `ownerChoiceOnly` stamp, written again after the owner's rulings were recorded in `ownerRulings`, leaves the withheld-certificate line out when every finding the session left for the owner now reads `ruling` through a resolving owner-ruling citation and every other finding keeps the outcome the session gave it. A Minor or Nit listed for the merge verdict and left as `left-for-owner` needs no ruling; one with no outcome still keeps the line. It reads `reviewed` when nothing else is open. Before, the line came back once nothing waited.
 - **Still withheld.** A finding the session left for the owner that the record settles another way (a carried check, a scope ruling, the advisor's bound), any other outcome that changed when the record was written, a finding with no outcome, every other hand-back kind and terminal, and a hand-written account's entry.
 - Nothing is added, removed or renamed in the account, the extras or the record.
+
+### Review record: the not-on-record warning moves to its own field
+
+- **The change.** When the record writer finds that a decision a finding cites is not on record, the finding stays or becomes `left-for-owner`, keeps its reason as it was, and carries the failure in a new optional key, `findings[].decisionNotOnRecord`, a non-blank string. Before, the warning ("the cited decision is not on record: ...") was added to the reason, and a ruling that later resolved kept those stale words. A ruling that resolves now reads clean, and the writer drops the key from any finding whose outcome is no longer `left-for-owner`.
+- **Who reads it.** The PR sheet shows the key's text after the reason only for a finding listed for the merge verdict; an owner card shows only the context its author writes, so read `decisionNotOnRecord` when you write that card. A caller that looked for the warning inside `reason` reads the key instead. The account validator refuses the key when it is not a non-blank string.
+- **Earlier records.** A finding stamped by an earlier version keeps its words in `reason`; nothing rewrites them.
+- Nothing is removed or renamed.
 
 ## 0.52.0
 
