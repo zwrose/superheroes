@@ -2538,6 +2538,19 @@ def _apply_stack_gate(
     return {"ok": True, "stackGate": stack_gate}
 
 
+def _preflight_accepted_form(preflight_checks, dependency):
+    """The form preflight's base-state check accepted `dependency` in, read from its evidence (check-blockers'
+    accepted rows as JSON), or None when the evidence records no acceptance of it."""
+    entry = next((c for c in preflight_checks or () if c.get("id") == "base-state"), None)
+    try:
+        rows = json.loads(entry["evidence"]) if entry is not None and entry["evidence"] else None
+    except ValueError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    return next((row.get("form") for row in rows if isinstance(row, dict) and row.get("pr") == dependency), None)
+
+
 def _apply_dependency_gate(
     stamped_premise,
     resolved_base_commit,
@@ -2545,8 +2558,12 @@ def _apply_dependency_gate(
     env,
     pr_vet_reader,
     deadline=None,
+    accepted_form=None,
 ):
-    """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing."""
+    """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing.
+
+    `accepted_form` is the form ("ready" or "stack-card") preflight's base-state check accepted the dependency in,
+    or None when it did not record one; an accepted dependency must still hold at launch."""
     dependency = stamped_premise["dependency"]
     if deadline is not None and time.monotonic() >= deadline:
         return {"ok": False, "reason": "dependency-read-unavailable"}
@@ -2609,8 +2626,16 @@ def _apply_dependency_gate(
             "reason": "dependency-read-unavailable",
             "detail": pr_lifecycle,
         }
-    # axis: draft dependency is work in flight — verdict is not consulted
+    # a dependency preflight accepted that no longer holds at its current head refuses, never passes ungated
+    lapsed = None if accepted_form is None else {
+        "ok": False,
+        "reason": "dependency-card-stale" if accepted_form == "stack-card" else "dependency-open-ready-pr",
+        "detail": pr_state["headRefOid"],
+    }
+    # axis: draft dependency is work in flight — verdict is not consulted, unless preflight accepted it as a layer — see bite-proof record wo_2652_stack_layer_blockers
     if pr_state.get("isDraft"):
+        if lapsed is not None:
+            return lapsed
         return {
             "ok": True,
             "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
@@ -2635,6 +2660,9 @@ def _apply_dependency_gate(
                     "reason": "dependency-card-stale",
                     "detail": pr_state["headRefOid"],
                 }
+            # axis: a withdrawn card or a READY line left at an older head lapses a preflight acceptance — see bite-proof record wo_2652_stack_layer_blockers
+            if lapsed is not None:
+                return lapsed
             # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
             return {
                 "ok": True,
@@ -4470,6 +4498,7 @@ def _check_premises(
             env,
             pr_vet_reader,
             deadline=deadline,
+            accepted_form=_preflight_accepted_form(preflight_result["checks"], stamped_premise["dependency"]),
         )
         if not gate_result["ok"]:
             extra = {}

@@ -21,7 +21,7 @@ def test_card_dependency_head_move_refuses_before_worktree_creation(tmp_path, mo
     blockers = issue_contract.read_judged_blockers(
         7, "acme/widgets", _world(prs=[row]),
         premise={"dependency": dependency},
-        membership_reader=_Members({dependency: dict(NOT_LINKED, queried={"headRefOid": old_head})}),
+        membership_reader=_Members({dependency: NOT_LINKED}),
     )
     assert blockers["checked"] is True
     assert blockers["held"] == []

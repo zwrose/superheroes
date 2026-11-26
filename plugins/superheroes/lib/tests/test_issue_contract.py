@@ -934,12 +934,16 @@ class _Members:
         self.calls.append(pr)
         result = self.table[pr]
         queried = result.get("queried") if isinstance(result, dict) else None
-        # A real ok or not-linked membership read names the head it read; default it to the PR row's default head.
+        # A real ok or not-linked membership read names the head it read; default it to the head the world's
+        # open-PR list serves for that PR (the PR row's default head when the world lists none).
+        listed = json.loads(run.responses.get(PULLS, (0, "[]"))[1]) if isinstance(run, _FakeRun) else []
+        head = next((row["head"]["sha"] for row in listed if isinstance(row, dict) and row.get("number") == pr
+                     and isinstance(row.get("head"), dict)), _head(pr))
         if isinstance(result, dict) and result.get("ok") is True and isinstance(queried, dict) \
                 and "headRefOid" not in queried:
-            result = dict(result, queried=dict(queried, headRefOid=_head(pr)))
-        if isinstance(result, dict) and result.get("reason") == "not-linked" and queried is None:
-            result = dict(result, queried={"headRefOid": _head(pr)})
+            result = dict(result, queried=dict(queried, headRefOid=head))
+        if isinstance(result, dict) and result.get("reason") == ic.stack_check.REASON_NOT_LINKED and queried is None:
+            result = dict(result, queried={"headRefOid": head})
         return result
 
 
