@@ -1094,6 +1094,8 @@ def test_first_line_means_the_first_non_empty_line(tmp_path, capsys):
     "Closes #12\nPart of #50. See [plan](plan.md).",
     "Closes #12 <!-- note --> after",
     "- Closes #12",
+    # axis: a complete close beside a closed code span, before a comment closing later, or beside one $ counts
+    "Closes #12 `code`", "Closes #12 <!-- a note\nthat ends here -->", "Closes #12. Saves $10 per run.",
 ])
 def test_first_line_is_read_alone_so_later_markdown_cannot_hide_its_close(tmp_path, capsys, opening):
     body = opening + "\n\n" + _vet("READY", _head(101))
@@ -1105,7 +1107,7 @@ def test_first_line_is_read_alone_so_later_markdown_cannot_hide_its_close(tmp_pa
     "`Closes #12`", "> Closes #12", "    Closes #12", "<!-- x\nCloses #12 -->", "Done <!-- Closes #12",
     "Done `x\nCloses #12`", "<details>Closes #12</details>",
     # axis: markup left on the line (code, a list-nested quote, a link title, an attribute, tab indent) holds
-    "Closes #12 `code`", "Closes `x` #12", "- > Closes #12", '[plan](plan.md "Closes #12")',
+    "-     Closes #12", "Closes `x` #12", "- > Closes #12", '[plan](plan.md "Closes #12")',
     '<a title="Closes #12">x</a>', " \tCloses #12", "Closes <!-- x --> #12", "$Closes #12$",
 ])
 def test_first_line_close_in_code_quote_comment_or_html_closes_nothing(tmp_path, capsys, opening):

@@ -983,9 +983,10 @@ def walk_preflight(
             "class": check_class,
             "state": state,
             "reason": reason,
-            # base-state's accepted-rows array may arrive as JSON itself; it is kept as its JSON text, never dropped
+            # base-state evidence given as JSON itself (the accepted-rows array, or anything else) is kept as its JSON
+            # text, never dropped, so the launch's acceptance reader sees and judges it
             "evidence": entry["evidence"] if isinstance(entry.get("evidence"), str) else (
-                json.dumps(entry["evidence"]) if check_id == "base-state" and isinstance(entry.get("evidence"), list)
+                json.dumps(entry["evidence"]) if check_id == "base-state" and entry.get("evidence") is not None
                 else ""),
         }
         if state == "fail":
@@ -2553,7 +2554,10 @@ def _preflight_accepted(preflight_checks, dependency):
     except ValueError:
         rows = None
     # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted" — see bite-proof record wo_2652_stack_layer_blockers
-    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) and ll.is_positive_premise_int(row.get("pr")) and isinstance(row.get("form"), str)
+        for row in rows
+    ):
         return False
     return next((row for row in rows if row.get("pr") == dependency), None)
 
@@ -2643,9 +2647,9 @@ def _apply_dependency_gate(
         lapsed = None if accepted is None else {
             "ok": False, "reason": "dependency-acceptance-lapsed", "detail": head_sha,
         }
-    # axis: draft dependency is work in flight — verdict is not consulted, unless its acceptance lapsed — see bite-proof record wo_2652_stack_layer_blockers
+    # axis: draft dependency is work in flight — verdict is not consulted, unless preflight accepted it — see bite-proof record wo_2652_stack_layer_blockers
     if pr_state.get("isDraft"):
-        if lapsed is not None:
+        if accepted is not None:
             return lapsed
         return {
             "ok": True,

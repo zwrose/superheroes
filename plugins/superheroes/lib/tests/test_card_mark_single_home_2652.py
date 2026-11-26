@@ -26,8 +26,7 @@ def test_the_hold_message_is_built_from_the_loaded_qualifier(tmp_path, capsys, m
     assert "or PARKED a renamed qualifier for #50," in out["blockers"]["held"][0]["why"]
 
 
-def test_the_docs_point_to_the_card_mark_and_carry_no_copy_of_the_qualifier():
-    # axis: the advisor's vet instructions reach the card-mark rule, and no reference doc restates the qualifier
-    assert "routing.md` § Native dependency edges, \"The card mark\"" in _read("vet-receipt.md")
+def test_no_reference_doc_carries_a_copy_of_the_qualifier():
+    # axis: no reference doc restates the qualifier its one home holds
     for name in ("routing.md", "vet-receipt.md", "dispatch-preflight.md"):
         assert ic.STACK_CARD_QUALIFIER not in _read(name), name

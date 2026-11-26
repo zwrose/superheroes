@@ -91,6 +91,8 @@ def _load_stack_card_qualifier():
 STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->")
+_CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+_LIST_MARKER_RE = re.compile(r"^[ ]{0,3}(?:[-+*]|[0-9]{1,9}[.)])[ ]")
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
 SLOT_STATUS_MISSING = "missing"
@@ -576,18 +578,22 @@ def _read_open_prs(run, repo):
 def _first_prose_line(body):
     """The body's first non-empty line, read from that line alone, when it is plain prose; else None.
 
-    An HTML comment closed on the line is dropped, as GitHub hides it, and leaves a break no reference can span.
-    Any other markup left on the line (a code span, a link, raw HTML, a quote, math, an escape, or an indented
-    or fenced code line) makes it not plain prose, so a closing keyword there counts for nothing and the blocker
-    holds. Later Markdown never changes the reading."""
+    An HTML comment or code span closed on the line is dropped and leaves a break no reference can span; the line
+    ends at a comment or backtick left open on it, which a later line could close. Any other markup left (a link,
+    raw HTML, a quote, math, an escape, or indented code, nested in a list item or not, or a fence) makes it not
+    plain prose, so a closing keyword there counts for nothing and the blocker holds. Over-holding a layer only
+    keeps it waiting. Later Markdown never changes the reading."""
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     line = next((line for line in lines if line.strip()), None)
     if line is None:
         return None
-    text = _HTML_COMMENT_RE.sub("\x00", line)
-    indent = text[:len(text) - len(text.lstrip())]
-    # axis: only a plain first line can carry the closing reference; any markup on it holds the blocker — see bite-proof record wo_2652_stack_layer_blockers
-    if "\t" in indent or len(indent) >= 4 or any(mark in text for mark in "`<>[]\\$") or text.lstrip().startswith("~~~"):
+    text = _HTML_COMMENT_RE.sub("\x00", line).split("<!--", 1)[0]
+    text = _CODE_SPAN_RE.sub("\x00", text).split("`", 1)[0]
+    item = _LIST_MARKER_RE.sub("", text, count=1)
+    indents = [part[:len(part) - len(part.lstrip())] for part in (text, item)]
+    # axis: only a plain first line can carry the closing reference; any markup left on it holds the blocker — see bite-proof record wo_2652_stack_layer_blockers
+    if any("\t" in indent or len(indent) >= 4 for indent in indents) or any(mark in text for mark in "<>[]\\") \
+            or text.count("$") >= 2 or text.lstrip().startswith("~~~"):
         return None
     return text.strip() or None
 
