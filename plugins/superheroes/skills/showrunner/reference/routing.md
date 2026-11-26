@@ -83,9 +83,64 @@ launchable, in a wave plan), the advisor reads its native `blocked_by` edges, th
 `issue_contract.py check-build-ready --issue --repo` or `check-blockers`. This holds for the
 sub-issues of an epic and for each layer of a stack too, each read on its own issue.
 
-Any open blocker is named in the recommendation (its reference and title), and the issue is not
-called launchable while it is open. A read that fails is not "no blockers": the advisor says the
-edges could not be read and does not call the issue launchable.
+**An open blocker holds the issue, unless it is a lower layer of the same stack that is ready to
+build on.** The advisor names each held blocker in the recommendation (its reference and title) and
+does not call the issue launchable while one holds. An issue whose only open blockers are lower
+layers of the same stack is launchable at once, as a stack layer on the layer below. A lower layer
+is accepted when it is handed back as a pull request whose vet reads READY at its current head, or
+when it is held only for an owner card that rides the same stack's merge sheet. Any other open
+blocker still holds the issue. One helper in `lib/issue_contract.py` (`judge_open_blockers`) decides
+it, and `check-build-ready --issue --repo`, `check-blockers` and the launch's base-state check
+(`dispatch-preflight.md`, check 2) all reach it.
+
+A blocker is a **lower layer of the same stack** when all of these hold:
+
+1. It is in the same repository.
+2. It is a sub-issue of the same feature issue as the blocked issue, listed before it in that
+   feature's sub-issue list (`native-stacks.md` § Each layer is a sub-issue).
+3. It has exactly one open pull request whose first line closes it (`native-stacks.md`, item 6).
+   That pull request is the one read. READY is never read from the issue itself.
+4. That pull request is not a draft.
+5. Its vet reads READY at the pull request's current head, or carries the card mark below at that
+   head.
+6. Its pull request is in the launch's stack below the launch's `layerPosition` (a premise with
+   `stack`). When the stack does not exist yet, it is the launch premise's `dependency` and in no
+   stack (a premise with only `dependency`). A premise naming neither a stack nor a dependency holds
+   every open blocker.
+
+With no premise (the build-ready marking), the lower layers must all sit in one stack. When none
+sits in a stack yet, exactly one may, and the result names its pull request as `requiredDependency`.
+The launch premise must then name that pull request as its `dependency`, so the launcher's
+dependency gate pins the base to that pull request's head.
+
+**The card mark** is durable and never guessed. The lower layer's vet slot has a verdict line that
+reads `**Verdict: PARKED** · <its current head sha> held only for a card on the stack sheet of
+#<feature issue>`, where the feature issue is the stack's parent issue. A mark naming another
+feature holds, as does a plain PARKED line or a mark at an earlier head. The advisor writes the mark
+at vet, in the vet slot, when the owner card on the stack's sheet is the only thing holding that
+layer. The launcher's dependency gate pins a card-marked dependency to its head exactly as it pins a
+READY one.
+
+The result's `blockers` always carries `checked`, `open` (every open edge), `accepted` (each
+accepted layer: `ref`, `title`, `url`, `pr`, `head` its vet covers, `form` `ready` or `stack-card`,
+and `stack`), `held` (each blocker that still holds, with `why`), `requiredDependency`, `stack` and
+`detail`. `ok` is true when every open blocker is accepted. `blocker-open` means at least one
+blocker is held, and `held` names each. An accepted blocker is never silent: it is listed in
+`accepted`. Read launchability from `ok` and `reason`, never from a non-empty `open`.
+
+`check-blockers --premise <file>` takes the launch's own premise JSON file (its `stack`,
+`layerPosition` and `dependency`). A malformed premise refuses `blockers-unreadable` before any read.
+
+**A read that fails is not "no blockers".** A failed read of the edges, the feature issue and its
+sub-issue list, the open pull requests, a vet or stack membership refuses `blockers-unreadable`. The
+advisor says the edges could not be read and does not call the issue launchable.
+
+**A stricter owner rule governs.** A project whose owner has ruled a stricter rule about blockers
+(for example, no layer launches before the layer below merges) keeps that rule. An accepted blocker
+never overrides it.
+
+After launch, when a card's answer sends a lower layer back and its head moves, the upper layer's
+lane brings it forward, as `native-stacks.md` § How a stack stays current says.
 
 ## Scope exclusions and parity surfaces
 
