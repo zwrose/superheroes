@@ -1,8 +1,9 @@
 """A blocker's pull request is found from the links GitHub records, never from a pull request body's text (#2652).
 
 A stack layer (a pull request based on a branch other than the default) is linked by the cross-reference GitHub
-records on the blocker's timeline; a pull request based on the default branch is linked only when its closing
-references name the blocker (a manual Development link included), whatever the timeline says. Every read that cannot answer makes the whole judgement unreadable."""
+records on the blocker's timeline; a pull request based on the default branch is linked only when the blocker's
+closing pull requests (read once, for the blocker) name it, a manual Development link included, whatever the
+timeline says. Every read that cannot answer makes the whole judgement unreadable."""
 import json
 import subprocess
 
@@ -11,7 +12,7 @@ import pytest
 import issue_contract as ic
 from test_issue_contract import (
     NO_LINK_WHY, PARENT, PULLS, REPO_PATH, SUBS, _assert_unreadable_and_no_pass, _build_ready, _closing_answer, _cross_ref,
-    _head, _in_stack, _Members, _pr_row, _row, _sub, _timeline_path, _vet, _world,
+    _card, _head, _in_stack, _Members, _pr_row, _row, _sub, _timeline_path, _vet, _world,
 )
 
 TIMELINE = _timeline_path(12)
@@ -37,28 +38,30 @@ def test_stack_layer_is_linked_by_its_timeline_cross_reference_and_reads_no_clos
     assert _graphql_calls(fake) == []
 
 
-def test_default_base_pr_is_linked_when_its_closing_references_name_the_blocker(tmp_path, capsys):
-    # axis: a pull request based on the default branch is linked by timeline cross-reference plus a closing reference
+def test_default_base_pr_is_linked_when_the_blockers_closing_references_name_it(tmp_path, capsys):
+    # axis: a pull request based on the default branch is linked when the blocker's closing pull requests name it
     fake = _world(prs=[_pr_row(101, closes=12, base="main")])
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
     assert fake.responses[PULLS][1].count("Closes") == 0
     [call] = _graphql_calls(fake)
-    assert call[:9] == ["gh", "api", "graphql", "-f", "owner=acme", "-f", "name=widgets", "-F", "number=101"]
+    # axis: the read asks for the blocker issue's closing pull requests, by the blocker's number
+    assert call[:9] == ["gh", "api", "graphql", "-f", "owner=acme", "-f", "name=widgets", "-F", "number=12"]
     assert call[9] == "-f" and call[10].startswith("query=")
     # axis: the GitHub GraphQL names are pinned as literals, never against the production query constant
     query = " ".join(call[10].split())
-    for literal in ("repository(owner: $owner, name: $name)", "pullRequest(number: $number)",
-                    "closingIssuesReferences(", "pageInfo { hasNextPage }", "nodes { number repository { nameWithOwner } }"):
+    for literal in ("repository(owner: $owner, name: $name)", "issue(number: $number)",
+                    "closedByPullRequestsReferences(", "pageInfo { hasNextPage }",
+                    "nodes { number repository { nameWithOwner } }"):
         assert literal in query, literal
 
 
-def test_default_base_pr_whose_closing_references_omit_the_blocker_is_not_linked(tmp_path, capsys):
-    # axis: a default-base pull request on the timeline but not closing the blocker is not linked to it
+def test_default_base_pr_the_blockers_closing_references_omit_is_not_linked(tmp_path, capsys):
+    # axis: a default-base pull request on the timeline that the blocker's closing references do not name is not linked
     fake = _world(
         prs=[_pr_row(101, closes=12, base="main")],
-        responses={("graphql", 101): _closing_answer([13])},
+        responses={("graphql", 12): _closing_answer([102])},
     )
     members = _Members({101: _in_stack(900, 1)})
     out = _build_ready(tmp_path, capsys, fake, members=members)
@@ -71,12 +74,12 @@ def test_default_base_pr_whose_closing_references_omit_the_blocker_is_not_linked
 def test_the_default_branch_is_the_one_github_names_not_main(tmp_path, capsys):
     # axis: with default branch `trunk`, a pull request based on `trunk` needs a closing reference, and one based on
     # `main` is a stack layer linked by its timeline cross-reference
-    trunk = {REPO_PATH: (0, json.dumps({"default_branch": "trunk"})), ("graphql", 101): _closing_answer([13])}
+    trunk = {REPO_PATH: (0, json.dumps({"default_branch": "trunk"})), ("graphql", 12): _closing_answer([])}
     fake = _world(prs=[_pr_row(101, closes=12, base="trunk")], responses=trunk)
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["accepted"] == []
-    assert [call[8] for call in _graphql_calls(fake)] == ["number=101"]
+    assert [call[8] for call in _graphql_calls(fake)] == ["number=12"]
     layer = _world(prs=[_pr_row(101, closes=12, base="main")], responses={REPO_PATH: trunk[REPO_PATH]})
     out = _build_ready(tmp_path, capsys, layer, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
@@ -84,32 +87,27 @@ def test_the_default_branch_is_the_one_github_names_not_main(tmp_path, capsys):
     assert _graphql_calls(layer) == []
 
 
-def test_a_closing_reference_in_another_repository_is_not_this_blockers_link(tmp_path, capsys):
-    # axis: a closing reference counts only for an issue of this repository
-    other = (0, json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
-        "pageInfo": {"hasNextPage": False},
-        "nodes": [{"number": 12, "repository": {"nameWithOwner": "other/lib"}}],
-    }}}}}))
-    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 101): other})
+def test_a_closing_pull_request_in_another_repository_is_not_this_blockers_link(tmp_path, capsys):
+    # axis: a closing pull request counts only when it is a pull request of this repository
+    other = _closing_answer([101], repo="other/lib")
+    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 12): other})
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
 
 
-def test_a_closing_reference_names_the_repository_ignoring_case(tmp_path, capsys):
-    # axis: GitHub repository names ignore case, so a differently cased closing-reference repository is the same one
-    cased = (0, json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {
-        "pageInfo": {"hasNextPage": False},
-        "nodes": [{"number": 12, "repository": {"nameWithOwner": "ACME/Widgets"}}],
-    }}}}}))
-    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 101): cased})
+def test_a_closing_pull_request_names_the_repository_ignoring_case(tmp_path, capsys):
+    # axis: GitHub repository names ignore case, so a differently cased closing pull request's repository is the same one
+    cased = _closing_answer([101], repo="ACME/Widgets")
+    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 12): cased})
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
 
 
-def test_closing_references_are_read_for_every_default_base_pull_request_and_no_stack_layer(tmp_path, capsys):
-    # axis: no closing-reference read for a stack layer; every default-base pull request's is read, on the timeline or not
+def test_closing_references_are_read_once_for_the_blocker_and_never_for_a_stack_layer(tmp_path, capsys):
+    # axis: no closing-reference read for a stack layer; the blocker's closing pull requests are read once, however many
+    # default-base pull requests are open, so an unrelated pull request's references are never read
     prs = [
         _pr_row(101, closes=12),
         _pr_row(102, closes=12, base="main", links=[]),
@@ -119,7 +117,10 @@ def test_closing_references_are_read_for_every_default_base_pull_request_and_no_
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
-    assert [call[8] for call in _graphql_calls(fake)] == ["number=102", "number=103"]
+    assert [call[8] for call in _graphql_calls(fake)] == ["number=12"]
+    only_layers = _world(prs=[_pr_row(101, closes=12)])
+    _build_ready(tmp_path, capsys, only_layers, members=_Members({101: _in_stack(900, 1)}))
+    assert _graphql_calls(only_layers) == []
 
 
 def test_a_default_base_pr_linked_by_hand_with_no_timeline_mention_is_linked(tmp_path, capsys):
@@ -140,6 +141,23 @@ def test_a_stack_layer_closing_the_blocker_with_no_timeline_mention_is_not_linke
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
     assert _graphql_calls(fake) == []
+
+
+def test_a_card_never_clears_a_blocker_under_a_feature_in_another_repository(tmp_path, capsys):
+    # axis: a card names its feature only by number, so under a parent in another repository only READY clears
+    plan_subs = "repos/acme/plans/issues/50/sub_issues?per_page=100&page=1"
+    fake = _world(
+        prs=[_pr_row(101, closes=12, vet=_card(_head(101)))],
+        responses={
+            PARENT: (0, json.dumps(_row(50, "open", repo="acme/plans"))),
+            plan_subs: (0, json.dumps([_sub(12), _sub(7)])),
+        },
+    )
+    out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
+    assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
+    assert out["blockers"]["accepted"] == []
+    assert out["blockers"]["held"][0]["why"] == (
+        "its pull request #101's vet card mark names feature #50, not this stack's acme/plans#50")
 
 
 def test_a_parent_in_another_repository_has_its_sub_issues_read_there(tmp_path, capsys):
@@ -215,7 +233,7 @@ def test_two_linked_pull_requests_hold_naming_both(tmp_path, capsys):
 def test_a_default_base_pull_request_that_does_not_close_it_does_not_make_a_second_link(tmp_path, capsys):
     # axis: a default-base pull request on the timeline that does not close the blocker is not counted among the links
     prs = [_pr_row(101, closes=12), _pr_row(102, closes=12, base="main")]
-    fake = _world(prs=prs, responses={("graphql", 102): _closing_answer([13])})
+    fake = _world(prs=prs, responses={("graphql", 12): _closing_answer([])})
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["ok"] is True
     assert _accepted_prs(out) == [101]
@@ -293,7 +311,7 @@ def test_a_default_branch_that_cannot_be_read_is_unreadable(tmp_path, capsys, an
 
 
 def _graph(refs):
-    return 0, json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": refs}}}})
+    return 0, json.dumps({"data": {"repository": {"issue": {"closedByPullRequestsReferences": refs}}}})
 
 
 def _node(number, name="acme/widgets"):
@@ -306,29 +324,29 @@ BAD_CLOSING_REFERENCES = {
     "graphql output is not an object": (0, json.dumps([1])),
     "graphql answers errors": (0, json.dumps({"errors": [{"message": "boom"}], "data": None})),
     "graphql answers errors beside data": (
-        0, json.dumps({"errors": [{"message": "boom"}], "data": {"repository": {"pullRequest": {
-            "closingIssuesReferences": {"pageInfo": {"hasNextPage": False}, "nodes": [_node(12)]}}}}})),
+        0, json.dumps({"errors": [{"message": "boom"}], "data": {"repository": {"issue": {
+            "closedByPullRequestsReferences": {"pageInfo": {"hasNextPage": False}, "nodes": [_node(101)]}}}}})),
     "graphql answers no data": (0, json.dumps({})),
-    "the pull request is null": (0, json.dumps({"data": {"repository": {"pullRequest": None}}})),
-    "hasNextPage is true": _graph({"pageInfo": {"hasNextPage": True}, "nodes": [_node(12)]}),
-    "hasNextPage is missing": _graph({"pageInfo": {}, "nodes": [_node(12)]}),
-    "pageInfo is missing": _graph({"nodes": [_node(12)]}),
+    "the issue is null": (0, json.dumps({"data": {"repository": {"issue": None}}})),
+    "hasNextPage is true": _graph({"pageInfo": {"hasNextPage": True}, "nodes": [_node(101)]}),
+    "hasNextPage is missing": _graph({"pageInfo": {}, "nodes": [_node(101)]}),
+    "pageInfo is missing": _graph({"nodes": [_node(101)]}),
     "nodes is not a list": _graph({"pageInfo": {"hasNextPage": False}, "nodes": None}),
-    "a node is not an object": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(12), "x"]}),
-    "a node has a string number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(12), _node("13")]}),
-    "a node has a bool number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(12), _node(True)]}),
-    "a node has a zero number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(12), _node(0)]}),
-    "a node has no repository": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(12), {"number": 13}]}),
+    "a node is not an object": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(101), "x"]}),
+    "a node has a string number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(101), _node("13")]}),
+    "a node has a bool number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(101), _node(True)]}),
+    "a node has a zero number": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(101), _node(0)]}),
+    "a node has no repository": _graph({"pageInfo": {"hasNextPage": False}, "nodes": [_node(101), {"number": 13}]}),
     "a node has a non-string repository name": _graph({
-        "pageInfo": {"hasNextPage": False}, "nodes": [_node(12), _node(13, name=5)]}),
+        "pageInfo": {"hasNextPage": False}, "nodes": [_node(101), _node(13, name=5)]}),
 }
 
 
 @pytest.mark.parametrize("answer", list(BAD_CLOSING_REFERENCES.values()), ids=list(BAD_CLOSING_REFERENCES))
 def test_closing_references_that_cannot_be_read_in_full_are_unreadable(tmp_path, capsys, answer):
-    # axis: a default-base pull request's closing references read in full and well formed, or the judgement is unreadable
+    # axis: the blocker's closing pull requests read in full and well formed, or the judgement is unreadable
     members = _Members({101: _in_stack(900, 1)})
-    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 101): answer})
+    fake = _world(prs=[_pr_row(101, closes=12, base="main")], responses={("graphql", 12): answer})
     _assert_unreadable_and_no_pass(_build_ready(tmp_path, capsys, fake, members=members))
     assert members.calls == []
 

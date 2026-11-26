@@ -930,17 +930,17 @@ def _cross_ref(pr_number, repo="acme/widgets"):
     }
 
 
-def _closing_answer(numbers, has_next_page=False):
-    """A GraphQL closingIssuesReferences answer naming `numbers` of acme/widgets."""
-    nodes = [{"number": n, "repository": {"nameWithOwner": "acme/widgets"}} for n in numbers]
+def _closing_answer(numbers, has_next_page=False, repo="acme/widgets"):
+    """A GraphQL closedByPullRequestsReferences answer for an issue: the pull requests `numbers` of `repo`."""
+    nodes = [{"number": n, "repository": {"nameWithOwner": repo}} for n in numbers]
     refs = {"pageInfo": {"hasNextPage": has_next_page}, "nodes": nodes}
-    return 0, json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": refs}}}})
+    return 0, json.dumps({"data": {"repository": {"issue": {"closedByPullRequestsReferences": refs}}}})
 
 
 def _world(blocked=(12,), subs=(12, 7), prs=(), parent=FEATURE, responses=None, rows=None):
     """A fake gh for issue 7: its blocked_by rows, parent, the parent's sub-issues, the open PRs, the default
-    branch, each blocked issue's timeline (one cross-reference per PR row that links it) and the closing
-    references of each PR based on the default branch (the issues the row links)."""
+    branch, each blocked issue's timeline (one cross-reference per PR row that links it) and each blocked
+    issue's closing pull requests (the rows based on the default branch that link it)."""
     table = {PAGE1: (0, json.dumps(rows if rows is not None else [_row(n, "open") for n in blocked]))}
     table[PARENT] = NO_PARENT if parent is None else (0, json.dumps(_row(parent, "open")))
     if parent is not None:
@@ -953,9 +953,9 @@ def _world(blocked=(12,), subs=(12, 7), prs=(), parent=FEATURE, responses=None, 
     pulls = [pr for pr in prs if isinstance(pr, dict) and isinstance(pr.get("links"), list)]
     for issue in issues:
         table[_timeline_path(issue)] = (0, json.dumps([_cross_ref(pr["number"]) for pr in pulls if issue in pr["links"]]))
-    for pr in pulls:
-        if isinstance(pr.get("base"), dict) and pr["base"].get("ref") == "main":
-            table[("graphql", pr["number"])] = _closing_answer(pr["links"])
+    main = [pr for pr in pulls if isinstance(pr.get("base"), dict) and pr["base"].get("ref") == "main"]
+    for issue in issues:
+        table[("graphql", issue)] = _closing_answer([pr["number"] for pr in main if issue in pr["links"]])
     table.update(responses or {})
     return _FakeRun(table)
 
@@ -1317,7 +1317,7 @@ def test_case8_a_stack_card_mark_for_another_parent_holds_naming_it(tmp_path, ca
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["held"][0]["why"] == (
-        "its pull request #101's vet card mark names feature #77, not this stack's #50"
+        "its pull request #101's vet card mark names feature #77, not this stack's acme/widgets#50"
     )
 
 

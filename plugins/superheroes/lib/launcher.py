@@ -2582,6 +2582,7 @@ def _apply_dependency_gate(
     deadline=None,
     accepted=None,
     membership_reader=None,
+    below=None,
 ):
     """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing.
 
@@ -2701,8 +2702,12 @@ def _apply_dependency_gate(
             linked = membership.get("ok") is True
             if not linked and membership.get("reason") != stack_check.REASON_NOT_LINKED:
                 return {"ok": False, "reason": "dependency-read-unavailable", "detail": membership.get("reason")}
-            # axis: an accepted dependency that joined, left or changed stack after preflight lapses, never passes on its head alone — see bite-proof record wo_2652_stack_layer_blockers
-            if (membership["stack"]["number"] if linked else None) != accepted.get("stack"):
+            queried = membership.get("queried") or {}
+            # axis: an accepted dependency that joined, left or changed stack after preflight, moved off the vetted head,
+            # or no longer sits below the launch's layer, lapses, never passes on its head alone — see bite-proof record wo_2652_stack_layer_blockers
+            if (membership["stack"]["number"] if linked else None) != accepted.get("stack") \
+                    or not stack_check.same_commit(queried.get("headRefOid"), head_sha) \
+                    or (below is not None and not (linked and queried.get("position", below) < below)):
                 return lapsed
         return {
             "ok": True,
@@ -4546,7 +4551,8 @@ def _check_premises(
         for row in [{}] if rows is False else rows:
             recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (
                 _apply_dependency_gate({"dependency": row["pr"]}, row["head"], repo_root, env, pr_vet_reader,
-                                       deadline=deadline, accepted=row, membership_reader=membership_reader))
+                                       deadline=deadline, accepted=row, membership_reader=membership_reader,
+                                       below=stamped_premise["layerPosition"] if row.get("stack") is not None else None))
             if not recheck["ok"]:
                 return {"refusal": _refuse_unreserved(
                     ctx, recheck["reason"], "dependency", stamped_premise, preflight_result,

@@ -28,7 +28,7 @@ def _gate(tmp_path, monkeypatch, body_at, accepted, base=None):
     result = L._apply_dependency_gate(
         _dependency_premise(repo, 701, issue=7), base or head, repo, {},
         lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, body_at(head), pr_number=pr), None),
-        accepted=accepted, membership_reader=lambda **kwargs: dict(NOT_LINKED),
+        accepted=accepted, membership_reader=lambda **kwargs: dict(NOT_LINKED, queried={"headRefOid": head}),
     )
     return result, head
 
@@ -78,15 +78,23 @@ def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependenc
     assert L._preflight_accepted(checks("{}"), None) is False
 
 
-@pytest.mark.parametrize("membership, expected_ok", [
-    (dict(NOT_LINKED), True), (_in_stack(900, 1), False),
-    ({"ok": False, "reason": "stack-unreadable", "detail": "x"}, False),
+@pytest.mark.parametrize("case, expected_ok", [
+    ("not-linked", True), ("joined", False), ("unreadable", False), ("not-linked-moved", False),
 ])
-def test_an_accepted_unstacked_dependency_is_reread_for_stack_membership(tmp_path, monkeypatch, membership, expected_ok):
-    # axis: an accepted dependency that joined a stack, or whose membership cannot be read, refuses at launch
+def test_an_accepted_unstacked_dependency_is_reread_for_stack_membership(tmp_path, monkeypatch, case, expected_ok):
+    # axis: an accepted dependency that joined a stack, whose membership cannot be read, or whose membership was read
+    # at another head than the vetted one, refuses at launch
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     head = _head_sha(repo)
+    joined = _in_stack(900, 1)
+    joined["queried"]["headRefOid"] = head
+    membership = {
+        "not-linked": dict(NOT_LINKED, queried={"headRefOid": head}),
+        "joined": joined,
+        "unreadable": {"ok": False, "reason": "stack-unreadable", "detail": "x"},
+        "not-linked-moved": dict(NOT_LINKED, queried={"headRefOid": "f" * 40}),
+    }[case]
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
     reads = []
     result = L._apply_dependency_gate(
@@ -97,8 +105,8 @@ def test_an_accepted_unstacked_dependency_is_reread_for_stack_membership(tmp_pat
     )
     assert reads == [701]
     assert result["ok"] is expected_ok, result
-    if membership is not NOT_LINKED and not expected_ok:
-        assert result["reason"] in ("dependency-acceptance-lapsed", "dependency-read-unavailable")
+    if not expected_ok:
+        assert result["reason"] == ("dependency-read-unavailable" if case == "unreadable" else "dependency-acceptance-lapsed")
 
 
 def test_an_unaccepted_draft_keeps_the_ungated_pass_even_with_a_stale_card(tmp_path, monkeypatch):
@@ -129,10 +137,13 @@ class _StackGateReached(Exception):
     pass
 
 
-@pytest.mark.parametrize("withdrawn", [True, False], ids=["card-withdrawn", "card-intact"])
-def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_gate(tmp_path, monkeypatch, withdrawn):
-    # axis: on a stack premise an accepted lower layer whose card was withdrawn at the same head refuses; an intact one
-    # passes on to the stack gate
+@pytest.mark.parametrize("withdrawn, position", [(True, 1), (False, 1), (False, 2)],
+                         ids=["card-withdrawn", "card-intact", "moved-to-the-launch-layer"])
+def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_gate(
+    tmp_path, monkeypatch, withdrawn, position,
+):
+    # axis: on a stack premise an accepted lower layer whose card was withdrawn at the same head, or that no longer
+    # sits below the launch's layer, refuses; an intact one below it passes on to the stack gate
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     head = _head_sha(repo)
@@ -148,11 +159,11 @@ def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_ga
         return L.launch_build(
             repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
             pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, body, pr_number=pr), None),
-            membership_reader=lambda **kwargs: _membership_ok(1, head, pr_number=701) | {"stack": {"number": 1}},
+            membership_reader=lambda **kwargs: _membership_ok(position, head, pr_number=701) | {"stack": {"number": 1}},
             pr_lookup=pr_lookup,
         )
 
-    if withdrawn:
+    if withdrawn or position >= 2:
         result = launch()
         assert result["ok"] is False
         assert result["reason"] == "dependency-acceptance-lapsed"
