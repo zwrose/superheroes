@@ -635,22 +635,19 @@ def _read_layer_membership(membership_reader, run, repo, pr, head):
     # axis: only not-linked means "in no stack"; every other membership refusal is unreadable — see bite-proof record wo_2652_stack_layer_blockers
     if not ok and not (isinstance(result, dict) and result.get("reason") == stack_check.REASON_NOT_LINKED):
         raise _Unreadable("the stack membership of pull request #%d could not be read" % pr)
-    queried = result.get("queried")
-    read_head = queried.get("headRefOid") if isinstance(queried, dict) else None
+    queried = result.get("queried") if isinstance(result.get("queried"), dict) else {}
+    read_head = queried.get("headRefOid")
+    stack = result.get("stack")
+    number = stack.get("number") if isinstance(stack, dict) else None
+    # axis: an ok membership read without an int stack number and position, or a read naming no head, is malformed — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(read_head, str) or (ok and (not _is_int(number) or not _is_int(queried.get("position")))):
+        raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
     # axis: a membership answer, linked or not-linked, read at another head than the vet joins two snapshots; it is unreadable, never accepted — see bite-proof record wo_2652_stack_layer_blockers
     if not stack_check.same_commit(read_head, head):
         raise _Unreadable(
             "pull request #%d moved between reads (vet read at %s, stack membership at %s)" % (pr, head, read_head)
         )
-    if not ok:
-        return None, None
-    stack = result.get("stack")
-    number = stack.get("number") if isinstance(stack, dict) else None
-    position = queried.get("position")
-    # axis: an ok membership read without an int stack number and position is unreadable — see bite-proof record wo_2652_stack_layer_blockers
-    if not _is_int(number) or not _is_int(position):
-        raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
-    return number, position
+    return (number, queried["position"]) if ok else (None, None)
 
 
 def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, index):
