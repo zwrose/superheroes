@@ -877,11 +877,15 @@ def _head(n):
 
 
 def _vet(verdict, head):
-    return "%s\n**Verdict: %s** · %s" % (MARKER, verdict, head)
+    """A vet slot at `head`, its token and separator read from rubric/vet-verdict-form.json."""
+    with open(ic.stack_check._vet_verdict_form_path(), encoding="utf-8") as fh:
+        form = json.load(fh)
+    token = next(entry["token"] for entry in form["tokens"] if entry["verdict"] == verdict)
+    return "%s\n%s%s%s" % (MARKER, token, form["separator"], head)
 
 
 def _card(head, parent=FEATURE):
-    return "%s\n**Verdict: PARKED** · %s %s%d" % (MARKER, head, ic.STACK_CARD_QUALIFIER, parent)
+    return "%s %s%d" % (_vet("PARKED", head), ic.STACK_CARD_QUALIFIER, parent)
 
 
 def _pr_row(number, closes=None, vet=None, draft=False, head=None, body=None):
@@ -1313,7 +1317,10 @@ def test_case8_the_card_mark_at_a_stale_head_holds_with_the_reason(tmp_path, cap
 
 def test_stack_card_parent_reads_only_the_exact_mark(tmp_path):
     head = _head(7)
-    assert ic.STACK_CARD_QUALIFIER == "held only for a card on the stack sheet of #"
+    with open(ic.stack_check._vet_verdict_form_path(), encoding="utf-8") as fh:
+        form = json.load(fh)
+    # The qualifier's one home is the verdict form; the module reads it from there.
+    assert ic.STACK_CARD_QUALIFIER == form["stackCardQualifier"]
     assert ic.stack_card_parent(_card(head, 50), head) == 50
     assert ic.stack_card_parent(_card(head, 50) + " and a note", head) == 50
     assert ic.stack_card_parent(_card(head, 50) + "x", head) is None

@@ -76,12 +76,20 @@ _REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ISSUE_PATTERN = re.compile(r"^[0-9]+$")
 _BLOCKER_STATES = ("open", "closed")
 
-# The qualifier that marks a PARKED vet line as "held only for a card on the stack sheet of #<parent>"; its one home.
-STACK_CARD_QUALIFIER = "held only for a card on the stack sheet of #"
-_STACK_CARD_LINE_RE = re.compile(
-    r"\*\*Verdict: PARKED\*\* · [0-9a-fA-F]{40} " + re.escape(STACK_CARD_QUALIFIER) + r"([0-9]+)(?: .*)?",
-    re.DOTALL,
-)
+def _load_stack_card_qualifier():
+    """The qualifier that marks a PARKED vet line as held only for a card on the stack sheet of #<parent>.
+
+    Its one home is `rubric/vet-verdict-form.json` (`stackCardQualifier`), beside the verdict tokens; None when
+    the form cannot be read, and then no vet line reads as the card mark (the blocker holds)."""
+    try:
+        with open(stack_check._vet_verdict_form_path(), encoding="utf-8") as fh:
+            value = json.load(fh).get("stackCardQualifier")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+STACK_CARD_QUALIFIER = _load_stack_card_qualifier()
 _PR_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _PREMISE_KEYS = ("stack", "layerPosition", "dependency")
 
@@ -402,22 +410,39 @@ def _first_nonempty_line(text):
 def stack_card_parent(body, head_sha):
     """The parent issue number when `body`'s vet line is the stack-card mark at `head_sha`, else None.
 
-    The mark: the first non-empty line after the advisor-vet marker is `**Verdict: PARKED** · <head sha>`,
-    one space, STACK_CARD_QUALIFIER, the parent issue number in digits, then end of line or a space.
-    A vet the reader refuses returns None here; the caller that must tell a refusal apart reads the vet itself."""
+    The mark: the first non-empty line after the advisor-vet marker is the PARKED verdict line at `head_sha`
+    (token, separator and sha as `rubric/vet-verdict-form.json` spells them, which `stack_check.read_vet_verdict`
+    has already checked), then one space, STACK_CARD_QUALIFIER, the parent issue number in digits, then end of
+    line or a space. A vet the reader refuses returns None here; the caller that must tell a refusal apart reads
+    the vet itself."""
     verdict, refusal = stack_check.read_vet_verdict(body, head_sha)
     # axis: only a PARKED vet pinned to the current head can carry the card mark; a refused or other verdict never does — see bite-proof record wo_2652_stack_layer_blockers
-    if refusal is not None or verdict != stack_check.VERDICT_PARKED:
+    if refusal is not None or verdict != stack_check.VERDICT_PARKED or STACK_CARD_QUALIFIER is None:
         return None
     region_text, region_refusal = pr_body_regions.read_region(body, "advisor-vet")
     if region_refusal is not None or region_text is None:
         return None
     line = _first_nonempty_line(region_text)
-    match = _STACK_CARD_LINE_RE.fullmatch(line) if line is not None else None
-    # axis: a PARKED line without the exact qualifier and a parent number is a plain park, not a card mark — see bite-proof record wo_2652_stack_layer_blockers
-    if match is None:
+    if line is None:
         return None
-    parent = int(match.group(1))
+    # The verdict reader matched the PARKED token, the separator and the 40-hex sha at this line's start; the
+    # qualifier follows the sha after one space.
+    form, form_error = stack_check._load_vet_verdict_form()
+    if form_error is not None:
+        return None
+    separator, tokens = form
+    token = next((t for t, v in tokens if v == stack_check.VERDICT_PARKED), None)
+    if token is None or not line.startswith(token + separator):
+        return None
+    tail = line[len(token) + len(separator) + 40:]
+    prefix = " " + STACK_CARD_QUALIFIER
+    # axis: a PARKED line without the exact qualifier and a parent number is a plain park, not a card mark — see bite-proof record wo_2652_stack_layer_blockers
+    if not tail.startswith(prefix):
+        return None
+    digits = tail[len(prefix):].split(" ", 1)[0]
+    if not digits.isascii() or not digits.isdigit():
+        return None
+    parent = int(digits)
     return parent if parent >= 1 else None
 
 

@@ -113,13 +113,16 @@ sits in a stack yet, exactly one may, and the result names its pull request as `
 The launch premise must then name that pull request as its `dependency`, so the launcher's
 dependency gate pins the base to that pull request's head.
 
-**The card mark** is durable and never guessed. The lower layer's vet slot has a verdict line that
-reads `**Verdict: PARKED** · <its current head sha> held only for a card on the stack sheet of
-#<feature issue>`, where the feature issue is the stack's parent issue. A mark naming another
-feature holds, as does a plain PARKED line or a mark at an earlier head. The advisor writes the mark
-at vet, in the vet slot, when the owner card on the stack's sheet is the only thing holding that
-layer. The launcher's dependency gate pins a card-marked dependency to its head exactly as it pins a
-READY one.
+**The card mark** is durable and never guessed. The lower layer's vet slot has a PARKED verdict line
+at its current head, in the verdict form, followed by one space, the stack-card qualifier and the
+feature issue's number, where the feature issue is the stack's parent issue. The qualifier's one home
+is `stackCardQualifier` in `rubric/vet-verdict-form.json`, beside the verdict tokens; today it reads
+`held only for a card on the stack sheet of #`. A mark naming another feature holds, as does a plain
+PARKED line or a mark at an earlier head. The advisor writes the mark at vet, in the vet slot, when
+the layer's only hold is an owner card that its review record leaves for the owner: that card rides
+the feature's stack sheet once the stack is complete enough to have one, so the sheet need not exist
+yet when the mark is written. The launcher's dependency gate pins a card-marked dependency to its
+head exactly as it pins a READY one.
 
 The result's `blockers` always carries `checked`, `open` (every open edge), `accepted` (each
 accepted layer: `ref`, `title`, `url`, `pr`, `head` its vet covers, `form` `ready` or `stack-card`,

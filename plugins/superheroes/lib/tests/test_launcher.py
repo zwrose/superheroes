@@ -7652,11 +7652,20 @@ def test_dependency_gate_ready_base_match_passes(tmp_path, monkeypatch):
         pass
 
 
+def _parked_vet_body(head_sha):
+    """A PARKED vet slot at `head_sha`, its token and separator read from rubric/vet-verdict-form.json."""
+    (separator, tokens), error = L.stack_check._load_vet_verdict_form()
+    assert error is None
+    token = next(t for t, v in tokens if v == L.stack_check.VERDICT_PARKED)
+    return _VET_MARKER + "\n" + token + separator + head_sha
+
+
 def _card_vet_body(head_sha, parent=656):
-    return (
-        _VET_MARKER + "\n**Verdict: PARKED** · " + head_sha + " "
-        + L.issue_contract.STACK_CARD_QUALIFIER + str(parent)
-    )
+    return _parked_vet_body(head_sha) + " " + L.issue_contract.STACK_CARD_QUALIFIER + str(parent)
+
+
+def _never_spawn(argv, cwd, out_fh, err_fh, child_env):
+    raise AssertionError("a refused launch spawned a builder")
 
 
 def test_dependency_gate_stack_card_base_match_passes(tmp_path, monkeypatch):
@@ -7719,6 +7728,7 @@ def test_dependency_gate_stack_card_base_mismatch_refuses(tmp_path, monkeypatch)
         _dependency_premise(repo, 701),
         _all_checks(),
         log_dir,
+        spawn_fn=_never_spawn,
         pr_vet_reader=reader,
     )
     assert result["ok"] is False
@@ -7732,7 +7742,7 @@ def test_dependency_gate_plain_parked_passes_not_gated(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     head = _head_sha(repo)
-    plain_parked = _VET_MARKER + "\n**Verdict: PARKED** · " + head
+    plain_parked = _parked_vet_body(head)
 
     def reader(pr, repo_name, **kwargs):
         return _pr_vet_state_ok(head, plain_parked), None
