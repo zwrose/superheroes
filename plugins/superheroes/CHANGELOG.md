@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.52.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.52.0...superheroes-v0.52.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **superheroes:** a recorded "fix it" ruling goes to the build as a fix, and the vet reads ruling words ([#2646](https://github.com/zwrose/superheroes/issues/2646)) ([5c463ff](https://github.com/zwrose/superheroes/commit/5c463ffe49a54ecac0a99e599207c202fde69e19))
+* **superheroes:** a review that hands back only for the owner's choices keeps its certificate ([#2639](https://github.com/zwrose/superheroes/issues/2639)) ([54e3a47](https://github.com/zwrose/superheroes/commit/54e3a47d9aa68e85b1d1492f9519f3d9e68060e7))
+* **superheroes:** a ruling the review record resolved no longer says it is not on record ([#2648](https://github.com/zwrose/superheroes/issues/2648)) ([7cddd55](https://github.com/zwrose/superheroes/commit/7cddd556af9f917aab682ed960dcf89dc6ef3498))
+* **superheroes:** an owner-choice-only review whose every waiting finding is ruled reads reviewed ([#2643](https://github.com/zwrose/superheroes/issues/2643)) ([450b830](https://github.com/zwrose/superheroes/commit/450b83050528e39bc8ce22d7b87fc2e1f349897e))
+* **superheroes:** merge-sheet list-item cards accept dashed numbers and carry the findings they decide ([#2637](https://github.com/zwrose/superheroes/issues/2637)) ([9d35a7e](https://github.com/zwrose/superheroes/commit/9d35a7e2efb3e7348176ebfc0f33eafea1fcdc56))
+* **superheroes:** the handback check refuses a costly degradation missing from What we're accepting ([#2634](https://github.com/zwrose/superheroes/issues/2634)) ([af6cfd2](https://github.com/zwrose/superheroes/commit/af6cfd27dec1df99bca06e24233abe3543f08dbd))
+* **superheroes:** the vet-drafter never deletes a file ([#2647](https://github.com/zwrose/superheroes/issues/2647)) ([fbc918c](https://github.com/zwrose/superheroes/commit/fbc918c9bed5c856f6f1902a9bc74d0ef78edbb4))
+
 ## [0.52.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.51.0...superheroes-v0.52.0) (2026-11-23)
 
 
