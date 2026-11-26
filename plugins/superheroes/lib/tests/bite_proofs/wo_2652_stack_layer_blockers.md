@@ -35,7 +35,7 @@ catches, and are not a test result).
 | E4 | issue_contract.py:642 `_judge_with_premise` | a layer counts only in the launch's own stack | `test_case6_premise_stack_s_with_the_pr_in_stack_x_holds` | proven |
 | E5 | issue_contract.py:613 `_layer_of` | a card mark counts only for this stack's own parent | `test_case8_a_stack_card_mark_for_another_parent_holds_naming_it` | proven |
 | E6 | issue_contract.py:599 `_layer_of` | a draft pull request is never a handed-back layer | `test_case3_a_draft_pr_holds` | proven |
-| E7 | issue_contract.py:537 `_closes_issue` | only the first non-empty body line carries a closing reference | `test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | proven at 4f52f3c8; superseded by E7r |
+| E7 | issue_contract.py:537 `_closes_issue` | only the first non-empty body line carries a closing reference | `test_first_line_only_a_closing_ref_on_the_second_line_does_not_count` | retired (WO-3 deleted the first-line reader) |
 | E8 | stack_check.py:493 `_parse_membership_page` | an absent `stackEntry` key is unreadable, not not-linked | `test_e28_stack_entry_key_missing_is_unreadable_not_not_linked` | proven |
 | E9 | launcher.py:2630 `_apply_dependency_gate` | a card-marked dependency is gated on base equality like a READY one | `test_dependency_gate_stack_card_base_mismatch_refuses` | proven at 4f52f3c8; superseded by E9r |
 
@@ -603,3 +603,38 @@ a dropped comment (E14) or code span (E20); a list-nested indented code line rea
 acceptance passed ungated (E15, E16); prose evidence read as "nothing accepted" (E17); a card for another
 feature passed (E18); JSON evidence dropped (E19); an unaccepted draft refused instead of passing ungated
 (E22). After the last restore, the probe worktree's `git status --short` printed nothing.
+
+## Retired entries and the GitHub-link replay (WO-3)
+
+**Retired.** WO-3 (`c1063075742e1aef9d4659e86d418cc69af8ef66`) deleted the first-line reader (`_closes_issue`,
+`_first_prose_line` and its comment, code-span and list-marker handling) on the advisor's order, so the entries that
+guarded it guard nothing now: **E7, E7r, E13, E14, E20 and E21 are retired**, kept above as history only. The
+first-line-only axis they proved is gone with the reader: a blocker's pull request is now found from GitHub's
+recorded links (L1-L3 below), never from body text. The other entries above stand; their line numbers are those at
+the head each section names.
+
+**Head:** `c1063075742e1aef9d4659e86d418cc69af8ef66`, detached in the same probe worktree, same method and command,
+plus `--tb=line -rf`. Line numbers are at this head.
+
+| ID | Guarded element (file:line) | Neutralization | Proving node (`test_github_links_2652.py::`) | Red | Green after restore |
+|---|---|---|---|---|---|
+| L1 | issue_contract.py:737 `_layer_of` | the timeline gate `if pr["number"] not in cross_referenced: continue` → `if False: continue` | `test_a_body_whose_first_line_closes_the_blocker_is_no_link_without_a_github_record` (the no-body-text axis) | 1 failed | 1 passed |
+| L2 | issue_contract.py:740 `_layer_of` | `if pr["base"] != default_branch or number in _closing_refs(...):` → `if True:` | `test_default_base_pr_whose_closing_references_omit_the_blocker_is_not_linked` (case 1, default base) | 1 failed | 1 passed |
+| L3 | issue_contract.py:740 `_layer_of` | the same test → `if number in _closing_refs(...):` (a stack layer must have a closing reference too) | `test_stack_layer_is_linked_by_its_timeline_cross_reference_and_reads_no_closing_references` (case 1, stack layer) | 1 failed | 1 passed |
+| L4 | issue_contract.py:671 `_closing_refs` | the `hasNextPage is not False` clause removed | `test_closing_references_that_cannot_be_read_in_full_are_unreadable` | 2 failed, 15 passed | 17 passed |
+| L5 | issue_contract.py:787 `_layer_of` | `except _Moved`: hold → `raise _Unreadable(str(exc))` | `test_a_stack_membership_read_at_another_head_holds_instead_of_unreadable` | 1 failed | 1 passed |
+
+Raw red:
+
+```
+L1  tests/test_github_links_2652.py:114: AssertionError: layer-base   (the case's base id: a body-only "Closes #12" PR was accepted)
+L2  tests/test_github_links_2652.py:60: AssertionError: assert None == 'blocker-open'
+L3  E   assert False is True   (the stack layer, linked only by its timeline cross-reference, was not accepted)
+L4  E   assert True is False   (the [hasNextPage is true] and [hasNextPage is missing] cases read as checked)
+L5  tests/test_github_links_2652.py:327: AssertionError: assert 'blockers-unreadable' == 'blocker-open'
+```
+
+Each red fails on its own axis: body text alone linked a pull request (L1); a default-base pull request linked with no
+closing reference (L2); a stack layer refused its timeline link (L3); a paged closing-reference answer read as whole
+(L4); a moved head refused the whole judgement instead of holding (L5). After the last restore, the probe worktree's
+`git status --short` printed nothing.
