@@ -521,6 +521,24 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 1 passed, 82 deselected in 0.63s
 ```
 
+- **Second neutralization, the repository comparison** (added in review session 3, on head `6231781` with the foreign row now naming the same pull request 502): `        if ref_number == number and full_name.lower() == slug.lower():` became `        if ref_number == number:`.
+- **Raw red** (`-k "another_pull_request_repository_or_event"`; the foreign-repository row goes red, the other three rows pass; the capture keeps the failure's assertion lines):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F...                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_a_cross_reference_from_another_pull_request_repository_or_event_is_no_link[row0] _
+row = {'event': 'cross-referenced', 'source': {'issue': {'number': 502, 'pull_request': {'url': 'u'}, 'repository': {'full_name': 'other/repo'}}}}
+>       assert result["event"] == ww.EVENT_TIMER
+E       AssertionError: assert 'lane-terminal' == 'timer'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch_pr_comments_2651.py::test_a_cross_reference_from_another_pull_request_repository_or_event_is_no_link[row0]
+1 failed, 3 passed, 90 deselected in 0.97s
+```
+
+- **Restore:** inverse Edit. **Raw green** (same selector): `4 passed, 90 deselected in 19.71s`.
+
 ## 10. Unknown is disclosed (the GraphQL failure branch, `_closing_issue_links`, `wave_watch.py:2402`)
 
 - **Axis:** a closing-references read that exits non-zero (the proxy's GraphQL refusal included) is unknown, never "no link": the candidate resolves to None and is disclosed, with no fallback to another read.

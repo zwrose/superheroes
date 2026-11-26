@@ -1000,37 +1000,14 @@ def test_the_closing_references_read_is_one_direct_graphql_call_with_the_pull_re
     [argv] = [call for call in gh.calls if call[:3] == ["gh", "api", "graphql"]]
     assert argv[3:9] == ["-f", "owner=owner", "-f", "name=repo", "-F", "number=501"]
     assert argv[9] == "-f" and argv[10].startswith("query=")
-    # The query sent asks for every field the answer is read by, independently of the module's own constant, in any order.
-    query = " ".join(argv[10][len("query="):].split())
-    assert "pullRequest(number: $number)" in query
-    # No alias renames a selection on the path the reader walks (data.repository.pullRequest...).
-    assert not re.search(
-        r"\w+\s*:\s*(repository|pullRequest|closingIssuesReferences|pageInfo|hasNextPage|nodes|number|nameWithOwner)\b",
-        query)
-    assert "closingIssuesReferences(first: 25)" in query
-    assert re.search(r"pageInfo \{[^{}]*\bhasNextPage\b[^{}]*\}", query)
-    # The `nodes` selection directly under the unaliased closingIssuesReferences, braces balanced, so a field selected
-    # elsewhere does not count; no alias renames a key the reader reads.
-    refs = re.search(r"(?<![\w:] )(?<!: )\bclosingIssuesReferences\(first: 25\) \{", query)
-    assert refs and not re.search(r"\w+\s*:\s*closingIssuesReferences", query)
-
-    def block(at):
-        depth, end = 1, at
-        while depth:
-            depth += {"{": 1, "}": -1}.get(query[end], 0)
-            end += 1
-        return at, end - 1
-
-    refs_start, refs_end = block(refs.end())
-    inner = query[refs_start:refs_end]
-    at = inner.index("nodes {")
-    assert inner[:at].count("{") == inner[:at].count("}")  # a direct child of the connection
-    assert not re.search(r"\w+\s*:\s*nodes\b", inner)
-    nodes_start, nodes_end = block(refs_start + at + len("nodes {"))
-    nodes = query[nodes_start:nodes_end]
-    assert not re.search(r"\w+\s*:\s*(number|repository|nameWithOwner)\b", nodes)
-    assert re.search(r"repository \{[^{}]*\bnameWithOwner\b[^{}]*\}", nodes)
-    assert re.search(r"\bnumber\b", re.sub(r"repository \{[^{}]*\}", "", nodes))
+    # The query sent is exactly the one the reader's response shape needs, written here independently of the module's
+    # constant: any change to it (an alias, a comment, a moved or dropped field) fails this test and is read anew.
+    expected = (
+        "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
+        "{ pullRequest(number: $number) { closingIssuesReferences(first: 25) "
+        "{ pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }"
+    )
+    assert argv[10] == "query=" + expected
     assert ww._read_candidate_prs([501], _SLUG, {101}, "/", 100.0, lambda: 0.0, _PrGh(prs={501: _on_main(101)}), {}) \
         == {501: (101,)}
 
