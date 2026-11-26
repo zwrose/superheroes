@@ -28,6 +28,7 @@ import sys
 import gh_pages
 import md_fence
 import pr_body_regions
+import review_record
 import stack_check
 
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
@@ -512,8 +513,10 @@ def _read_open_prs(run, repo):
         sha = head.get("sha") if isinstance(head, dict) else None
         body = row.get("body") if isinstance(row, dict) else None
         # axis: any pull-request row that is malformed fails the whole read, even after a matching row — see bite-proof record wo_2652_stack_layer_blockers
+        # axis: a row with no body key is unreadable, never an empty body: an unread body cannot show it closes nothing
         if (
             not isinstance(row, dict)
+            or "body" not in row
             or not _is_int(row.get("number"))
             or row.get("state") != "open"
             or not isinstance(row.get("draft"), bool)
@@ -531,10 +534,24 @@ def _read_open_prs(run, repo):
     return prs
 
 
+def _first_prose_line(body):
+    """The body's first non-empty line as GitHub reads it as prose, or None.
+
+    The line is masked by `review_record._markdown_prose`, the closing-issue reader's own prose rule, so a
+    closing keyword in an HTML comment, a code span or a quote on that line counts for nothing."""
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    masked = review_record._markdown_prose(body).split("\n")
+    for index, line in enumerate(lines):
+        if line.strip():
+            # axis: the first non-empty line counts only as the prose GitHub reads — a masked line closes nothing
+            return masked[index] if index < len(masked) and masked[index].strip() else None
+    return None
+
+
 def _closes_issue(pr, repo, number):
     """True when the PR body's first non-empty line holds a closing reference to `repo`#`number`."""
     # axis: only the first non-empty body line counts — a closing reference lower in the body is not a handed-back layer — see bite-proof record wo_2652_stack_layer_blockers
-    line = _first_nonempty_line(pr["body"])
+    line = _first_prose_line(pr["body"])
     if line is None:
         return False
     for match in stack_check.CLOSING_REF_RE.finditer(line):
@@ -565,17 +582,24 @@ def _accepted_row(row, layer):
     }
 
 
-def _read_layer_membership(membership_reader, run, repo, pr):
-    """(stack number or None, position or None) of a pull request; any read other than not-linked failing raises."""
+def _read_layer_membership(membership_reader, run, repo, pr, head):
+    """(stack number or None, position or None) of a pull request read at `head`; any read other than not-linked
+    failing raises, and so does an ok read taken at another head than the one the vet was read at."""
     result = membership_reader(pr=pr, repo=repo, run=run)
     if isinstance(result, dict) and result.get("ok") is True:
         stack = result.get("stack")
         queried = result.get("queried")
         number = stack.get("number") if isinstance(stack, dict) else None
         position = queried.get("position") if isinstance(queried, dict) else None
+        read_head = queried.get("headRefOid") if isinstance(queried, dict) else None
         # axis: an ok membership read without an int stack number and position is unreadable — see bite-proof record wo_2652_stack_layer_blockers
         if not _is_int(number) or not _is_int(position):
             raise _Unreadable("the stack membership of pull request #%d is malformed" % pr)
+        # axis: membership read at another head than the vet joins two snapshots; it is unreadable, never accepted
+        if not stack_check.same_commit(read_head, head):
+            raise _Unreadable(
+                "pull request #%d moved between reads (vet read at %s, stack membership at %s)" % (pr, head, read_head)
+            )
         return number, position
     # axis: only not-linked means "in no stack"; every other membership refusal is unreadable — see bite-proof record wo_2652_stack_layer_blockers
     if isinstance(result, dict) and result.get("reason") == stack_check.REASON_NOT_LINKED:
@@ -625,7 +649,7 @@ def _layer_of(number, pulls, parent, repo, run, membership_reader, decided, inde
             )
             return None
         form = "stack-card"
-    stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"])
+    stack, position = _read_layer_membership(membership_reader, run, repo, pr["number"], pr["head"])
     return {"pr": pr["number"], "head": pr["head"], "form": form, "stack": stack, "position": position}
 
 

@@ -926,7 +926,13 @@ class _Members:
     def __call__(self, pr, repo, run):
         assert repo == "acme/widgets"
         self.calls.append(pr)
-        return self.table[pr]
+        result = self.table[pr]
+        queried = result.get("queried") if isinstance(result, dict) else None
+        # A real membership read names the head it read; default it to the PR row's default head.
+        if isinstance(result, dict) and result.get("ok") is True and isinstance(queried, dict) \
+                and "headRefOid" not in queried:
+            result = dict(result, queried=dict(queried, headRefOid=_head(pr)))
+        return result
 
 
 def _premise_file(tmp_path, content):
@@ -1446,7 +1452,9 @@ def test_the_judge_defaults_its_membership_reader_to_stack_check_read_membership
 
     def fake_membership(**kwargs):
         seen.append(kwargs)
-        return _in_stack(900, 1)
+        result = _in_stack(900, 1)
+        result["queried"]["headRefOid"] = _head(kwargs["pr"])
+        return result
 
     monkeypatch.setattr(ic.stack_check, "read_membership", fake_membership)
     fake = _world(prs=[_pr_row(101, closes=12)])
