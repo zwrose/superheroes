@@ -1969,7 +1969,7 @@ def _builder_note(comment, watched, answered, closes=None):
     info = watched[lid]
     if not _in_window(info, (lane_created, comment_id), (closes or {}).get(lid)):
         return None
-    return {
+    note = {
         "launchId": lid,
         "issue": number,
         "commentId": comment_id,
@@ -1979,6 +1979,9 @@ def _builder_note(comment, watched, answered, closes=None):
         "cloudSessionId": info.get("cloudSessionId"),
         "configDir": info.get("configDir"),
     }
+    if "prNumber" in comment:
+        note["pr"] = comment["prNumber"]
+    return note
 
 
 _TERMINAL_STATE = {"handback": "handback", "stop": "stopped", "park": "parked"}
@@ -2187,7 +2190,7 @@ def _cloud_terminals(comments, watched, answered, closes=None):
         if kind == "park" and _park_superseded(lid, key[0], progress, note_times):
             continue
         info = watched[lid]
-        entries.append({
+        entry = {
             "launchId": lid,
             "state": _TERMINAL_STATE[kind],
             "kind": kind,
@@ -2199,7 +2202,10 @@ def _cloud_terminals(comments, watched, answered, closes=None):
             "cloudSessionName": info.get("cloudSessionName"),
             "cloudSessionId": info.get("cloudSessionId"),
             "configDir": info.get("configDir"),
-        })
+        }
+        if "prNumber" in comment:
+            entry["pr"] = comment["prNumber"]
+        entries.append(entry)
     return sorted(entries, key=lambda entry: entry["launchId"])
 
 
@@ -2323,6 +2329,123 @@ def _merge_comments(shared, lane_reads):
     return merged
 
 
+# Progress and handover comments stay issue-scoped: only a builder note or an ending moves to the lane the PR closes.
+_PR_ATTRIBUTED_KINDS = ("handback", "stop", "park")
+
+
+def _pr_candidate(comment, watched_issues, earliest):
+    """The number a comment is on when it may be a watched lane's builder note or ending posted on that lane's
+    pull request, else None. Never raises.
+
+    A candidate has a valid id, a string body and issue_url ending `/issues/<n>`, a readable created time at or
+    after `earliest`, a number no watched lane has, and a body that is a builder note or whose first line is a
+    handback, stop or park header.
+    """
+    try:
+        if not isinstance(comment, dict):
+            return None
+        body, issue_url = comment.get("body"), comment.get("issue_url")
+        if not _valid_positive_int(comment.get("id")):
+            return None
+        if not isinstance(body, str) or not isinstance(issue_url, str):
+            return None
+        match = re.search(r"/issues/(\d+)$", issue_url)
+        if match is None:
+            return None
+        created = _parse_activity_time(comment.get("created_at"))
+        if created is None or created < earliest:
+            return None
+        number = int(match.group(1))
+        if number in watched_issues:
+            return None
+        # axis: only a builder note or a handback, stop or park is read onto a lane through its pull request; any other comment on one is no lane's — see bite-proof record i2651_pr_comments.md
+        if not (body.lstrip().startswith(cb.NOTE_HEADER) or cb.terminal_kind(body) in _PR_ATTRIBUTED_KINDS):
+            return None
+        return number
+    except Exception:
+        return None
+
+
+def _pr_closing_issues(payload, slug):
+    """Sorted tuple of this repository's issue numbers a pull request's body closes with a closing keyword.
+
+    `()` when payload is a dict without a "pull_request" key (a plain issue); None when payload is not a dict or
+    its body is neither None nor a string. The PR's base branch is not read."""
+    if not isinstance(payload, dict):
+        return None
+    if "pull_request" not in payload:
+        return ()
+    body = payload.get("body")
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        return None
+    found = set()
+    for match in _CLOSING_REF_RE.finditer(body):
+        ref_number = match.group("n") or match.group("bare") or match.group("un")
+        target = match.group("slug") or match.group("uslug")
+        if target is None or target.lower() == slug.lower():
+            found.add(int(ref_number))
+    return tuple(sorted(found))
+
+
+def _read_candidate_prs(numbers, slug, repo_root, deadline, monotonic, gh_run, env):
+    """{number: tuple of the issues its body closes, or None} for each number, read in sorted order. None is an
+    unreadable pull request, or one skipped for budget (that number and every later one). Never raises."""
+    resolved = {}
+    spent = False
+    for number in sorted(numbers):
+        resolved[number] = None
+        try:
+            remaining = deadline - monotonic()
+            if spent or remaining <= 0:
+                spent = True
+                continue
+            payload, refusal = sc._transport_rest(
+                ["gh", "api", "repos/%s/issues/%d" % (slug, number)],
+                max(_MIN_PR_POLL_SECONDS, min(30.0, remaining)), gh_run, None, None, 0,
+                deadline_at=_stack_deadline_at(remaining),
+                run_kwargs=dict(cwd=repo_root, env=_gh_scrub_env(env)),
+            )
+            if refusal is not None:
+                continue
+            resolved[number] = _pr_closing_issues(payload, slug)
+        except Exception:
+            resolved[number] = None
+    return resolved
+
+
+def _attribute_pr_comments(comments, watched, resolved, earliest):
+    """(comments, complete): the comments with each builder note or ending on a pull request re-keyed to the one
+    watched lane's issue the PR closes, as a new list; no comment dict is mutated.
+
+    A re-keyed copy carries `prNumber`. `complete` is False when a candidate's PR was not read, or closes two or
+    more watched issues (no lane can be named); a PR that closes no watched issue leaves it as it was."""
+    watched_issues = {info["issue"] for info in watched.values()}
+    attributed = []
+    complete = True
+    for comment in comments:
+        number = _pr_candidate(comment, watched_issues, earliest)
+        if number is None or number not in resolved:
+            attributed.append(comment)
+            continue
+        if resolved[number] is None:
+            complete = False
+            attributed.append(comment)
+            continue
+        hits = sorted({issue for issue in resolved[number] if issue in watched_issues})
+        if len(hits) == 1:
+            # axis: a note or ending on a pull request that closes exactly one watched issue is that lane's, so the lane's windows, answered record and park supersession read it — see bite-proof record i2651_pr_comments.md
+            issue_url = re.sub(r"/issues/\d+$", "/issues/%d" % hits[0], comment["issue_url"])
+            attributed.append(dict(comment, issue_url=issue_url, prNumber=number))
+            continue
+        if len(hits) >= 2:
+            # axis: a pull request that closes two or more watched issues is no lane's and is disclosed, never guessed onto one — see bite-proof record i2651_pr_comments.md
+            complete = False
+        attributed.append(comment)
+    return attributed, complete
+
+
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     note_state, known_slug=None, slug_cell=None, progress_out=None, closed_out=None, unread_out=None,
@@ -2418,6 +2541,24 @@ def _evaluate_cloud_comments(
     comments = _merge_comments(comments, lane_reads)
     if not requested:
         return [], []
+    watched_issues = {info["issue"] for info in watched.values()}
+    earliest = min(_note_cutoff(info) for info in watched.values())
+    candidates = sorted({
+        n for n in (_pr_candidate(c, watched_issues, earliest) for c in comments) if n is not None
+    })
+    pr_complete = True
+    # No candidate, no request: the common tick reads nothing new.
+    if candidates:
+        pr_slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
+        if pr_slug is not None:
+            resolved = _read_candidate_prs(candidates, pr_slug, repo_root, deadline, monotonic, gh_run, env)
+        else:
+            resolved = {n: None for n in candidates}
+        comments, pr_complete = _attribute_pr_comments(comments, watched, resolved, earliest)
+    if not pr_complete:
+        # axis: a note or ending on a pull request the watch could not attribute to one lane is disclosed and names every watched lane, never read as no note — see bite-proof record i2651_pr_comments.md
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+        _record_unread(unread_out, watched)
     observed_progress = _cloud_progress(comments, watched)
     if isinstance(progress_out, list) and progress_out:
         progress_out[0] = observed_progress
@@ -2426,9 +2567,11 @@ def _evaluate_cloud_comments(
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
-    close_kinds = _cloud_close_kinds(comments, watched) if state else {}
+    # axis: an incomplete pull-request attribution is a partial read, so it neither replaces the known closes nor sets the closed slot — see bite-proof record i2651_pr_comments.md
+    complete = state and pr_complete
+    close_kinds = _cloud_close_kinds(comments, watched) if complete else {}
     closes = {lid: close for lid, (close, _kind) in close_kinds.items()}
-    if not state and known_closes:
+    if not complete and known_closes:
         progress = _cloud_progress(comments, watched)
         note_times = _cloud_note_times(comments, watched)
         for lid, (close, kind) in list(known_closes.items()):
@@ -2440,7 +2583,7 @@ def _evaluate_cloud_comments(
                 continue
             closes[lid] = close
     # axis: only a complete read sets the closed slot, so a partial read is never taken for "no close" — see bite-proof record wo_2148_fix_order.md
-    if state and isinstance(closed_out, list) and closed_out:
+    if complete and isinstance(closed_out, list) and closed_out:
         closed_out[0] = dict(close_kinds)
     notes = [_builder_note(comment, watched, answered, closes) for comment in comments]
     notes = sorted(
