@@ -4550,12 +4550,12 @@ def _check_premises(
         rows = _preflight_accepted(preflight_result["checks"], None)
         # axis: on a stack premise every lower layer preflight accepted must still qualify at its accepted head — see bite-proof record wo_2652_stack_layer_blockers
         for row in [{}] if rows is False else rows:
-            # axis: an accepted lower layer's vetted head must be in the launch base's history, or it lapses — see bite-proof record wo_2652_stack_layer_blockers
+            # axis: an accepted lower layer's vetted head must be in the launch base's history, and a stacked row must name the launch's own stack, or it lapses — see bite-proof record wo_2652_stack_layer_blockers
             held = rows is not False and _git_scrubbed(repo_root, "merge-base", "--is-ancestor", row["head"], resolved_base,
                                                        env=env, timeout=_WORKTREE_GIT_TIMEOUT)
             recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (
                 {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": row["head"]}
-                if held is None or held.returncode != 0 else
+                if held is None or held.returncode != 0 or row.get("stack") not in (None, stamped_premise["stack"]) else
                 _apply_dependency_gate({"dependency": row["pr"]}, row["head"], repo_root, env, pr_vet_reader,
                                        deadline=deadline, accepted=row, membership_reader=membership_reader,
                                        below=stamped_premise["layerPosition"] if row.get("stack") is not None else None))
