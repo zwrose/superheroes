@@ -318,12 +318,17 @@ def _first_line_candidates(body, repo):
 
 
 def _base_names(pull):
-    """(base ref, the base repository's default branch), each a string; None for either that cannot be read."""
+    """(base ref, the base repository's default branch), each a non-blank string; None for either that cannot be
+    read, a blank name included."""
     base = pull.get("base")
     ref = base.get("ref") if isinstance(base, dict) else None
     where = base.get("repo") if isinstance(base, dict) else None
     default = where.get("default_branch") if isinstance(where, dict) else None
-    return (ref if isinstance(ref, str) else None), (default if isinstance(default, str) else None)
+
+    def named(value):
+        # axis: a blank branch name is unreadable, never a name to compare — see bite-proof record i2658_parked_links
+        return value if isinstance(value, str) and value.strip() else None
+    return named(ref), named(default)
 
 
 def _timeline_rows(repo, n, env, run):
@@ -458,6 +463,9 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         rebind = bool(old) and old in superseded
         if rebind:
             _, was, why = _lane(repo_root, issues, env, old)
+            # axis: a rebind whose ledger read fails refuses before the new park is saved, so the same park can be retried — see bite-proof record i2658_parked_links
+            if why:
+                return _refusal(why)
             issues = [was["issue"]] if was else issues
         # axis: a saved, unsuperseded launch is looked up whatever the link read says, since `_lane` ignores the issues when given a launch id — see bite-proof record i2658_parked_links
         launch_id, _, ledger_reason = (

@@ -235,22 +235,24 @@ def test_the_cloud_reader_with_no_repository_reads_the_links_as_unreadable(monke
 
 # --- I1: the record discloses an unreadable read -------------------------------------------------------------------
 
-def test_e11_unreadable_links_with_a_full_marker_on_the_branch_write_the_full_lane_and_disclose_it(tmp_path):
-    # axis: E11; an unreadable link read lowering the lane to a light session lane that the round cap then refuses or lets through
+def test_e11_unreadable_links_never_let_a_full_marker_promote_the_sessions_lane(tmp_path):
+    # axis: E11; a full build lane marker the PR could not be matched to promoting a light review past its round cap
     over_cap = {"count": 5, "cap": 4, "stoppedAtCap": False}
-    fake = Fake(meta=dict(UNREADABLE_META), marker=MARKER, issue_bodies={9: "**Lane call:** light. small"})
-    out = rr.write(put(tmp_path, account(lane="light", rounds=over_cap)), str(tmp_path), fake.readers())
+    fake = Fake(meta=dict(UNREADABLE_META), marker=MARKER, issue_bodies={9: "**Lane call:** full. spans contracts"})
+    with pytest.raises(rr.Refusal) as e:
+        rr.build_record(account(lane="light", rounds=over_cap), fake.readers())
+    assert e.value.reason == "review-record-round-cap-exceeded"
+    # under the cap the session's own lane stands, disclosed, with the marker deciding nothing
+    out = rr.write(put(tmp_path, account(lane="light")), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "created", out
     body = fake.marked()[-1]["body"]
     rec = rr._parse_body(body)
-    assert rec["lane"]["value"] == "full" and rec["lane"]["source"] == "build lane marker"
+    assert rec["lane"]["value"] == "light" and rec["lane"]["source"] == rr.SESSION
     assert rec["lane"]["issueLinks"] == "unreadable"
-    assert "Lane: full (build lane marker)" in body and UNREADABLE_SENTENCE in body
-    # the marker bound to another branch still decides nothing
-    other = Fake(meta=dict(UNREADABLE_META), marker=dict(MARKER, currentBranch="other"))
-    with pytest.raises(rr.Refusal) as e:
-        rr.build_record(account(lane="light", rounds=over_cap), other.readers())
-    assert e.value.reason == "review-record-round-cap-exceeded"
+    assert "Lane: light (" in body and UNREADABLE_SENTENCE in body
+    # the same marker with readable links naming its issue does decide the full lane
+    readable = Fake(meta={"head": HEAD, "body": "", "issues": [9], "laneIssues": [9]}, marker=MARKER)
+    assert rr.build_record(account(lane="light"), readable.readers())["lane"]["value"] == "full"
 
 
 def test_e12_unreadable_links_with_no_marker_keep_the_session_or_pr_lane_and_disclose_it(tmp_path):

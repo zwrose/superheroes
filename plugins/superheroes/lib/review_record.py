@@ -381,7 +381,7 @@ closing_issues = _closing_issues
 
 
 def _is_pos_int(v):
-    return isinstance(v, int) and not isinstance(v, bool)
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
 
 
 def recorded_links(candidates, repo, pr, get_issue, list_timeline):
@@ -393,8 +393,9 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
     `get_issue(n)` returns the REST issue object or None; a target that is a pull request is not linked, and its
     timeline is not read. `list_timeline(n)` returns every REST timeline row (all pages) or None. A read that returns
     None, a non-dict issue, an issue whose number is not `n`, a timeline that is not a list, a row that is not a dict,
-    and a cross-reference whose source is not an issue or whose pull request row has no int number or no string
-    repository name are unreadable: the answer is None, never "no link"."""
+    a row whose `event` is not a non-blank string, and a cross-reference whose source is not an issue or whose pull
+    request row has no positive int number or no non-blank repository name are unreadable: the answer is None, never
+    "no link"."""
     # axis: a repository that is not owner/name, or a PR number that is not an int, leaves the whole answer unreadable
     if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)) or not _is_pos_int(pr):
         return None
@@ -422,7 +423,11 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
             # axis: a malformed timeline row is unreadable, never skipped
             if not isinstance(row, dict):
                 return None
-            if row.get("event") != "cross-referenced":
+            event = row.get("event")
+            # axis: a row whose event cannot be read is unreadable, never skipped as an unrelated event — see bite-proof record i2658_review_record_links
+            if not isinstance(event, str) or not event.strip():
+                return None
+            if event != "cross-referenced":
                 continue
             source = row.get("source")
             issue = source.get("issue") if isinstance(source, dict) else None
@@ -433,7 +438,8 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
             number = issue.get("number")
             repository = issue.get("repository")
             full_name = repository.get("full_name") if isinstance(repository, dict) else None
-            if not _is_pos_int(number) or not isinstance(full_name, str):
+            # axis: a cross-reference whose PR number or repository name cannot be read is unreadable, never "no link"
+            if not _is_pos_int(number) or not isinstance(full_name, str) or not full_name.strip():
                 return None
             # axis: only a cross-reference from this PR number counts, so another PR of the repository never links the issue
             # axis: only a cross-reference from this repository counts, so another repository's PR with the same number never links the issue
@@ -1498,8 +1504,8 @@ def _lane(a, rd, meta):
     disclosed = {"issueLinks": "unreadable"} if unreadable else {}
     marker_full = (isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full"
                    and m.get("branch") == m.get("currentBranch") and meta)
-    # axis: with the PR's links unreadable, a full build lane marker bound to the current branch decides the full lane without the issue match, so an unreadable link read never lowers the lane — see bite-proof record i2658_review_record_links (G7)
-    if marker_full and (unreadable or str(m.get("issue")) in {str(n) for n in meta["issues"]}):
+    # axis: a full build lane marker decides the lane only when its issue is one of the PR's linked issues; with the links unreadable it is never matched and never promotes the lane, and the session's own lane and evidence requirements stand — see bite-proof record i2658_review_record_links (G7)
+    if marker_full and not unreadable and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
         # The marker decides the value only; a reason is shown with where it came from, never as a fact code holds.
         if hit and _lane_reason(hit.group(2)):
             reason, reason_source = _lane_reason(hit.group(2)), source
