@@ -1282,6 +1282,29 @@ def test_cli_derives_dirty_from_git_status(tmp_path):
     assert data["reference"]["dirty"] is True
 
 
+def test_cli_dirty_ignores_inherited_git_dir(tmp_path):
+    """Dirtiness is read from the CLI's own checkout even when GIT_DIR names a clean one."""
+    dirty_checkout = tmp_path / "dirty"
+    dirty_checkout.mkdir()
+    (dirty_checkout / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    _commit_checkout(dirty_checkout)
+    (dirty_checkout / "tracked.txt").write_text("v2\n", encoding="utf-8")
+    clean_checkout = tmp_path / "clean"
+    clean_checkout.mkdir()
+    (clean_checkout / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    _commit_checkout(clean_checkout)
+    report = _minimal_passing_report()
+    path = _write_report(tmpdir=str(tmp_path), report=report)
+    argv = _cli_argv(path)
+    argv.remove("--clean")
+    env = _pinned_git_env()
+    env["GIT_DIR"] = str(clean_checkout / ".git")
+    env["GIT_WORK_TREE"] = str(clean_checkout)
+    proc = subprocess.run(argv, capture_output=True, text=True, cwd=dirty_checkout, env=env)
+    assert proc.returncode == 1, proc.stderr
+    assert json.loads(proc.stdout)["reference"]["dirty"] is True
+
+
 def test_cli_exit_0_on_ok_matrix():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = _write_report(tmpdir, _minimal_passing_report())

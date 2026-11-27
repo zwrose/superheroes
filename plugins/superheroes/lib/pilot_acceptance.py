@@ -5,10 +5,12 @@ report and declaration receipts, framework-authored rows, matrix aggregation, an
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 
+import git_routing
 import pilot_conformance as pc
 import pilot_conformance_declarations as pcd
 
@@ -819,12 +821,19 @@ def _coerce_declarations_block(report_data):
 
 
 def _derive_dirty_from_git():
+    # bite-axis: one checkout — dirtiness is read from the checkout `pilot_conformance.py head`
+    # pins, so an inherited GIT_DIR cannot report another checkout's state.
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in git_routing.GIT_ROUTING_VARS
+    }
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         raise PilotAcceptanceError(REASON_CLI_DIRTY_UNRESOLVED)

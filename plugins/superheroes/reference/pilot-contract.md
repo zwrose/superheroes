@@ -3475,7 +3475,8 @@ malformed** envelope refuses `acceptance-cli-declarations-malformed`; a non-obje
 Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when `ok` is true, **exit 1** when it is
 false (output still prints), **exit 2** on refusal. When neither `--dirty` nor `--clean` is
 passed, dirty is derived from `git status --porcelain` in the **CLI process's current working
-directory**; pass `--dirty` or `--clean` to override explicitly.
+directory**, with git routing variables removed (the checkout `pilot_conformance.py head` pins);
+pass `--dirty` or `--clean` to override explicitly.
 
 ### Acceptance-matrix refusal tokens
 
