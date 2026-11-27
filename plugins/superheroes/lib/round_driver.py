@@ -1439,6 +1439,7 @@ def _diff_changed_paths(diff_text):
 
 
 LANE_EXPANDED_RECOMPOSE = decision_kinds.LANE_EXPANDED_RECOMPOSE
+AUDITS_UNSEATABLE = decision_kinds.AUDITS_UNSEATABLE
 
 
 def _calibration_pin(state):
@@ -1512,9 +1513,9 @@ def _halt_audits_unseatable(state, cause):
     _set_terminal(state, "halted")
     state["certification"] = {
         "shape": None,
-        "reason": ("audits-unseatable: " + detail + " — the round's fixes were not audited; no "
+        "reason": (AUDITS_UNSEATABLE + ": " + detail + " — the round's fixes were not audited; no "
                    "further round runs; certification withheld")}
-    _decision(state, "audits-unseatable", detail)
+    _decision(state, AUDITS_UNSEATABLE, detail)
     state["step"] = P_TERMINAL
 
 

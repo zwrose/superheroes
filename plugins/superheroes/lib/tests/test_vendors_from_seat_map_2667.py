@@ -203,7 +203,7 @@ def test_an_armed_post_fix_verify_runs_before_the_halt():
 def test_the_three_causes_each_name_the_vendor_list_they_read():
     # axis: I3 — one builder, three causes, each reading the same inputs the selection reads
     assert set(RDISC.AUDIT_UNSEATABLE_CAUSES) == {
-        "fixer-family-unknown", "runner-channel-only", "no-independent-vendor"}
+        "fixer-family-unknown", "runner-channel-only", "pinned-roster-excludes", "no-independent-vendor"}
     unknown = RDISC.audit_unseatable_cause({"config": {"vendors": ["claude", "codex"]}})
     assert unknown["cause"] == "fixer-family-unknown" and unknown["fixerFamily"] is None
     runner = RDISC.audit_unseatable_cause(

@@ -6,6 +6,7 @@ Holds the decision kinds, the driver's verdict names, the verdict-to-terminal-st
 imports nothing from this plugin, so the round driver and the review record may both import it.
 """
 LANE_EXPANDED_RECOMPOSE = "lane-expanded-recompose"
+AUDITS_UNSEATABLE = "audits-unseatable"
 
 DECISION_KINDS = (
     "audit-attributed-change",
@@ -13,7 +14,7 @@ DECISION_KINDS = (
     "audit-provenance-fail",
     "audit-scope-held",
     "audit-unnamed-change",
-    "audits-unseatable",
+    AUDITS_UNSEATABLE,
     "author-justified-drop",
     "bounded-pass-begun",
     "bounded-pass-open",
@@ -141,7 +142,7 @@ _TERMINAL_CAUSE_TABLE = {
     ("halted", "verify-skip-but-configured"): {"kind": "loop", "reason": "detector"},
     ("halted", "verify-unresolved"): {"kind": "loop", "reason": "detector"},
     ("halted", LANE_EXPANDED_RECOMPOSE): {"kind": "loop", "reason": "detector"},
-    ("halted", "audits-unseatable"): {"kind": "loop", "reason": "detector"},
+    ("halted", AUDITS_UNSEATABLE): {"kind": "loop", "reason": "detector"},
     ("halted", "round-ceiling"): {"kind": "non-loop", "reason": "budget"},
     # The handed-back rows: the PR goes back to its owner with the review's findings still open.
     ("handed-back", "round-cap"): {"kind": "non-loop", "reason": "open-findings"},
