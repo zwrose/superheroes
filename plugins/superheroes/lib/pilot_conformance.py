@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import timezone
@@ -98,6 +99,10 @@ EFFECT_BEARING_EXERCISES = frozenset({
 
 REASON_CLI_CWD_INVALID = "conformance-cli-cwd-invalid"
 REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
+REASON_CLI_PROJECT_INVALID = "conformance-cli-project-invalid"
+REASON_CLI_COMMIT_UNREADABLE = "conformance-cli-commit-unreadable"
+
+_COMMIT_OID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 
 _EXERCISE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
 EVIDENCE_MAX_LEN = 500
@@ -925,6 +930,29 @@ def _validate_cli_now(now):
     return now
 
 
+def report_reference(project, cwd):
+    """Return the `{project, commit}` binding a run report carries for the acceptance matrix.
+
+    The commit is the full object id `git rev-parse HEAD` reads in `cwd`; refuses
+    `conformance-cli-commit-unreadable` when it cannot be read as one.
+    """
+    if not isinstance(project, str) or not project or _has_control_char(project):
+        raise PilotConformanceError(REASON_CLI_PROJECT_INVALID)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise PilotConformanceError(REASON_CLI_COMMIT_UNREADABLE)
+    commit = proc.stdout.strip()
+    if proc.returncode != 0 or not _COMMIT_OID_RE.match(commit):
+        raise PilotConformanceError(REASON_CLI_COMMIT_UNREADABLE)
+    return {"project": project, "commit": commit}
+
+
 def _parse_run_args(args):
     parser = argparse.ArgumentParser(prog="pilot_conformance.py")
     subparsers = parser.add_subparsers(dest="command")
@@ -939,6 +967,7 @@ def _parse_run_args(args):
     run_parser.add_argument("--artifacts-dir")
     run_parser.add_argument("--registry-path")
     run_parser.add_argument("--now")
+    run_parser.add_argument("--project")
     run_parser.add_argument(
         "--allow-live-effects",
         action="store_true",
@@ -981,6 +1010,9 @@ def main(argv):
 
     reach_roots = parsed.reach_roots or None
     try:
+        reference = None
+        if parsed.project is not None:
+            reference = report_reference(parsed.project, cwd)
         inputs, resolution = resolve_inputs(
             cwd,
             policy_root=parsed.policy_root,
@@ -1000,6 +1032,9 @@ def main(argv):
         return 2
 
     output = dict(report_data)
+    if reference is not None:
+        # bite-axis: report binding — the matrix accepts this report only for the stamped pair.
+        output["reference"] = reference
     output["resolution"] = resolution
     output["declarations"] = inputs.get("declarations")
     # bite-axis: stdout/stderr split — report JSON only on stdout; diagnostics belong on stderr.

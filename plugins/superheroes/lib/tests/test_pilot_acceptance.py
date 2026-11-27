@@ -814,7 +814,44 @@ def test_cli_matrix_with_null_declarations_report():
     assert proc.stdout.startswith("## Acceptance matrix")
 
 
-def test_e2e_conformance_run_then_matrix_cli(tmp_path):
+def _pinned_git_env():
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
+def _git(path, *args):
+    return subprocess.run(
+        ["git", "-C", str(path)] + list(args),
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_pinned_git_env(),
+    )
+
+
+def _commit_checkout(path):
+    """Make `path` a git checkout with one commit; return that commit's full id."""
+    _git(path, "init", "-q")
+    _git(path, "add", "-A")
+    _git(
+        path,
+        "-c",
+        "user.name=Pilot Fixture",
+        "-c",
+        "user.email=pilot-fixture@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+    )
+    return _git(path, "rev-parse", "HEAD").stdout.strip()
+
+
+def _conformance_fixture(tmp_path):
     from test_pilot_conformance import _write_calibration_layer  # noqa: E402
 
     reach_root = tmp_path / "reach"
@@ -840,8 +877,11 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         encoding="utf-8",
     ) as handle:
         json.dump(policy, handle)
-    report_path = tmp_path / "report.json"
-    conformance_argv = [
+    return reach_root, policy_root
+
+
+def _run_conformance(reach_root, policy_root, *extra):
+    argv = [
         sys.executable,
         "-B",
         os.path.join(_LIB, "pilot_conformance.py"),
@@ -854,18 +894,18 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         str(reach_root),
         "--now",
         _GENERATED_AT,
-    ]
-    conformance_proc = subprocess.run(
-        conformance_argv,
+    ] + list(extra)
+    return subprocess.run(
+        argv,
         capture_output=True,
         text=True,
         cwd=_LIB,
+        env=_pinned_git_env(),
     )
-    assert conformance_proc.stderr == ""
-    # conformance may exit 1 when surfaces unexercised
-    with open(report_path, "w", encoding="utf-8") as handle:
-        handle.write(conformance_proc.stdout)
-    matrix_argv = [
+
+
+def _run_matrix_cli(report_path, project, commit):
+    argv = [
         sys.executable,
         "-B",
         os.path.join(_LIB, "pilot_acceptance.py"),
@@ -873,24 +913,88 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         "--report-path",
         str(report_path),
         "--project",
-        "demo",
+        project,
         "--commit",
-        _VALID_SHA1,
+        commit,
         "--generated-at",
         _GENERATED_AT,
         "--clean",
         "--format",
         "markdown",
     ]
-    matrix_proc = subprocess.run(
-        matrix_argv,
-        capture_output=True,
-        text=True,
-        cwd=_LIB,
-    )
+    return subprocess.run(argv, capture_output=True, text=True, cwd=_LIB)
+
+
+def test_conformance_run_with_project_stamps_reference(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode in (0, 1)
+    assert proc.stderr == ""
+    report = json.loads(proc.stdout)
+    assert report["reference"] == {"project": "demo", "commit": commit}
+    assert len(commit) == 40
+
+
+def test_conformance_run_with_project_refuses_unreadable_commit(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def test_conformance_run_refuses_invalid_project(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    _commit_checkout(reach_root)
+    proc = _run_conformance(reach_root, policy_root, "--project", "")
+    assert proc.returncode == 2
+    assert proc.stderr.strip() == pc.REASON_CLI_PROJECT_INVALID
+
+
+def test_conformance_run_without_project_stamps_no_reference(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    proc = _run_conformance(reach_root, policy_root)
+    assert proc.returncode in (0, 1)
+    assert "reference" not in json.loads(proc.stdout)
+
+
+def test_e2e_conformance_run_then_matrix_cli(tmp_path):
+    """The documented pipeline, end to end: a stamped report backs a matrix for its own pair."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    conformance_proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert conformance_proc.stderr == ""
+    # conformance may exit 1 when surfaces unexercised
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
     assert matrix_proc.returncode in (0, 1)
     assert matrix_proc.stderr == ""
     assert matrix_proc.stdout.startswith("## Acceptance matrix")
+
+    other_commit = _run_matrix_cli(report_path, "demo", "c" * 40)
+    assert other_commit.returncode == 2
+    assert other_commit.stderr.splitlines()[0] == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert commit in other_commit.stderr
+
+    other_project = _run_matrix_cli(report_path, "elsewhere", commit)
+    assert other_project.returncode == 2
+    assert other_project.stderr.splitlines()[0] == pa.REASON_REPORT_PROJECT_MISMATCH
+
+
+def test_e2e_unstamped_report_refuses_as_unbound(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    conformance_proc = _run_conformance(reach_root, policy_root)
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
+    assert matrix_proc.returncode == 2
+    assert matrix_proc.stdout == ""
+    assert matrix_proc.stderr.splitlines()[0] == pa.REASON_REPORT_UNBOUND
 
 
 # --- framework_rows totality --------------------------------------------------

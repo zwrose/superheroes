@@ -288,14 +288,15 @@ run the headless conformance pass before set-up completes (normative CLI in
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPORT_JSON="$(mktemp)"
 trap 'rm -f "$REPORT_JSON"' EXIT
-CONFORMANCE_ARGS=(run --cwd .)
+PROJECT_NAME="$(basename "$(pwd)")"
+CONFORMANCE_ARGS=(run --cwd . --project "$PROJECT_NAME")
 if [ -n "${PILOT_REGISTRY:-}" ]; then
   CONFORMANCE_ARGS+=(--registry-path "$PILOT_REGISTRY")
 fi
 python3 -B "$ROOT_DIR/lib/pilot_conformance.py" "${CONFORMANCE_ARGS[@]}" > "$REPORT_JSON"
 python3 -B "$ROOT_DIR/lib/pilot_acceptance.py" matrix \
   --report-path "$REPORT_JSON" \
-  --project "$(basename "$(pwd)")" \
+  --project "$PROJECT_NAME" \
   --commit "$(git rev-parse HEAD)" \
   --format markdown
 ```

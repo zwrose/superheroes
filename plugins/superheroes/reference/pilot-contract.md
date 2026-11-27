@@ -3242,8 +3242,15 @@ python3 -B "${CLAUDE_PLUGIN_ROOT}"
        [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
        [--slot-ref <ref>] [--branch <name>] [--slot <id>]
        [--artifacts-dir <path>] [--registry-path <path>] [--now <iso8601-utc-Z>]
-       [--allow-live-effects]
+       [--allow-live-effects] [--project <name>]
 ```
+
+With `--project <name>` the report carries a top-level `reference: {project, commit}`, where
+`commit` is the full object id `git rev-parse HEAD` reads in `--cwd`; the acceptance matrix accepts
+the report only for that project and commit (§The acceptance matrix, report binding). When the
+commit cannot be read as a full object id the run refuses `conformance-cli-commit-unreadable`
+before any exercise runs. Without `--project` the report carries no `reference` and the matrix
+refuses it as unbound.
 
 Stdout is the report JSON and nothing else; diagnostics go to stderr. **Exit 0** when `ok` is
 true, **exit 1** when it is false (including an all-skipped run — a run that exercised nothing
@@ -3276,6 +3283,8 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-exercise-raised` | exercise raised an exception without a normalized reason |
 | `conformance-cli-cwd-invalid` | `--cwd` is not an existing directory (exit 2) |
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
+| `conformance-cli-project-invalid` | `--project` is empty or contains control characters (exit 2) |
+| `conformance-cli-commit-unreadable` | `--project` given but `git rev-parse HEAD` in `--cwd` did not read a full object id (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
 | `conformance-input-calibration-unreadable` | pilot block input: calibration source exists but could not be read for cwd |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
@@ -3338,6 +3347,16 @@ A short sha, branch name, tag, `HEAD`, or mixed-case hex is not a pin and refuse
 `acceptance-reference-commit-invalid`. A dirty reference worktree is recorded and permitted but
 forces the matrix's `ok` to false — a matrix taken against a tree that does not match its pin is not
 a receipt.
+
+### Report binding
+
+A run report backs a matrix only for the project and commit it names. The report's top-level
+`reference` (stamped by `pilot_conformance.py run --project`) must carry the same `project` and
+`commit` as the matrix's pinned reference. A report whose `reference` is absent or names only one
+of the two refuses `acceptance-report-unbound`; a differing commit refuses
+`acceptance-report-commit-mismatch` and a differing project `acceptance-report-project-mismatch`,
+the CLI's second stderr line naming each differing value. `matrix()` applies the same check, so
+no library caller aggregates another run's evidence.
 
 ### Status vocabulary
 
@@ -3438,7 +3457,9 @@ python3 -B pilot_acceptance.py matrix --report-path <json> --project <name> --co
        [--dirty | --clean] [--generated-at <iso>] [--format json|markdown]
 ```
 
-The report JSON is the output of `pilot_conformance.py run`; `declarations` is read from the
+The report JSON is the output of `pilot_conformance.py run --project <name>`, given the same
+`<name>` as the matrix's `--project`, its `--cwd` checked out at the matrix's `--commit`
+(§Report binding); `declarations` is read from the
 top-level key. When the `declarations` key is **absent**, the matrix CLI treats it as an empty
 envelope (`ok: false`, no rows) and records `acceptance-cli-declarations-absent`. When
 `declarations` is **explicitly null** (no registry was supplied to the conformance run), the matrix
