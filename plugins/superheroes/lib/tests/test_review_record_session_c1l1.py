@@ -253,15 +253,17 @@ def test_e10_an_envelope_that_cannot_be_read_or_has_no_findings_list_contributes
 
 
 def test_e11_an_earlier_record_that_cannot_be_read_fills_and_carries_nothing(tmp_path):
-    # axis: any read failure of the earlier record reads as no earlier findings
+    # axis: an earlier record that cannot be read is an unreadable entry (#2672 reversed the old "reads as none"), and nothing is filled or carried from it
     fake = Fake()
     fake.comments.append({"id": 1, "author": "bot", "body": rr.MARKER + "\nnot a record", "url": "http://c/1"})
     account = rs.account_from_session(_later(tmp_path, "b", dispositionLedger=[ledger_row()]), extras(), fake.readers())
     assert rr.read(7, readers=fake.readers())["reason"] == "review-record-unreadable"
-    assert rs._earlier(account, extras(), str(tmp_path), fake.readers()) == []
+    earlier = rs._earlier(account, extras(), str(tmp_path), fake.readers())
+    assert isinstance(earlier, rs._Unreadable) and "http://c/1" in earlier.detail
     before = json.dumps(account["findings"], sort_keys=True)
-    rs._fill(account, rs._earlier(account, extras(), str(tmp_path), fake.readers()))
+    rs._fill(account, [])
     assert json.dumps(account["findings"], sort_keys=True) == before
+    assert rs._carried(account, []) == []
 
 
 def test_e12_a_break_it_run_both_sides_hold_is_kept_once(tmp_path):

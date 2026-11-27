@@ -1902,28 +1902,43 @@ def _owner_rulings(entries, findings, merged):
     return out
 
 
-def _earlier(account, extras, repo_root, readers):
-    """The latest earlier record's findings, or [] when there is none.
+class _Unreadable:
+    """An earlier record a reader met but could not read, in place of its findings: never absent, never skipped.
+    `detail` names the record and why."""
 
-    Any refusal other than "no earlier record", and any malformed findings list, reads as none: the
-    writer makes its own refusal, so there is one place that refuses.
+    def __init__(self, detail):
+        self.detail = detail
+
+
+def _earlier(account, extras, repo_root, readers):
+    """The latest earlier record's findings, [] when there is none, or an `_Unreadable` when the latest record cannot
+    be read (it does not parse, or its findings list is malformed). An unreadable latest record is never read as none:
+    nothing is carried from it, and the caller names it on the record.
+
+    Any other refusal reads as none: the writer makes its own refusal, so there is one place that refuses.
     """
     repo = extras.get("repo") or review_record._readers(readers)["repo_name"](repo_root)
     prior = review_record.read(account["pr"], repo, readers)
+    # axis: an unreadable latest record is an unreadable entry, never "no earlier record" — see bite-proof record i2672_unreadable_never_absent (S1)
+    if not prior.get("ok") and prior.get("reason") == "review-record-unreadable":
+        return _Unreadable(prior.get("detail") or "the latest review record could not be read")
     earlier = prior.get("findings") if prior.get("ok") else None
-    if not isinstance(earlier, list) or not all(isinstance(f, dict) for f in earlier):
+    if prior.get("ok") and not (isinstance(earlier, list) and all(isinstance(f, dict) for f in earlier)):
+        return _Unreadable(f"{prior.get('url') or 'the latest review record'}: its findings list is malformed")
+    if not isinstance(earlier, list):
         return []
     return earlier
 
 
 def _other_session_findings(account, extras, repo_root, readers):
-    """The findings of the latest review record on the PR posted by a session other than this one, or [] when none.
+    """The findings of the latest review record on the PR posted by a session other than this one, [] when none, or
+    an `_Unreadable` when the walk meets a record it cannot read before it finds one.
 
-    Records are walked newest first; a record that does not parse, or whose findings list is malformed, is skipped (as
-    `review_record` treats it: unreadable), and a record is "other" when its `sessionId` differs from the account's
-    non-empty `sessionId`. [] only when the walk completes with no readable other-session record. A failed read of the
-    PR's comments is not an absent predecessor: it raises the writer's `review-record-gh-failed` refusal, so nothing is
-    posted."""
+    Records are walked newest first; a record is "other" when its `sessionId` differs from the account's non-empty
+    `sessionId`, and a readable record of this same session is looked past. A record that does not parse, or whose
+    findings list is malformed, stops the walk: whose it is cannot be told, so the walk never reaches past it to an
+    older record. [] only when the walk completes with no other-session record. A failed read of the PR's comments is
+    not an absent predecessor: it raises the writer's `review-record-gh-failed` refusal, so nothing is posted."""
     sid = account.get("sessionId")
     try:
         rd = review_record._readers(readers)
@@ -1938,16 +1953,35 @@ def _other_session_findings(account, extras, repo_root, readers):
     except Exception:  # noqa: BLE001 — a failed history read must refuse, never read as an absent predecessor
         raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
     for comment in reversed(marked):
+        where = comment.get("url") or "an earlier review record"
         try:
             rec = review_record._parse_body(comment["body"], by_id)
-        except Exception:  # noqa: BLE001 — an unparseable record is skipped
-            continue
-        if not isinstance(rec, dict) or rec.get("sessionId") == sid:
-            continue
+        except Exception as exc:  # noqa: BLE001 — a record whose parsing raises is unreadable, never skipped
+            # axis: an earlier record that cannot be parsed stops the raiser walk instead of being skipped — see bite-proof record i2672_unreadable_never_absent (S2)
+            return _Unreadable(f"{where}: the record could not be read ({type(exc).__name__})")
+        if not isinstance(rec, dict):
+            return _Unreadable(f"{where}: the record could not be read")
         found = rec.get("findings")
-        if isinstance(found, list) and all(isinstance(f, dict) for f in found):
-            return found
+        # axis: a record whose findings list is malformed stops the walk, whichever session posted it — see bite-proof record i2672_unreadable_never_absent (S2)
+        if not (isinstance(found, list) and all(isinstance(f, dict) for f in found)):
+            return _Unreadable(f"{where}: its findings list is malformed")
+        if rec.get("sessionId") == sid:
+            continue
+        return found
     return []
+
+
+def _unreadable_checked(earlier, raisers):
+    """The `checked` lines naming each earlier record a reader could not read, so the record says why nothing was
+    carried from it."""
+    out = []
+    if isinstance(earlier, _Unreadable):
+        out.append(f"No findings were carried from the latest earlier review record: it could not be read "
+                   f"({earlier.detail}).")
+    if isinstance(raisers, _Unreadable):
+        out.append(f"No raiser was taken from an earlier session's review record: the walk stopped at a record it "
+                   f"could not read ({raisers.detail}), so each finding keeps this session's own raiser.")
+    return out
 
 
 def _carry_review(account, last_reviewed, extras, repo_root, readers):
@@ -2056,6 +2090,12 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}
         sid = account.get("sessionId")
         raisers = _other_session_findings(account, extras, repo_root, readers) if isinstance(sid, str) and sid else None
+        # axis: an earlier record that could not be read gives no findings and no raisers, and the record names it — see bite-proof record i2672_unreadable_never_absent (S1)
+        account["checked"] = list(account.get("checked") or []) + _unreadable_checked(earlier, raisers)
+        if isinstance(earlier, _Unreadable):
+            earlier = []
+        if isinstance(raisers, _Unreadable):
+            raisers = []
         _fill(account, earlier, raisers)
         account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
