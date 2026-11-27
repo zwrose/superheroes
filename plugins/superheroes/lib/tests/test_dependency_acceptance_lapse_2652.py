@@ -1,5 +1,6 @@
 """A dependency preflight accepted must still qualify at launch; without a recorded acceptance the old gate stands."""
 import json
+import subprocess
 
 import pytest
 
@@ -72,7 +73,9 @@ def test_a_stack_premise_lapses_an_accepted_layer_missing_from_the_launch_base(t
     # axis: an accepted lower layer whose vetted head is not in the launch base's history lapses before the stack gate
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    elsewhere = "e" * 40
+    # a real commit the launch base's history does not contain (a root commit made beside it)
+    elsewhere = subprocess.run(["git", "-C", str(repo), "commit-tree", "HEAD^{tree}", "-m", "divergent"],
+                               capture_output=True, text=True, check=True).stdout.strip()
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
     row = {"pr": 701, "form": "ready", "head": elsewhere, "stack": 1, "feature": FEATURE}
     checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
@@ -90,6 +93,28 @@ def test_a_stack_premise_lapses_an_accepted_layer_missing_from_the_launch_base(t
     assert result["reason"] == "dependency-acceptance-lapsed"
 
 
+def test_a_stack_premise_lapses_an_unstacked_accepted_row(tmp_path, monkeypatch):
+    # axis: on a stack premise an accepted row recorded outside any stack (a dependency-only preflight reused) lapses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    row = {"pr": 701, "form": "ready", "head": head, "stack": None, "feature": FEATURE}
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
+
+    def pr_lookup(*args, **kwargs):
+        raise _StackGateReached()
+
+    result = L.launch_build(
+        repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
+        pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, _ready_vet_body(head), pr_number=pr), None),
+        membership_reader=lambda **kwargs: dict(NOT_LINKED, queried={"headRefOid": head}),
+        pr_lookup=pr_lookup,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-acceptance-lapsed"
+
+
 def test_a_card_at_launch_lapses_an_acceptance_recorded_with_no_feature(tmp_path, monkeypatch):
     # axis: a READY dependency accepted under a feature in another repository (recorded feature None) that falls back
     # to a card at the same head lapses
@@ -99,7 +124,7 @@ def test_a_card_at_launch_lapses_an_acceptance_recorded_with_no_feature(tmp_path
 
 
 def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependency():
-    rows = [{"pr": 702, "form": "ready", "head": "h"}, {"pr": 701, "form": "stack-card", "head": "h"}]
+    rows = [{"pr": 702, "form": "ready", "head": "a" * 40}, {"pr": 701, "form": "stack-card", "head": "b" * 40}]
     checks = lambda evidence, check="base-state": [{"id": check, "evidence": evidence}]
     assert L._preflight_accepted(checks(json.dumps(rows)), 701) == rows[1]
     assert L._preflight_accepted(checks(json.dumps(rows)), 703) is None
@@ -110,7 +135,10 @@ def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependenc
     # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted"
     for unreadable in ("Accepted PR #701 at abc", "{}", "[1]", "not json", json.dumps(rows[1]),
                        json.dumps([{"pr": "701", "form": "ready", "head": "h"}]), json.dumps([{"pr": 701}]),
-                       json.dumps([{"pr": 701, "form": "ready"}]), json.dumps([{"pr": 701, "form": "ready", "head": 5}])):
+                       json.dumps([{"pr": 701, "form": "ready"}]), json.dumps([{"pr": 701, "form": "ready", "head": 5}]),
+                       # axis: a head that is not a 40-character hex commit id (a NUL included) is unreadable, never passed to Git
+                       json.dumps([{"pr": 701, "form": "ready", "head": "x" * 40}]),
+                       json.dumps([{"pr": 701, "form": "ready", "head": "a" * 39 + "\u0000"}])):
         assert L._preflight_accepted(checks(unreadable), 701) is False, unreadable
     # axis: with no dependency named, every accepted row is returned (an empty list for empty evidence)
     assert L._preflight_accepted(checks(json.dumps(rows)), None) == rows

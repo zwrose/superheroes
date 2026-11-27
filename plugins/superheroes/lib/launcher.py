@@ -2565,7 +2565,7 @@ def _preflight_accepted(preflight_checks, dependency):
     # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted" — see bite-proof record wo_2652_stack_layer_blockers
     if not isinstance(rows, list) or not all(
         isinstance(row, dict) and ll.is_positive_premise_int(row.get("pr")) and isinstance(row.get("form"), str)
-        and isinstance(row.get("head"), str)
+        and stack_check._validate_head_sha(row.get("head")) is None
         and (row.get("feature") is None or ll.is_positive_premise_int(row.get("feature")))
         for row in rows
     ):
@@ -4553,8 +4553,8 @@ def _check_premises(
             held = rows is not False and _git_scrubbed(repo_root, "merge-base", "--is-ancestor", row["head"], resolved_base,
                                                        env=env, timeout=_WORKTREE_GIT_TIMEOUT)
             recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (
-                {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": row["head"]}
-                if held is None or held.returncode != 0 or row.get("stack") not in (None, stamped_premise["stack"]) else
+                {"ok": False, "reason": "dependency-acceptance-lapsed" if row.get("stack") != stamped_premise["stack"] or (held is not None and held.returncode == 1) else "dependency-read-unavailable", "detail": row["head"]}
+                if held is None or held.returncode != 0 or row.get("stack") != stamped_premise["stack"] else
                 _apply_dependency_gate({"dependency": row["pr"]}, row["head"], repo_root, env, pr_vet_reader,
                                        deadline=deadline, accepted=row, membership_reader=membership_reader,
                                        below=stamped_premise["layerPosition"] if row.get("stack") is not None else None))
