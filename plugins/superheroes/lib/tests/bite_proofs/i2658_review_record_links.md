@@ -407,6 +407,44 @@ FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_e16_
 - **restore:** inverse edit `            continue` -> `            return None`.
 - **restore receipt:** `        if _is_unreadable_entry(rec):` / `            return None` (quoted from the final diff).
 - **raw green:** the whole-file green above.
+- **since review round 1 of PR 2664:** the helper returns the unreadable entry itself (`return rec`), so the carried re-check
+  can name it. E16 asserts `is entry`, and the same `continue` neutralization still turns it red. The proof above is
+  the order's run on the earlier `return None` form.
+
+## G11 — the writer keeps an unreadable latest record in its history (`write`)
+
+Added by the builder after review round 1 of PR 2664. T6 in `test_review_record_carried_2343.py` points here.
+
+- **element / axis:** `if usable is None: history.append(_unreadable_entry(...))` in the latest-record branch of `write`.
+  Axis: an unreadable latest record is the newest history entry, so the carried re-check stops at it, and an older
+  record of another session never settles a carried finding past it.
+- **neutralization:** `                if usable is None:` -> `                if usable is None and False:`.
+- **detectors / selector:** T6 (both cases) and `test_an_unreadable_latest_record_stops_the_writers_carried_recheck`, via
+  `-k "t6 or unreadable_latest"` over `test_review_record_carried_2343.py` and this record's test file.
+- **raw red** (the builder's run on commit `575dbb86`, the failure lines verbatim, the source dump elided):
+
+```
+FFF                                                                      [100%]
+>       assert the_one(rec)["outcome"] == finding.get("outcome")
+E       AssertionError: assert 'fixed' == 'left-for-owner'
+>       assert the_one(rec)["outcome"] == finding.get("outcome")
+E       AssertionError: assert 'fixed' == None
+>       assert "an earlier review record could not be read (" in json.dumps(rec["carriedRechecks"])
+E       assert 'an earlier review record could not be read (' in '[{"checkedHead": "bbbb...", ..., "result": "kept", "settled": "fixed", "why": "its fix commit\'s place in the history could not be read"}]'
+FAILED plugins/superheroes/lib/tests/test_review_record_carried_2343.py::test_t6_an_unreadable_latest_record_stops_the_older_other_session_record_from_carrying_the_finding[left-for-owner]
+FAILED plugins/superheroes/lib/tests/test_review_record_carried_2343.py::test_t6_an_unreadable_latest_record_stops_the_older_other_session_record_from_carrying_the_finding[undecided]
+FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_an_unreadable_latest_record_stops_the_writers_carried_recheck
+3 failed, 65 deselected in 1.19s
+```
+
+- **restore:** the inverse edit, back to `if usable is None:`.
+- **restore receipt:** `git status --porcelain` printed nothing after the restore (the tree matched commit `575dbb86`).
+- **raw green:**
+
+```
+...                                                                      [100%]
+3 passed, 65 deselected in 1.07s
+```
 
 ---
 
