@@ -612,6 +612,43 @@ def _primary(entries, repo, premise, env, run):
     return entries[found.index(True)]
 
 
+def _issue_cross_referenced(repo, issue, pr, env, run):
+    """Whether issue `issue`'s REST timeline records a cross-reference from pull request `pr` of `repo`: True or
+    False, or None when any page or row cannot be read. Read as the park reader reads a pull request's links: a
+    malformed row, a row whose event cannot be read, or a pull request cross-reference whose number or repository
+    cannot be read makes the whole answer unreadable, never "no cross-reference"."""
+    cb = _sib("cloud_builder")
+
+    def fetch(endpoint):
+        code, out = cb._gh(run, ["api", endpoint], cb._git_env(env))
+        return out if code == 0 else None
+    rows = _sib("gh_pages").read(fetch, "repos/%s/issues/%d/timeline" % (repo, issue))
+    if not isinstance(rows, list):
+        return None
+    found = False
+    for row in rows:
+        event = row.get("event") if isinstance(row, dict) else None
+        # axis: a row that is not an object, or whose event cannot be read, is unreadable, never skipped — see bite-proof record i2674_prelink_layer
+        if not isinstance(event, str) or not event.strip():
+            return None
+        if event != "cross-referenced":
+            continue
+        source = row.get("source")
+        ref = source.get("issue") if isinstance(source, dict) else None
+        if not isinstance(ref, dict):
+            return None
+        if "pull_request" not in ref:
+            continue
+        number, where = ref.get("number"), ref.get("repository")
+        name = where.get("full_name") if isinstance(where, dict) else None
+        if (not isinstance(number, int) or isinstance(number, bool) or number < 1
+                or not isinstance(name, str) or not cb._REPO_RE.fullmatch(name)):
+            return None
+        # axis: only this pull request of this repository confirms the layer, so another PR's or another repository's cross-reference never does — see bite-proof record i2674_prelink_layer
+        found = found or (number == pr and name.lower() == repo.lower())
+    return found
+
+
 def _contained(repo_root, entry, primary, env, run):
     """Whether the primary's head contains the entry's head; anything but git's clean yes is no."""
     cb = _sib("cloud_builder")
@@ -714,6 +751,7 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     premise, refused = _own_premise(reserved)
     if refused:
         return refused
+    link_pending = None
     found = pushed(repo_root, info["issue"], repo=repo, adopted=premise.get("adoptsBranch"), env=env, run=run)
     if not found["ok"]:
         return found
@@ -747,6 +785,19 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
                     return _refusal("stack-membership-unreadable")
                 if got["ok"] and any(m["number"] == prs[0]["number"] and m["position"] == premise["layerPosition"] for m in got["members"]):
                     premise["adopts"] = prs[0]["number"]
+                elif not got["ok"]:
+                    # axis: a layer's pull request not yet linked into its stack is read as the layer when the lane's issue timeline confirms it, and otherwise the successor waits for the link, never reading it as no stack — see bite-proof record i2674_prelink_layer
+                    number = prs[0]["number"]
+                    confirmed = _issue_cross_referenced(repo, info["issue"], number, env, run)
+                    if confirmed is not True:
+                        why = "timeline-unreadable" if confirmed is None else "timeline-no-cross-reference"
+                        return dict(_refusal("layer-link-pending"), pr=number, why=why, note=(
+                            "pull request #%d is not yet linked into stack %s and the issue's timeline %s, so the successor waits: "
+                            "link it at position %d, then run successor again"
+                            % (number, premise.get("stack"), "could not be read" if confirmed is None
+                               else "records no cross-reference from it", premise["layerPosition"])))
+                    premise["adopts"] = number
+                    link_pending = {"pr": number, "stack": premise.get("stack"), "layerPosition": premise["layerPosition"]}
     mark = {"at": _iso(time.time()), "branch": entry and entry["branch"], "sha": entry and entry["sha"]}
     if entry is None:
         mark["neverPushedEvidence"] = never_pushed_evidence
@@ -767,6 +818,12 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
               "pushedAt": entry and entry["pushedAt"], "pushTimeSource": entry and entry["pushTimeSource"]}
     if passed_over:
         result["passedOver"] = passed_over
+    if link_pending:
+        # the launcher's stack gate admits `adopts` only for a linked member, so the launch waits for the link
+        result["linkPending"] = dict(link_pending, note=(
+            "pull request #%d holds this layer but is not yet linked into stack %s: link it at position %d before "
+            "launching this premise, or the launcher refuses adopts-occupant-missing"
+            % (link_pending["pr"], link_pending["stack"], link_pending["layerPosition"])))
     return result
 
 

@@ -82,12 +82,17 @@ class Gh:
     def __init__(self):
         self.comments, self.comments_fail, self.activity, self.calls = [], False, {}, []
         self.pulls = []
+        self.timeline = None  # the lane issue's timeline rows; None fails the read
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
         if argv[0] == "git":
             return subprocess.run(argv, **kw)
         endpoint = argv[-1]
+        if "/timeline?" in endpoint:
+            if self.timeline is None:
+                return subprocess.CompletedProcess(argv, 1, "", "boom")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.timeline), "")
         if "/activity?" in endpoint:
             ref = parse_qs(urlparse(endpoint).query)["ref"][0]
             events = self.activity.get(ref[len("refs/heads/"):])
@@ -589,7 +594,7 @@ def _membership(monkeypatch, got):
     monkeypatch.setattr(CR._sib("stack_check"), "read_membership", lambda **k: got)
 
 
-def test_a_pull_request_not_linked_into_the_stack_is_not_adopted_and_an_unreadable_stack_refuses(w, monkeypatch):
+def test_an_unreadable_stack_refuses(w, monkeypatch):
     _push(w, BRANCH, "a")
     _lane(w, "l1")
     assert _assess(w, state="failed")["verdict"] == "stopped"
@@ -597,8 +602,85 @@ def test_a_pull_request_not_linked_into_the_stack_is_not_adopted_and_an_unreadab
     w.gh.pulls = [{"number": 99}]
     _membership(monkeypatch, {"ok": False, "reason": "boom"})
     assert _successor(w) == {"ok": False, "reason": "stack-membership-unreadable"}
+
+
+def _xref(number, repo=REPO, pull=True):
+    issue = {"number": number, "repository": {"full_name": repo}}
+    if pull:
+        issue["pull_request"] = {"url": "https://api.github.com/repos/%s/pulls/%d" % (repo, number)}
+    return {"event": "cross-referenced", "source": {"type": "issue", "issue": issue}}
+
+
+def _prelink_lane(w, monkeypatch, premise=None):
+    sha = _push(w, BRANCH, "a")
+    _lane(w, "l1", premise=premise)
+    assert _assess(w, state="failed")["verdict"] == "stopped"
+    _died(w, "l1")
+    w.gh.pulls = [{"number": 99}]
     _membership(monkeypatch, {"ok": False, "reason": CR._sib("stack_check").REASON_NOT_LINKED})
-    assert "adopts" not in _successor(w)["premise"]
+    return sha
+
+
+def test_i2674_a_recovered_pre_link_layer_keeps_its_stack_binding(w, monkeypatch):
+    sha = _prelink_lane(w, monkeypatch)
+    w.gh.timeline = [{"event": "labeled"}, _xref(99)]
+    got = _successor(w)
+    assert got["ok"] is True and got["branch"] == BRANCH and got["sha"] == sha
+    premise = got["premise"]
+    assert (premise["stack"], premise["layerPosition"], premise["adopts"]) == (2, 2, 99)
+    assert L.validate_premise(premise, w.root)["ok"] is True
+    assert (got["linkPending"]["pr"], got["linkPending"]["stack"], got["linkPending"]["layerPosition"]) == (99, 2, 2)
+    assert "adopts-occupant-missing" in got["linkPending"]["note"]
+    assert _state(w)["superseded"]["l1"]["branch"] == BRANCH
+    assert any(c[-1].startswith("repos/%s/issues/17/timeline?" % REPO) for c in w.gh.calls)
+
+
+@pytest.mark.parametrize("timeline", [
+    None,  # the read fails
+    [{"event": "cross-referenced", "source": {"issue": {"number": 99, "pull_request": {}}}}],  # no repository
+    [{"event": ""}, _xref(99)],  # a row whose event cannot be read
+    ["row", _xref(99)],  # a row that is not an object
+    [{"event": "cross-referenced", "source": {}}],  # a cross-reference whose source names no issue
+])
+def test_i2674_an_unreadable_timeline_holds_the_successor_with_a_named_reason(w, monkeypatch, timeline):
+    _prelink_lane(w, monkeypatch)
+    w.gh.timeline = timeline
+    got = _successor(w)
+    assert (got["ok"], got["reason"], got["pr"], got["why"]) == (False, "layer-link-pending", 99, "timeline-unreadable")
+    assert "waits" in got["note"] and "position 2" in got["note"]
+    assert "l1" not in _state(w).get("superseded", {})  # nothing recorded: the advisor can run it again once linked
+
+
+@pytest.mark.parametrize("timeline", [
+    [],
+    [_xref(98)],  # another pull request
+    [_xref(99, repo="other/repo")],  # another repository's pull request 99
+    [_xref(99, pull=False)],  # an issue, not a pull request
+])
+def test_i2674_a_timeline_with_no_cross_reference_from_the_pull_request_holds_the_successor(w, monkeypatch, timeline):
+    _prelink_lane(w, monkeypatch)
+    w.gh.timeline = timeline
+    got = _successor(w)
+    assert (got["ok"], got["reason"], got["why"]) == (False, "layer-link-pending", "timeline-no-cross-reference")
+    assert "l1" not in _state(w).get("superseded", {})
+
+
+def test_i2674_a_plain_lane_is_unchanged(w, monkeypatch):
+    plain = {k: v for k, v in _premise(w, 17).items() if k not in ("stack", "layerPosition")}
+    sha = _prelink_lane(w, monkeypatch, premise=plain)
+    got = _successor(w)
+    assert got["ok"] is True and got["sha"] == sha and "linkPending" not in got
+    assert "adopts" not in got["premise"] and "stack" not in got["premise"]
+    assert not any("/timeline?" in c[-1] or "/pulls?" in c[-1] for c in w.gh.calls)
+
+
+def test_i2674_a_linked_layer_reads_no_timeline(w, monkeypatch):
+    sha = _prelink_lane(w, monkeypatch)
+    member = {"position": 2, "number": 99, "baseRefName": "layer-1", "headRefName": BRANCH, "headRefOid": sha}
+    _membership(monkeypatch, {"ok": True, "queried": {"position": 1}, "members": [member]})
+    got = _successor(w)
+    assert got["premise"]["adopts"] == 99 and "linkPending" not in got
+    assert not any("/timeline?" in c[-1] for c in w.gh.calls)
 
 
 def test_a_stack_layer_that_opened_its_pull_request_is_relaunched_through_the_real_stack_gate(w, monkeypatch):
