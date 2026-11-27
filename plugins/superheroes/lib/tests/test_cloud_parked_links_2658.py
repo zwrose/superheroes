@@ -126,6 +126,19 @@ def test_p5_a_non_default_base_pr_not_yet_in_a_stack_is_linked_only_by_the_timel
     assert _timeline_reads(w)
 
 
+# axis: cleanup reads a non-default-base PR outside a native stack as having no link, so its issue reference never selects a lane or a branch — see bite-proof record i2658_parked_links
+def test_p5_cleanup_refuses_a_non_default_base_pr_not_in_a_stack(cw):
+    TCC._lane(cw, "l-1", 101)
+    TCC._as_layer(cw, TCC.PR, 101)
+    assert CC.plan(cw.repo, REPO, TCC.PR, env=cw.env, run=cw.gh)["linkSource"] == "timeline"  # a stack layer plans
+    cw.gh.pulls[TCC.PR]["stack"] = None  # the same pull, outside a native stack
+    want = {"ok": False, "reason": "pr-unlinked"}
+    assert CC.plan(cw.repo, REPO, TCC.PR, env=cw.env, run=cw.gh) == want
+    assert CC.branch(cw.repo, REPO, TCC.PR, env=cw.env, run=cw.gh) == want
+    assert cw.gh.deletes == [] and TCC.BRANCH in cw.gh.branches
+    assert CP._linked_issues(cw.gh.pulls[TCC.PR], REPO, TCC.PR, cw.env, cw.gh) == ([101], "timeline")  # parks still bind
+
+
 # axis: an upper layer parked before the advisor links its stack binds its launch at the first notice — see bite-proof record i2658_parked_links
 def test_p5_a_park_on_a_layer_not_yet_in_a_stack_binds_its_launch(w):
     _lane(w, "l-a", 101, "session-a", "a")

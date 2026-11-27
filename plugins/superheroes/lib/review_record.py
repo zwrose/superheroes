@@ -394,8 +394,8 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
     timeline is not read. `list_timeline(n)` returns every REST timeline row (all pages) or None. A read that returns
     None, a non-dict issue, an issue whose number is not `n`, a timeline that is not a list, a row that is not a dict,
     a row whose `event` is not a non-blank string, and a cross-reference whose source is not an issue or whose pull
-    request row has no positive int number or no non-blank repository name are unreadable: the answer is None, never
-    "no link"."""
+    request row has no positive int number or no `owner/name` repository slug are unreadable: the answer is None,
+    never "no link"."""
     # axis: a repository that is not owner/name, or a PR number that is not an int, leaves the whole answer unreadable
     if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)) or not _is_pos_int(pr):
         return None
@@ -439,7 +439,7 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
             repository = issue.get("repository")
             full_name = repository.get("full_name") if isinstance(repository, dict) else None
             # axis: a cross-reference whose PR number or repository name cannot be read is unreadable, never "no link"
-            if not _is_pos_int(number) or not isinstance(full_name, str) or not full_name.strip():
+            if not _is_pos_int(number) or not isinstance(full_name, str) or not _REPO_RE.fullmatch(full_name):
                 return None
             # axis: only a cross-reference from this PR number counts, so another PR of the repository never links the issue
             # axis: only a cross-reference from this repository counts, so another repository's PR with the same number never links the issue
@@ -718,7 +718,8 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
         return f"an earlier review record could not be read ({why}), so the record this session carried from cannot be checked"
     # axis: a record whose posted text fails its own recorded hash is shown to the vet but never carried from — see bite-proof record i2658_review_record_links
     if _hash_failed(prior):
-        return "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried"
+        return ("the earlier record's posted text fails the integrity check it recorded (its hash or length), "
+                "so its reviewers are not carried")
     final = prior.get("finalCommit") if isinstance(prior, dict) else None
     # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
     if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
@@ -794,9 +795,6 @@ def carry_source(prior, last_reviewed, session_id, history):
             return rec
         final = rec.get("finalCommit") if isinstance(rec, dict) else None
         if isinstance(final, dict) and final.get("sha") == last_reviewed:
-            return rec
-        # axis: a record whose posted text fails its recorded hash stops the walk too, and carry_refusal refuses it — see bite-proof record i2658_review_record_links
-        if _hash_failed(rec):
             return rec
     return prior
 
@@ -1914,6 +1912,10 @@ def _test_lens(reviewers, findings, final_sha, other=None):
             "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
             # axis: the own count leaves out every carried finding, so a round that raised nothing reads zero — see bite-proof record i2338_carried_record
             "findings": own}
+    # axis: with the earlier record unreadable, which findings were carried cannot be told, so the count is unavailable, never credited to this round — see bite-proof record i2658_review_record_links
+    if _is_unreadable_entry(other):
+        part["findings"] = None
+        return part
     if carried:
         part["carriedFindings"] = carried
     # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
@@ -3539,7 +3541,9 @@ def _test_lens_line(r):
             + (f"; {_plural(findings, 'finding', 'findings')} raised"
                + (f" in this round, {_plural(carried_n, 'finding', 'findings')} carried over from an earlier review"
                   if carried_n else "")
-               if isinstance(findings, int) and not isinstance(findings, bool) else "")
+               if isinstance(findings, int) and not isinstance(findings, bool)
+               else "; its finding count is unavailable because an earlier review record could not be read"
+               if "findings" in part and findings is None else "")
             + ".")
 
 

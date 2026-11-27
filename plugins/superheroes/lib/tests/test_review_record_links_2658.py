@@ -433,22 +433,59 @@ def test_an_unreadable_latest_record_stops_the_writers_carried_recheck(tmp_path)
     assert "an earlier review record could not be read (" in json.dumps(rec["carriedRechecks"])
 
 
+def test_an_unreadable_earlier_record_leaves_the_test_lens_count_unavailable():
+    # axis: an unreadable earlier record read as one that carried nothing, crediting its findings to this round's test lens
+    row = {"name": "test-role", "ran": "engine-record", "coversFinalCommit": True, "commit": HEAD}
+    found = [{"id": "f-1", "reviewer": "test-role", rr.session_contract.FINDING_KEY_FIELD: "a.py::t@L1"}]
+    entry = rr._unreadable_entry("http://c/2", "gone")
+    part = rr._test_lens([row], found, HEAD, entry)
+    assert part["listed"] is True and part["ran"] is True and part["findings"] is None
+    assert "carriedFindings" not in part
+    assert rr._test_lens([row], found, HEAD, {"findings": []})["findings"] == 1  # a readable record carried nothing
+    line = rr._test_lens_line({"testLens": part, "reviewers": [row]})
+    assert line.endswith("its finding count is unavailable because an earlier review record could not be read.")
+
+
+HASH_REFUSAL = ("the earlier record's posted text fails the integrity check it recorded (its hash or length), "
+                "so its reviewers are not carried")
+
+
 @pytest.mark.parametrize("damage", [
     pytest.param({"sentHashMatches": False}, id="sent-hash"),
     pytest.param({"recordedChars": 10, "foundChars": 10, "hashMatches": False}, id="parts-hash"),
     pytest.param({"recordedChars": 10, "foundChars": 9, "hashMatches": True}, id="parts-length"),
 ])
 def test_a_record_whose_hash_failed_is_never_carried_from(damage):
-    # axis: a record whose posted text fails its recorded hash credited as carry authority
+    # axis: a record whose posted text fails its recorded integrity check credited as carry authority
     own = {"sessionId": "s-2", "finalCommit": {"sha": HEAD}, "findings": [],
            "reviewers": [{"carried": {"commit": EARLIER}}]}
     damaged = {"sessionId": "s-1", "finalCommit": {"sha": EARLIER}, "findings": [], "transitDamage": damage}
     assert rr.carry_source(own, EARLIER, "s-2", [damaged]) is damaged
-    assert rr.carry_refusal(damaged, EARLIER, None, None, HEAD, []) == (
-        "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried")
+    assert rr.carry_refusal(damaged, EARLIER, None, None, HEAD, []) == HASH_REFUSAL
+    # a damaged own record is never read for what it carried from
     assert rr.carry_source(dict(own, transitDamage=damage), EARLIER, "s-2", [{"finalCommit": {"sha": EARLIER}}])["sessionId"] == "s-2"
-    assert rr.carry_refusal(dict(damaged, transitDamage={"redactedFields": ["x"]}), EARLIER, None, None, HEAD, []) != (
-        "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried")
+    # a damaged record at another commit is not the one carried from, so the walk reaches the intact matching record
+    intact = {"sessionId": "s-1", "finalCommit": {"sha": EARLIER}, "findings": []}
+    other = dict(damaged, finalCommit={"sha": "d" * 40})
+    assert rr.carry_source(own, EARLIER, "s-2", [intact, other]) is intact
+    # redacted text alone is not a failed integrity check
+    assert rr.carry_refusal(dict(damaged, transitDamage={"redactedFields": ["x"]}), EARLIER, None, None, HEAD, []) != HASH_REFUSAL
+
+
+def test_a_same_session_rewrite_refuses_to_carry_from_an_edited_earlier_record(tmp_path):
+    # axis: an earlier record edited after it was stamped credited as carry authority through the writer
+    fake, readers = _carried_session(tmp_path)
+    fake.comments = [c for c in fake.comments if c["id"] != 2]  # no unreadable record this time
+    first = next(c for c in fake.comments if rr._parse_body(c["body"]) and rr._parse_body(c["body"]).get("sessionId") == "s-1")
+    edited = first["body"].replace('"checked":[', '"checked":["edited after it was posted",', 1)
+    assert edited != first["body"]
+    first["body"] = edited
+    assert rr._hash_failed(rr._parse_body(first["body"]))
+    out = rr.write(put(tmp_path, carried_account(), "third.json"), str(tmp_path), readers)
+    assert out["ok"], out
+    row = rr._parse_body(fake.comments[-1]["body"])["reviewers"][0]
+    assert row["ran"] == "not-run" and "carried" not in row
+    assert row["runNote"] == HASH_REFUSAL
 
 
 def test_e17_a_hand_write_with_an_unattributed_finding_and_an_unreadable_older_record_is_written(tmp_path):
