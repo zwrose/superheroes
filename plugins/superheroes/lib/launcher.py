@@ -2707,6 +2707,7 @@ def _apply_dependency_gate(
             # or no longer sits below the launch's layer, lapses, never passes on its head alone — see bite-proof record wo_2652_stack_layer_blockers
             if (membership["stack"]["number"] if linked else None) != accepted.get("stack") \
                     or not stack_check.same_commit(queried.get("headRefOid"), head_sha) \
+                    or not stack_check.same_commit(accepted.get("head"), head_sha) \
                     or (below is not None and not (linked and queried.get("position", below) < below)):
                 return lapsed
         return {
@@ -4549,7 +4550,12 @@ def _check_premises(
         rows = _preflight_accepted(preflight_result["checks"], None)
         # axis: on a stack premise every lower layer preflight accepted must still qualify at its accepted head — see bite-proof record wo_2652_stack_layer_blockers
         for row in [{}] if rows is False else rows:
+            # axis: an accepted lower layer's vetted head must be in the launch base's history, or it lapses — see bite-proof record wo_2652_stack_layer_blockers
+            held = rows is not False and _git_scrubbed(repo_root, "merge-base", "--is-ancestor", row["head"], resolved_base,
+                                                       env=env, timeout=_WORKTREE_GIT_TIMEOUT)
             recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (
+                {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": row["head"]}
+                if held is None or held.returncode != 0 else
                 _apply_dependency_gate({"dependency": row["pr"]}, row["head"], repo_root, env, pr_vet_reader,
                                        deadline=deadline, accepted=row, membership_reader=membership_reader,
                                        below=stamped_premise["layerPosition"] if row.get("stack") is not None else None))

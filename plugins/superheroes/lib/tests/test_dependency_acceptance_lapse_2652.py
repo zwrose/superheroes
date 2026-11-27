@@ -24,6 +24,8 @@ def _gate(tmp_path, monkeypatch, body_at, accepted, base=None):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     head = _head_sha(repo)
+    if isinstance(accepted, dict) and accepted.get("head") == "h":
+        accepted = dict(accepted, head=head)  # "h" stands for the head preflight accepted, the current one
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
     result = L._apply_dependency_gate(
         _dependency_premise(repo, 701, issue=7), base or head, repo, {},
@@ -56,6 +58,36 @@ def test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for(
     assert result["ok"] is expected_ok
     if not expected_ok:
         assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_an_accepted_dependency_that_moved_after_preflight_lapses_even_when_re_vetted(tmp_path, monkeypatch):
+    # axis: a READY dependency re-vetted at a new head after preflight accepted its earlier head lapses; the base
+    # equals the new head, so only the accepted head tells the two apart
+    ready = lambda head: _ready_vet_body(head)
+    result, head = _gate(tmp_path, monkeypatch, ready, {"pr": 701, "form": "ready", "head": "f" * 40, "feature": FEATURE})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_a_stack_premise_lapses_an_accepted_layer_missing_from_the_launch_base(tmp_path, monkeypatch):
+    # axis: an accepted lower layer whose vetted head is not in the launch base's history lapses before the stack gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    elsewhere = "e" * 40
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    row = {"pr": 701, "form": "ready", "head": elsewhere, "stack": 1, "feature": FEATURE}
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
+
+    def pr_lookup(*args, **kwargs):
+        raise _StackGateReached()
+
+    result = L.launch_build(
+        repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
+        pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(elsewhere, _ready_vet_body(elsewhere), pr_number=pr), None),
+        membership_reader=lambda **kwargs: _membership_ok(1, elsewhere, pr_number=701) | {"stack": {"number": 1}},
+        pr_lookup=pr_lookup,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-acceptance-lapsed"
 
 
 def test_a_card_at_launch_lapses_an_acceptance_recorded_with_no_feature(tmp_path, monkeypatch):
