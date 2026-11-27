@@ -3,7 +3,7 @@
 The check-in's cadence, the note's shape and the watch ceiling live in one home, the
 `## Owner check-in while lanes run` section of `skills/showrunner/reference/orchestration.md`.
 These tests pin structure only, never the home's sentences (`rubric/review-discipline.md`
-§ The pin rule): the home heading exists once as a level-2 heading that renders visible (read by
+§ The pin rule): the home heading exists once as a level-2 heading that is not hidden (read by
 `lib/md_hidden.py`, so a code fence or an HTML comment hides it), the page's `# Contents` lists it,
 and the charter's duty 9 and showrunner-resume Step 6 cite it.
 
@@ -38,11 +38,12 @@ def _read(path):
 
 
 def _visible_headings(text):
-    """(level, title) for every document-level ATX heading that renders visible, read by the repository's
-    Markdown scanner (`lib/md_hidden.py`), which closes a fence only on a run at least as long as its opener."""
+    """(level, title) for every document-level ATX heading that is not certainly hidden, read by the repository's
+    Markdown scanner (`lib/md_hidden.py`), which closes a fence only on a run at least as long as its opener. A heading
+    the scanner reads ``UNSURE`` (after a footnote or a reference definition, say) still counts: only ``HIDDEN`` drops."""
     found = []
     for offset, title, state in md_hidden.scan(text).headings:
-        if state == md_hidden.VISIBLE:
+        if state != md_hidden.HIDDEN:
             found.append((len(re.match(r" {0,3}(#{1,6})", text[offset:]).group(1)), title))
     return found
 
@@ -55,7 +56,7 @@ def _block(path, start_pattern, end_pattern):
 
 
 def test_home_heading_exists_once():
-    # axis: the one home is a level-2 heading that renders visible, once
+    # axis: the one home is a level-2 heading that is not hidden, once
     headings = _visible_headings(_read(_ORCHESTRATION))
     assert headings.count((2, _HOME_TITLE)) == 1, f"orchestration.md must carry '## {_HOME_TITLE}' once"
 

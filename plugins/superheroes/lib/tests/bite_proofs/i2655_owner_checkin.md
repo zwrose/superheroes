@@ -28,6 +28,12 @@ trimmed to the failing test's name and its assertion line. Nothing was redacted.
   (a shorter run that does not close the fence).
 - Raw red: `FAILED ...::test_home_heading_exists_once` with `AssertionError: orchestration.md must carry '## Owner check-in while lanes run' once` (`1 failed`).
 - Restore: inverse edit back to the bare heading. Green: `1 passed`.
+- After the guard was changed to drop only a heading the scanner reads `HIDDEN` (an `UNSURE` one, after a footnote or a
+  reference definition, counts), the fence probe was run again: `1 failed, 3 passed`, the same assertion line.
+- Neutralization (duplicate after a footnote, a separate run): a footnote definition `[^probe]: …` and a second
+  `## Owner check-in while lanes run` inserted before `## Lapsed-pass parks and the send-back`.
+- Raw red: `FAILED ...::test_home_heading_exists_once` with the same assertion line (`1 failed, 3 passed`).
+- Restore: inverse edit removing both lines. Green: `4 passed`.
 - Neutralization (name): `## Owner check-in while lanes run` became `## Owner check-ins while lanes run`.
 - Raw red: `FAILED ...::test_home_heading_exists_once` with the same assertion line (`1 failed`).
 - Restore: inverse edit back to the heading.
