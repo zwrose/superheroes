@@ -382,7 +382,8 @@ already there), or when a seat resumes, never waiting on a watch. Every later no
 than 30 minutes after the last note sent, so a note falls due during your own long work (a vet, a
 review read) as well. When nothing changed since the last note, its status is one line; a note is
 still a message to the owner, so the "Still on your machine" line opens it whenever that line is due
-(`dispatch-preflight.md` § Until the cloud is fixed: the "Still on your machine" line).
+(`skills/showrunner/reference/dispatch-preflight.md` § Until the cloud is fixed: the "Still on your
+machine" line).
 
 **The note's shape.** One line per live lane: its issue, its phase and its age (the time since its
 launch, and since its last activity). Then anything answered since the last note: a builder note, an
