@@ -356,10 +356,9 @@ def _linked_issues(pull, repo, pr, env, run):
 
     - a PR on its default base: GitHub's own closingIssuesReferences list, in this repository (`source`
       "github"); an empty list is readable and means no link;
-    - a PR on any other base outside a native stack: no closing references and no stack, so no link (`source`
-      "github");
-    - a PR on another base inside a native stack: the description's first-line candidates that GitHub's REST
-      issue timeline records a cross-reference from this PR for (`source` "timeline");
+    - a PR on any other base, inside a native stack or not yet linked into one (an upper layer before the advisor
+      links it): GitHub gives it no closing references, so its links are the description's first-line candidates
+      that GitHub's REST issue timeline records a cross-reference from this PR for (`source` "timeline");
     - a failed, refused or malformed read of any of these, or a pull whose base cannot be read: `([], "unreadable")`."""
     # axis: a base that cannot be read leaves the links unreadable, never "no link" — see bite-proof record i2658_parked_links
     base_ref, default = _base_names(pull)
@@ -376,12 +375,10 @@ def _linked_issues(pull, repo, pr, env, run):
         return found, "github"
     sc = _sib("stack_check")
     snapshot, refusal = sc._parse_rest_pull(pull, repo, pr, 0)
-    if snapshot is None:
-        # axis: a PR with no native stack has no link on a non-default base; any other refusal is unreadable — see bite-proof record i2658_parked_links
-        if refusal.get("reason") == sc.REASON_NOT_LINKED:
-            return [], "github"
+    # axis: a non-default-base PR not yet in a native stack is read like a stack layer, never as no link; any other stack refusal is unreadable — see bite-proof record i2658_parked_links
+    if snapshot is None and refusal.get("reason") != sc.REASON_NOT_LINKED:
         return [], "unreadable"
-    # axis: a stack layer's candidates link only when GitHub's timeline records a cross-reference from this PR — see bite-proof record i2658_parked_links
+    # axis: a non-default-base PR's candidates link only when GitHub's timeline records a cross-reference from this PR — see bite-proof record i2658_parked_links
     confirmed = _sib("review_record").recorded_links(
         _first_line_candidates(pull.get("body"), repo), repo, pr,
         lambda n: _issue_object(repo, n, env, run), lambda n: _timeline_rows(repo, n, env, run))

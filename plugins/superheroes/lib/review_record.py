@@ -690,6 +690,17 @@ def _is_unreadable_entry(rec):
     return isinstance(rec, dict) and UNREADABLE_RECORD in rec
 
 
+def _hash_failed(rec):
+    """True when the reader found `rec`'s posted text no longer matching a hash or length it recorded (its
+    `transitDamage` holds `sentHashMatches: False`, `hashMatches: False`, or a length that differs). Such a record is
+    still read and shown to the vet; it is never the authority a carry credits reviewers from."""
+    damage = rec.get("transitDamage") if isinstance(rec, dict) else None
+    if not isinstance(damage, dict):
+        return False
+    return (damage.get("sentHashMatches") is False or damage.get("hashMatches") is False
+            or ("recordedChars" in damage and damage.get("recordedChars") != damage.get("foundChars")))
+
+
 def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None, ci_state=None):
     """None when a record may carry `prior`'s reviewers for an empty returning round, else a short plain reason naming
     the first leg that fails. The one home of the carry rule: the session writer and the record writer both ask it.
@@ -705,6 +716,9 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     if _is_unreadable_entry(prior):
         why = prior[UNREADABLE_RECORD].get("detail") if isinstance(prior[UNREADABLE_RECORD], dict) else None
         return f"an earlier review record could not be read ({why}), so the record this session carried from cannot be checked"
+    # axis: a record whose posted text fails its own recorded hash is shown to the vet but never carried from — see bite-proof record i2658_review_record_links
+    if _hash_failed(prior):
+        return "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried"
     final = prior.get("finalCommit") if isinstance(prior, dict) else None
     # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
     if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
@@ -771,7 +785,8 @@ def carry_source(prior, last_reviewed, session_id, history):
     own = (isinstance(rows, list) and isinstance(session_id, str) and prior.get("sessionId") == session_id
            and any(isinstance(v, dict) and isinstance(v.get("carried"), dict) and v["carried"].get("commit") == last_reviewed
                    for v in rows))
-    if not own:
+    # axis: a damaged own record, or one whose findings list is malformed, is never read for what it carried from; it is the source, and carry_refusal refuses it
+    if not own or _hash_failed(prior) or not _findings_listed(prior):
         return prior
     for rec in reversed(history):
         # axis: an earlier record that could not be read stops the walk, so a carry never looks past it to an older record — see bite-proof record i2658_review_record_links (G9)
@@ -779,6 +794,9 @@ def carry_source(prior, last_reviewed, session_id, history):
             return rec
         final = rec.get("finalCommit") if isinstance(rec, dict) else None
         if isinstance(final, dict) and final.get("sha") == last_reviewed:
+            return rec
+        # axis: a record whose posted text fails its recorded hash stops the walk too, and carry_refusal refuses it — see bite-proof record i2658_review_record_links
+        if _hash_failed(rec):
             return rec
     return prior
 
@@ -2317,11 +2335,12 @@ def _earlier_session_record(prior, history, session_id):
     """The record of another session that the carried facts are read against: the first of `prior`, then `history`
     newest first, that is a record whose `sessionId` differs from ``session_id``; None when there is none. A rewrite of
     this session's own record therefore looks past it to the record that session carried from. An unreadable earlier
-    record (`_unreadable_entry`) met before one of another session stops the walk: the answer is None."""
+    record (`_unreadable_entry`) met before one of another session stops the walk: the answer is that entry, which
+    holds no findings, so nothing is carried from behind it and the re-check can name it."""
     for rec in (prior, *reversed(list(history or ()))):
         # axis: an earlier record that could not be read stops the walk, so a record older than it is never taken as the earlier one — see bite-proof record i2658_review_record_links (G10)
         if _is_unreadable_entry(rec):
-            return None
+            return rec
         # axis: the earlier record is the latest one of ANOTHER session, so a same-session rewrite looks past its own record — see bite-proof record i2338_carried_record
         if isinstance(rec, dict) and rec.get("sessionId") != session_id:
             return rec
@@ -2373,6 +2392,10 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
             why = f"the check found it still applies: {evidence}"
         elif settled == "unsettled":
             why = f"the check could not settle it: {evidence}"
+        # axis: an earlier record that could not be read is named as the reason, never read as an absent one — see bite-proof record i2658_review_record_links
+        elif _is_unreadable_entry(other):
+            detail = other[UNREADABLE_RECORD].get("detail") if isinstance(other[UNREADABLE_RECORD], dict) else None
+            why = f"an earlier review record could not be read ({detail}), so it cannot show this finding carried"
         # axis: a finding counts as carried only when the earlier record of another session lists it, for every outcome, never on this session's own record — see bite-proof record i2343_never_carried
         elif _key(f) not in other_keys:
             why = "not carried from an earlier record"
@@ -4158,6 +4181,9 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
+                # axis: an unreadable latest record is the newest history entry, so the history walks stop at it instead of reading past it — see bite-proof record i2658_review_record_links
+                if usable is None:
+                    history.append(_unreadable_entry(c.get("url"), _unreadable_summary(c, by_id)))
             # axis: an earlier record that could not be read stays in the history as an unreadable entry, so no consumer reads past it — see bite-proof record i2658_review_record_links (G8)
             elif usable is not None:
                 history.append(usable)

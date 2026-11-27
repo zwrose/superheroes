@@ -23,6 +23,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import build_lane  # noqa: E402
 import gh_pages  # noqa: E402
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
@@ -30,7 +31,7 @@ import review_record_session as rs  # noqa: E402
 from test_review_record import EARLIER, GOOD_RUN, HEAD, Fake, account, finding, put, reviewer  # noqa: E402
 
 REPO = "o/r"
-MARKER = {"schema": "build-lane/1", "lane": "full", "branch": "b", "currentBranch": "b", "issue": 9}
+MARKER = {"schema": build_lane.BUILD_LANE_SCHEMA, "lane": "full", "branch": "b", "currentBranch": "b", "issue": 9}
 UNREADABLE_SENTENCE = ("The PR's linked issues could not be read, so no issue's lane call or build lane marker "
                        "was matched to them.")
 
@@ -308,7 +309,7 @@ def test_e13_read_history_keeps_each_unreadable_earlier_record_as_an_unreadable_
     for entry, n in zip(history[1:4], (2, 3, 4)):
         got = entry[rr.UNREADABLE_RECORD]
         assert got["url"] == f"http://c/{n}" and isinstance(got["detail"], str) and got["detail"]
-    assert rr._unreadable_entry("u", "d") == {"unreadableRecord": {"url": "u", "detail": "d"}}
+    assert rr._unreadable_entry("u", "d") == {rr.UNREADABLE_RECORD: {"url": "u", "detail": "d"}}
 
 
 def test_a_pr_with_zero_or_one_record_has_no_history():
@@ -380,8 +381,10 @@ def test_e15_the_session_carry_path_refuses_with_the_reason_naming_the_unreadabl
 
 
 def test_carry_source_walks_past_a_readable_record_but_stops_at_an_unreadable_one():
-    own = {"sessionId": "s-2", "finalCommit": {"sha": HEAD}, "reviewers": [{"carried": {"commit": EARLIER}}]}
+    own = {"sessionId": "s-2", "finalCommit": {"sha": HEAD}, "findings": [], "reviewers": [{"carried": {"commit": EARLIER}}]}
     old = {"sessionId": "s-1", "finalCommit": {"sha": EARLIER}}
+    # a same-session record whose findings list is malformed is never walked through
+    assert rr.carry_source(dict(own, findings="x"), EARLIER, "s-2", [old])["sessionId"] == "s-2"
     mid = {"sessionId": "s-3", "finalCommit": {"sha": "d" * 40}}
     entry = rr._unreadable_entry("http://c/2", "gone")
     assert rr.carry_source(own, EARLIER, "s-2", [old, mid]) is old
@@ -397,9 +400,53 @@ def test_e16_the_earlier_session_record_walk_stops_at_an_unreadable_entry():
     older = {"sessionId": "s-0"}
     entry = rr._unreadable_entry("http://c/2", "gone")
     assert rr._earlier_session_record(own, [older], "s-2") is older
-    assert rr._earlier_session_record(own, [older, entry], "s-2") is None
-    assert rr._earlier_session_record(entry, [older], "s-2") is None
+    assert rr._earlier_session_record(own, [older, entry], "s-2") is entry
+    assert rr._earlier_session_record(entry, [older], "s-2") is entry
     assert rr._earlier_session_record(own, [entry, older], "s-2") is older
+
+
+def test_an_unreadable_earlier_record_is_named_by_the_carried_recheck():
+    # axis: the carried re-check reading an unreadable earlier record as one that never listed the finding
+    entry = rr._unreadable_entry("http://c/2", "gone")
+    f = {"id": "f-1", "outcome": rr._LEFT_FOR_OWNER, "file": "a.py", "line": 1, "title": "t"}
+    check = {"key": "f-1", "settled": "fixed", "commit": EARLIER, "checkedHead": HEAD, "evidence": "fixed it"}
+    found, rows = rr._recheck_carried([f], [check], HEAD, lambda c, h: True, entry)
+    assert found[0]["outcome"] == rr._LEFT_FOR_OWNER
+    assert "an earlier review record could not be read (gone)" in json.dumps(rows)
+
+
+def test_an_unreadable_latest_record_stops_the_writers_carried_recheck(tmp_path):
+    # axis: an unreadable latest record left out of the writer's history, so an older record settles a carried fix
+    fake = Fake()
+    older = rr.write(put(tmp_path, account(sessionId="s-1", findings=[finding("f-1", outcome=rr._LEFT_FOR_OWNER)]),
+                         "a.json"), str(tmp_path), fake.readers())
+    assert older["ok"], older
+    fake.comments.append(_junk(99))
+    check = {"key": "f-1", "settled": "fixed", "commit": EARLIER, "checkedHead": HEAD, "evidence": "fixed it"}
+    out = rr.write(put(tmp_path, account(sessionId="s-2", findings=[finding("f-1", outcome=rr._LEFT_FOR_OWNER)],
+                                         carriedChecks=[check]), "b.json"), str(tmp_path), fake.readers())
+    assert out["ok"], out
+    rec = rr._parse_body(fake.comments[-1]["body"])
+    assert rec["findings"][0]["outcome"] == rr._LEFT_FOR_OWNER
+    assert "an earlier review record could not be read (" in json.dumps(rec["carriedRechecks"])
+
+
+@pytest.mark.parametrize("damage", [
+    pytest.param({"sentHashMatches": False}, id="sent-hash"),
+    pytest.param({"recordedChars": 10, "foundChars": 10, "hashMatches": False}, id="parts-hash"),
+    pytest.param({"recordedChars": 10, "foundChars": 9, "hashMatches": True}, id="parts-length"),
+])
+def test_a_record_whose_hash_failed_is_never_carried_from(damage):
+    # axis: a record whose posted text fails its recorded hash credited as carry authority
+    own = {"sessionId": "s-2", "finalCommit": {"sha": HEAD}, "findings": [],
+           "reviewers": [{"carried": {"commit": EARLIER}}]}
+    damaged = {"sessionId": "s-1", "finalCommit": {"sha": EARLIER}, "findings": [], "transitDamage": damage}
+    assert rr.carry_source(own, EARLIER, "s-2", [damaged]) is damaged
+    assert rr.carry_refusal(damaged, EARLIER, None, None, HEAD, []) == (
+        "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried")
+    assert rr.carry_source(dict(own, transitDamage=damage), EARLIER, "s-2", [{"finalCommit": {"sha": EARLIER}}])["sessionId"] == "s-2"
+    assert rr.carry_refusal(dict(damaged, transitDamage={"redactedFields": ["x"]}), EARLIER, None, None, HEAD, []) != (
+        "the earlier record's posted text does not match the hash it recorded, so its reviewers are not carried")
 
 
 def test_e17_a_hand_write_with_an_unattributed_finding_and_an_unreadable_older_record_is_written(tmp_path):

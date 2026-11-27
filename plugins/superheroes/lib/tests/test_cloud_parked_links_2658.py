@@ -105,17 +105,36 @@ def test_p4_a_malformed_closing_list_is_unreadable(w):
 # ---------------------------------------------------------------- a PR on another base
 
 
-# axis: a non-default base outside a native stack has no link and the timeline is never read — see bite-proof record i2658_parked_links
-def test_p5_a_non_default_base_pr_outside_a_stack_that_names_an_issue_has_no_link(w):
-    w.gh.timelines[101] = [_cross_ref(10)]  # a timeline that would link it, were it read
+def _unlinked_layer(n, body, stack):
+    """A layer's pull on a non-default base before the advisor links it into a native stack."""
+    pull = _layer(n, body)
+    if stack is None:
+        pull["stack"] = None
+    else:
+        del pull["stack"]
+    return pull
+
+
+# axis: a non-default base not yet in a native stack is confirmed through the timeline like a stack layer, never read as no link — see bite-proof record i2658_parked_links
+def test_p5_a_non_default_base_pr_not_yet_in_a_stack_is_linked_only_by_the_timeline(w):
     for stack in (None, "absent"):
-        w.gh.pulls[10] = _layer(10, "Closes #101\n\nthe work")
-        if stack is None:
-            w.gh.pulls[10]["stack"] = None
-        else:
-            del w.gh.pulls[10]["stack"]
-        assert _links(w, 10) == ([], "github")
-    assert _timeline_reads(w) == [] and not [c for c in w.gh.calls if c[-1].endswith("/issues/101")]
+        w.gh.timelines.pop(101, None)
+        w.gh.pulls[10] = _unlinked_layer(10, "Part of #101\n\nthe work", stack)
+        assert _links(w, 10) == ([], "timeline")  # the description alone links nothing
+        w.gh.timelines[101] = [_cross_ref(10)]
+        assert _links(w, 10) == ([101], "timeline")  # GitHub's record of this PR links it
+    assert _timeline_reads(w)
+
+
+# axis: an upper layer parked before the advisor links its stack binds its launch at the first notice — see bite-proof record i2658_parked_links
+def test_p5_a_park_on_a_layer_not_yet_in_a_stack_binds_its_launch(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    w.gh.comments[10] = [_lapsed_comment(10)]
+    w.gh.pulls[10] = _unlinked_layer(10, "Part of #101\n\nthe work", None)
+    w.gh.timelines[101] = [_cross_ref(10)]
+    out = _notice(w, 10)
+    assert out["kind"] == "lapsed-pass" and out["linkSource"] == "timeline", out
+    assert _entries(w)[0]["launchId"] == "l-a"
 
 
 # axis: a stack layer's first-line candidate is linked when GitHub's timeline records the cross-reference
