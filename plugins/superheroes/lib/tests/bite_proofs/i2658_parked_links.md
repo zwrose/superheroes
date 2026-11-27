@@ -120,44 +120,39 @@ FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p3_a_
 
 - **Raw green:** the shared green run below.
 
-## H4. The non-stack branch
+## H4. A non-default base not yet in a native stack is read through the timeline
 
-- **Guarded element:** `cloud_parked.py:374-378`, the `stack_check.REASON_NOT_LINKED` branch that returns `([], "github")`.
-- **Axis:** a non-default-base PR that is not in a native stack has no link, and the timeline is never read (P5).
-- **Neutralization:** `if snapshot is None:` became `if snapshot is None and refusal.get("reason") != sc.REASON_NOT_LINKED:`, so every non-default base without a stack fell through to the timeline path (it is treated as a stack).
-- **Raw red** (`-k test_p5`):
+Re-proved by the builder after review round 1 of PR 2664. That round reversed this element on the builder's ruling, recorded on the PR: an upper layer parked before the advisor links its stack must still bind its launch. The earlier element was a "not in a stack means no link" branch. It is gone, and such a PR now takes the stack layer's timeline confirmation.
+
+- **Guarded element:** `cloud_parked.py`, `_linked_issues`: the condition `if snapshot is None and refusal.get("reason") != sc.REASON_NOT_LINKED:` with no "no link" branch after it.
+- **Axis:** a non-default-base PR that is not in a native stack is confirmed through GitHub's issue timeline like a stack layer, and is never read as no link. Its park binds its launch at the first notice (both P5 tests).
+- **Neutralization:** the earlier branch was added back after that condition: `    if snapshot is None:` / `        return [], "github"`.
+- **Raw red** (`-k test_p5`, the builder's run on the committed fix `0c3bab10`, failure lines verbatim):
 
 ```
-F                                                                        [100%]
+FF                                                                       [100%]
 =================================== FAILURES ===================================
-_ test_p5_a_non_default_base_pr_outside_a_stack_that_names_an_issue_has_no_link _
-        for stack in (None, "absent"):
-            w.gh.pulls[10] = _layer(10, "Closes #101\n\nthe work")
-            if stack is None:
-                w.gh.pulls[10]["stack"] = None
-            else:
-                del w.gh.pulls[10]["stack"]
->           assert _links(w, 10) == ([], "github")
-E           AssertionError: assert ([101], 'timeline') == ([], 'github')
-E             At index 0 diff: [101] != []
-/home/user/superheroes/.claude/worktrees/issue-2658/plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py:117: AssertionError
+_ test_p5_a_non_default_base_pr_not_yet_in_a_stack_is_linked_only_by_the_timeline _
+>           assert _links(w, 10) == ([], "timeline")  # the description alone links nothing
+E           AssertionError: assert ([], 'github') == ([], 'timeline')
+E             At index 1 diff: 'github' != 'timeline'
+________ test_p5_a_park_on_a_layer_not_yet_in_a_stack_binds_its_launch _________
+>       assert out["kind"] == "lapsed-pass" and out["linkSource"] == "timeline", out
+E         lapsed-pass and 'github' == 'timeline'
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p5_a_non_default_base_pr_outside_a_stack_that_names_an_issue_has_no_link
-1 failed, 14 deselected in 1.41s
+FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p5_a_non_default_base_pr_not_yet_in_a_stack_is_linked_only_by_the_timeline
+FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p5_a_park_on_a_layer_not_yet_in_a_stack_binds_its_launch
+2 failed, 14 deselected in 1.34s
 ```
 
-- **Restore:** the inverse edit, the condition back to `if snapshot is None:`.
-- **Restore receipt** (`cloud_parked.py:374-378`):
+- **Restore:** the inverse edit, which removes the two added lines.
+- **Restore receipt:** `git status --porcelain` printed nothing after the restore (the tree matched commit `0c3bab10`).
+- **Raw green:**
 
 ```
-    if snapshot is None:
-        # axis: a PR with no native stack has no link on a non-default base; any other refusal is unreadable — see bite-proof record i2658_parked_links
-        if refusal.get("reason") == sc.REASON_NOT_LINKED:
-            return [], "github"
-        return [], "unreadable"
+..                                                                       [100%]
+2 passed, 14 deselected in 1.29s
 ```
-
-- **Raw green:** the shared green run below.
 
 ## H5. The timeline confirmation for a stack layer
 
