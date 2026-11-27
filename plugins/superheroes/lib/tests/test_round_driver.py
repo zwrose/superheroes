@@ -1925,8 +1925,14 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    # re-pinned: the scoped finder over the fixes' own diff cannot be seated either, so the review parks
-    assert result["verdict"] == "cannot-certify" and result["certificationShape"] is None
+    # re-pinned: the round's only fix audit has no auditor, so the session halts `audits-unseatable`
+    # right after the audits fold, and the receipt names the decision and the cause
+    assert result["verdict"] == "halted" and result["certificationShape"] is None
+    unseatable = [d for d in result["decisions"] if d["kind"] == "audits-unseatable"]
+    assert len(unseatable) == 1
+    assert "fixer's family is unknown" in unseatable[0]["detail"]
+    assert result["certification"]["reason"].startswith("audits-unseatable: ")
+    assert "fixer's family is unknown" in result["certification"]["reason"]
     t = captured["targets"][0]
     assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
