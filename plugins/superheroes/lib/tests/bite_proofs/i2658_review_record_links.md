@@ -244,39 +244,39 @@ FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_e2_a
 - **restore receipt:** `        if not isinstance(rows, list):` / `            return None` and `            if not isinstance(target, dict) or not _is_pos_int(target.get("number")) or target["number"] != n:` / `                return None` (quoted from the final diff).
 - **raw green:** the whole-file green above.
 
-## G7 — the upward lane resolution on unreadable links (`_lane`)
+## G7 — an unreadable link read never lets the marker promote the lane (`_lane`)
 
-- **element / axis:** `unreadable or` in the marker leg of `_lane`. Axis: with the PR's links unreadable, a full build lane
-  marker bound to the current branch still decides the full lane, so an unreadable read never lowers the lane.
-- **neutralization:** `    if marker_full and (unreadable or str(m.get("issue")) in {str(n) for n in meta["issues"]}):` -> `    if marker_full and (str(m.get("issue")) in {str(n) for n in meta["issues"]}):`
+Re-proved by the builder after review round 1 of PR 2664, which reversed this element. It was an upward resolution, and
+it now refuses to promote: a marker that could not be matched to the PR's issue never decides the lane.
+
+- **element / axis:** `not unreadable and` in the marker leg of `_lane`. Axis: with the PR's links unreadable, a full build
+  lane marker is never matched and never promotes the lane, so the session's own lane and its round cap stand.
+- **neutralization:** `    if marker_full and not unreadable and str(m.get("issue")) in {str(n) for n in meta["issues"]}:` -> `    if marker_full and (unreadable or str(m.get("issue")) in {str(n) for n in meta["issues"]}):` (the earlier upward resolution, restored).
 - **detector / selector:** E11, `-k test_e11`.
-- **raw red:**
+- **raw red** (the builder's run on the committed fix `90c889e8`, the failure lines verbatim):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_ test_e11_unreadable_links_with_a_full_marker_on_the_branch_write_the_full_lane_and_disclose_it _
+_ test_e11_unreadable_links_never_let_a_full_marker_promote_the_sessions_lane __
+>       with pytest.raises(rr.Refusal) as e:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE Refusal
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-9/test_e11_unreadable_links_with0')
-
-    def test_e11_unreadable_links_with_a_full_marker_on_the_branch_write_the_full_lane_and_disclose_it(tmp_path):
-        # axis: E11; an unreadable link read lowering the lane to a light session lane that the round cap then refuses or lets through
-        over_cap = {"count": 5, "cap": 4, "stoppedAtCap": False}
-        fake = Fake(meta=dict(UNREADABLE_META), marker=MARKER, issue_bodies={9: "**Lane call:** light. small"})
-        out = rr.write(put(tmp_path, account(lane="light", rounds=over_cap)), str(tmp_path), fake.readers())
->       assert out["ok"] and out["action"] == "created", out
-E       AssertionError: {'ok': False, 'reason': 'review-record-round-cap-exceeded', 'detail': "the light lane's review ran 5 rounds; its cap is 4"}
-E       assert (False)
-
-/home/user/superheroes/.claude/worktrees/issue-2658/plugins/superheroes/lib/tests/test_review_record_links_2658.py:243: AssertionError
+/home/user/superheroes/.claude/worktrees/issue-2658/plugins/superheroes/lib/tests/test_review_record_links_2658.py:242: Failed
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_e11_unreadable_links_with_a_full_marker_on_the_branch_write_the_full_lane_and_disclose_it
-1 failed, 43 deselected in 0.79s
+FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_e11_unreadable_links_never_let_a_full_marker_promote_the_sessions_lane
+1 failed, 43 deselected in 0.84s
 ```
 
-- **restore:** inverse edit re-adding `unreadable or `.
-- **restore receipt:** `    if marker_full and (unreadable or str(m.get("issue")) in {str(n) for n in meta["issues"]}):` (quoted from the final diff).
-- **raw green:** the whole-file green above.
+- **restore:** the inverse edit, back to `not unreadable and`.
+- **restore receipt:** `git status --porcelain` printed nothing after the restore (the tree matched commit `90c889e8`).
+- **raw green:**
+
+```
+.                                                                        [100%]
+1 passed, 43 deselected in 3.74s
+```
 
 ## G8 — `read_history` keeping unreadable entries
 
