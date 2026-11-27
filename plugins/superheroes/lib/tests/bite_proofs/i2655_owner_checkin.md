@@ -55,9 +55,11 @@ trimmed to the failing test's name and its assertion line. Nothing was redacted.
 ## S4 resume Step 6 citation
 
 - Element and axis: `R` Step 6, the citation `orchestration.md` § Owner check-in while lanes run.
-- Neutralization: `§ Owner check-in while lanes run, in place` became `§ Liveness sweep and wave watch, in place`.
-- Raw red: `FAILED ...::test_resume_step_6_cites_home` with `AssertionError: showrunner-resume SKILL.md Step 6 does not cite the check-in home` (`1 failed, 3 passed`).
-- Restore: inverse edit back to `§ Owner check-in while lanes run, in place`.
+- Neutralization (replayed on the Step 6 text as it now reads): `` orchestration.md` § Owner check-in while lanes run gives, with `` became `` orchestration.md` § Liveness sweep and wave watch gives, with ``.
+- Command: `scripts/pinned-python -B -m pytest plugins/superheroes/lib/tests/test_owner_checkin_doctrine_2655.py::test_resume_step_6_cites_home -q --tb=line`.
+- Raw red: `FAILED ...::test_resume_step_6_cites_home` with `AssertionError: showrunner-resume SKILL.md Step 6 does not cite the check-in home` (`1 failed`).
+- Restore: inverse edit back to `` § Owner check-in while lanes run gives, with ``. Green: `1 passed`; `git status --short` clean.
+- Earlier wording: before the Step 6 paragraph was reworded, the same edit ran on `§ Owner check-in while lanes run, in place` (`1 failed, 3 passed`).
 
 ## Green
 
