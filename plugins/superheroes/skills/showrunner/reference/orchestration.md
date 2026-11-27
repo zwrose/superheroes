@@ -391,9 +391,9 @@ the note first, then runs the liveness sweep (§ Liveness sweep and wave watch),
 event and re-arms. An event is news, so the owner hears it in that note.
 
 **The ceiling.** Budget every wave-watch arm from the last note sent: set `--max-seconds` and
-`--max-total-seconds` both to the time left until the next note is due, at most 1500 (25 minutes).
-When less than two minutes are left (or none, because the arm came late), send the note first and
-arm from it. `--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
+`--max-total-seconds` both to the time left until the next note is due, less two minutes kept for
+the wake and the note, at most 1500 (25 minutes). When that leaves less than a minute (or nothing,
+because the arm came late), send the note first and arm from it. `--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
 `--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). These values replace the
 example values in `wave-watch.md` (`--max-seconds 2400` in its arming snippet,
 `--max-total-seconds 1680` under a `Monitor`) on every host; `wave-watch.md` stays the home of the
