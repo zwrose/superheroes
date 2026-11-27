@@ -207,7 +207,9 @@ def test_e9_a_local_closing_reference_in_another_repository_is_not_this_reposito
     # axis: E9; the repository of a closingIssuesReferences entry dropped, so another repository's #N counts here
     meta = _local_gh(monkeypatch, [_ref(3, "x", "y"), _ref(5), _ref(6, "O", "R")])
     assert meta == {"head": HEAD, "body": "x", "issues": [5, 6]}
-    assert _local_gh(monkeypatch, [_ref(3, "x", "y")])["issues"] == []
+    # a readable answer with no issue of this repository is readable and empty, never the unreadable result
+    assert _local_gh(monkeypatch, [_ref(3, "x", "y")]) == {"head": HEAD, "body": "x", "issues": []}
+    assert _local_gh(monkeypatch, []) == {"head": HEAD, "body": "x", "issues": []}
 
 
 @pytest.mark.parametrize("refs,repo", [
