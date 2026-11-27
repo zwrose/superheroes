@@ -376,9 +376,10 @@ shape, and the watch ceiling that keeps them. The charter's duty 9 and `showrunn
 here.
 
 **While any lane is live, send the owner a status note at least every 30 minutes, even when nothing
-changed.** The 30 minutes count from the last note you sent, not from the last wake, so a note falls
-due during your own long work (a vet, a review read) as well. When nothing changed since the last
-note, the note is one line.
+changed.** The first note goes out at once when a lane goes live (the launch report counts as it) or
+when a seat resumes, never waiting on a watch. Every later note goes out no more than 30 minutes
+after the last note sent, so a note falls due during your own long work (a vet, a review read) as
+well. When nothing changed since the last note, the note is one line.
 
 **The note's shape.** One line per live lane: its issue, its phase and its age (the time since its
 launch, and since its last activity). Then anything answered since the last note: a builder note, an
@@ -388,30 +389,23 @@ owner question, a vet. Then anything waiting on the owner, or that nothing is.
 the note first, then runs the liveness sweep (§ Liveness sweep and wave watch), then acts on the
 event and re-arms. An event is news, so the owner hears it in that note.
 
-**The ceiling.** Arm every wave watch with `--max-seconds` and `--max-total-seconds` both set to the
-seconds left until 25 minutes after the last note you sent, never above 1500 (25 minutes), so the
-loop ends on its `timer` and wakes you inside the 30 minutes. The budget counts from the last note,
-not from the arm: the sweep and the event's handling after a note use part of it. When under five
-minutes are left, send the note now and arm a fresh 1500. With no note sent yet (the first lane of a
-wave just went live, or a resumed seat cannot read its last note), the clock starts when that lane
-went live or that seat started, whichever is later: arm with the seconds left until 25 minutes after
-that start, and send the first note within five minutes of it (at a resume, right after the report).
-`--max-seconds` alone never wakes you:
-under `loop` a per-arm timer re-arms internally, and only `--max-total-seconds` ends the loop
-(`wave-watch.md` § Timing flags). The 5 minutes of slack covers the loop's overrun of its total and
-the note itself. These values replace the example values in
-`wave-watch.md` (`--max-seconds 2400` in its arming snippet, `--max-total-seconds 1680` under a
-`Monitor`) on every host; `wave-watch.md` stays the home of the arming pattern and every other flag.
+**The ceiling.** Budget every wave-watch arm from the last note sent: set `--max-seconds` and
+`--max-total-seconds` both to the time left until the next note is due, at most 1500 (25 minutes).
+`--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
+`--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). These values replace the
+example values in `wave-watch.md` (`--max-seconds 2400` in its arming snippet,
+`--max-total-seconds 1680` under a `Monitor`) on every host; `wave-watch.md` stays the home of the
+arming pattern and every other flag.
 
 **Restarts and compaction.** A watch does not survive a restart, an app exit or compaction
 (`wave-watch.md` § The boundary the owner accepted). A restarted or compacted advisor seat with live
-lanes runs `showrunner-resume` first, whether or not a resume point exists. It re-arms each watch
-with this ceiling and sends a check-in note in this shape right after its report.
+lanes runs `showrunner-resume` first, whether or not a resume point exists. It sends its first note
+before it arms any watch, then arms each one with this ceiling.
 
-**When the cadence is not held.** When lanes are live and no watch with this ceiling is armed (a
-batch the resume left unarmed, a refused arm, or a headless seat that cannot arm `loop`), tell the
-owner in the next note or report that the 30-minute check-in is not held, why, and what clears it.
-At a resume, this goes on line 3 of the report.
+**When the cadence is not held.** When lanes are live and no watch with this ceiling is armed or
+about to be re-armed (a batch the resume left unarmed, a refused arm, or a headless seat that cannot
+arm `loop`), tell the owner in the next note or report that the 30-minute check-in is not held, why,
+and what clears it. At a resume, this goes on line 3 of the report.
 
 ## Lapsed-pass parks and the send-back
 
