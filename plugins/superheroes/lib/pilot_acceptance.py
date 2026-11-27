@@ -10,7 +10,6 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-import git_routing
 import pilot_conformance as pc
 import pilot_conformance_declarations as pcd
 
@@ -825,7 +824,7 @@ def _derive_dirty_from_git():
     # pins, so an inherited GIT_DIR cannot report another checkout's state.
     env = {
         key: value for key, value in os.environ.items()
-        if key not in git_routing.GIT_ROUTING_VARS
+        if key not in pc.CHECKOUT_LOCATION_VARS
     }
     try:
         proc = subprocess.run(

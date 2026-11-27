@@ -3249,8 +3249,10 @@ With `--project <name>` the report carries a top-level `reference: {project, com
 `commit` is the full object id of `--cwd`'s HEAD; the acceptance matrix accepts the report only for
 that project and commit (§The acceptance matrix, report binding). Such a **bound run** reads
 everything from the `--cwd` checkout: its stamp, branch, calibration and exercises run with every
-git routing variable (`git_routing.GIT_ROUTING_VARS`, `GIT_DIR` among them) removed, so an
-inherited one cannot send any of them to another checkout. When the commit cannot be read as a
+checkout-location variable removed (`pilot_conformance.CHECKOUT_LOCATION_VARS`: the routing
+variables of `git_routing.GIT_ROUTING_VARS` other than `GIT_CONFIG`, `GIT_CONFIG_GLOBAL` and
+`GIT_CONFIG_SYSTEM`, `GIT_DIR` among them), so an inherited one cannot send any of them to another
+checkout, while the caller's git config selection is kept. When the commit cannot be read as a
 full object id the run refuses `conformance-cli-commit-unreadable` before any exercise runs.
 Without `--project` the report carries no `reference` and the matrix refuses it as unbound.
 
@@ -3290,7 +3292,7 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cli-cwd-invalid` | `--cwd` is not an existing directory (exit 2) |
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
 | `conformance-cli-project-invalid` | `--project` is empty or contains control characters (exit 2) |
-| `conformance-cli-commit-unreadable` | `--project` given (or `head`) but `--cwd`'s HEAD did not read as a full object id with git routing variables removed (exit 2) |
+| `conformance-cli-commit-unreadable` | `--project` given (or `head`) but `--cwd`'s HEAD did not read as a full object id with checkout-location variables removed (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
 | `conformance-input-calibration-unreadable` | pilot block input: calibration source exists but could not be read for cwd |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
@@ -3475,7 +3477,8 @@ malformed** envelope refuses `acceptance-cli-declarations-malformed`; a non-obje
 Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when `ok` is true, **exit 1** when it is
 false (output still prints), **exit 2** on refusal. When neither `--dirty` nor `--clean` is
 passed, dirty is derived from `git status --porcelain` in the **CLI process's current working
-directory**, with git routing variables removed (the checkout `pilot_conformance.py head` pins);
+directory**, with checkout-location variables removed (the checkout `pilot_conformance.py head`
+pins);
 pass `--dirty` or `--clean` to override explicitly.
 
 ### Acceptance-matrix refusal tokens

@@ -842,9 +842,12 @@ def _git(path, *args):
     )
 
 
-def _commit_checkout(path):
+def _commit_checkout(path, object_format=None):
     """Make `path` a git checkout with one commit; return that commit's full id."""
-    _git(path, "init", "-q")
+    if object_format is None:
+        _git(path, "init", "-q")
+    else:
+        _git(path, "init", "-q", "--object-format=%s" % object_format)
     _git(path, "add", "-A")
     _git(
         path,
@@ -945,6 +948,53 @@ def test_conformance_run_with_project_stamps_reference(tmp_path):
     report = json.loads(proc.stdout)
     assert report["reference"] == {"project": "demo", "commit": commit}
     assert len(commit) == 40
+
+
+def test_conformance_run_stamps_a_sha256_commit(tmp_path):
+    """A SHA-256 checkout's 64-character commit id is stamped whole and backs the matrix."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root, object_format="sha256")
+    assert len(commit) == 64
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode in (0, 1), proc.stderr
+    report = json.loads(proc.stdout)
+    assert report["reference"] == {"project": "demo", "commit": commit}
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
+    assert matrix_proc.returncode in (0, 1), matrix_proc.stderr
+    assert matrix_proc.stderr == ""
+
+
+def test_bound_run_keeps_the_callers_git_config_selection(tmp_path, monkeypatch, capsys):
+    """Only checkout-location variables leave a bound run; GIT_CONFIG_GLOBAL stays as chosen."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    _commit_checkout(checkout)
+    chosen = str(tmp_path / "chosen.gitconfig")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", chosen)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    seen = {}
+
+    def fake_resolve_inputs(cwd, **kwargs):
+        seen["config"] = os.environ.get("GIT_CONFIG_GLOBAL")
+        seen["dir"] = os.environ.get("GIT_DIR")
+        return {}, []
+
+    monkeypatch.setattr(pc, "resolve_inputs", fake_resolve_inputs)
+    monkeypatch.setattr(pc, "default_exercises", lambda: [])
+    exit_code = pc.main([
+        "pilot_conformance.py", "run", "--cwd", str(checkout), "--now", _GENERATED_AT,
+        "--project", "demo",
+    ])
+    capsys.readouterr()
+    assert exit_code in (0, 1)
+    assert seen == {"config": chosen, "dir": None}
+    assert set(pc.CHECKOUT_LOCATION_VARS) == (
+        set(git_routing.GIT_ROUTING_VARS) - {"GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"}
+    )
 
 
 def test_conformance_run_with_project_refuses_unreadable_commit(tmp_path):

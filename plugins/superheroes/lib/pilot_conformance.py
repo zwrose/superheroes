@@ -938,17 +938,26 @@ def _validate_cli_now(now):
     return now
 
 
+# The routing variables that choose WHICH checkout git reads (GIT_DIR, GIT_WORK_TREE and the rest),
+# derived from the one home: every routing variable except the config-selection ones
+# (GIT_CONFIG, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM), which the caller's choice keeps.
+CHECKOUT_LOCATION_VARS = tuple(
+    key for key in git_routing.GIT_ROUTING_VARS if not key.startswith("GIT_CONFIG")
+)
+
+
 @contextlib.contextmanager
 def _without_git_routing():
-    """Run the body with every git routing variable removed from this process's environment.
+    """Run the body with every checkout-location variable removed from this process's environment.
 
     A bound run (`--project`) reads its stamp, its branch, its calibration and its exercises from
-    the `--cwd` checkout alone; an inherited GIT_DIR (or another routing variable) would send some
-    of those reads to another checkout. The variables are put back when the body ends.
+    the `--cwd` checkout alone; an inherited GIT_DIR (or another location variable) would send some
+    of those reads to another checkout. The caller's git config selection is kept. The variables
+    are put back when the body ends.
     """
     saved = {
         key: os.environ.pop(key)
-        for key in git_routing.GIT_ROUTING_VARS
+        for key in CHECKOUT_LOCATION_VARS
         if key in os.environ
     }
     try:
@@ -958,16 +967,16 @@ def _without_git_routing():
 
 
 def checkout_head(cwd):
-    """The full object id of `cwd`'s HEAD, read with git routing variables removed.
+    """The full object id of `cwd`'s HEAD, read with checkout-location variables removed.
 
     The one commit lookup the report stamp and the documented matrix call sites share (the
     `head` verb prints it). Refuses `conformance-cli-commit-unreadable` when it cannot be read.
     """
-    # bite-axis: checkout identity — inherited routing variables (GIT_DIR and the rest) would let
+    # bite-axis: checkout identity — inherited location variables (GIT_DIR and the rest) would let
     # `git -C` read another checkout's HEAD, so the lookup runs with them removed.
     env = {
         key: value for key, value in os.environ.items()
-        if key not in git_routing.GIT_ROUTING_VARS
+        if key not in CHECKOUT_LOCATION_VARS
     }
     try:
         proc = subprocess.run(
