@@ -1869,9 +1869,10 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
                 if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
     loop_receipt = RD.build_receipt(state)
-    # The scoped finder, like the auditor, cannot be seated outside the fixer's family: the fixes' own
-    # diff has no reviewer, so the review is not certified (re-pinned: it used to hand back before it).
-    assert refusal["verdict"] == "cannot-certify" and refusal["certificationShape"] is None
+    # A round whose every fix audit has no auditor ends the session `halted` / `audits-unseatable` right
+    # after the audits fold (#2667), so the fixes' own diff is never scanned and the review is not certified.
+    assert refusal["verdict"] == "halted" and refusal["certificationShape"] is None
+    assert state["decisions"][-1]["kind"] == "audits-unseatable"
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True

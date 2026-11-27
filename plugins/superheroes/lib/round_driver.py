@@ -1504,6 +1504,20 @@ def _reevaluate_lane_dimensions(state, config, diff_text):
     return True
 
 
+def _halt_audits_unseatable(state, cause):
+    """Halt the session when a round's every fix audit had no auditor: the fixes were not audited,
+    so no later phase runs and certification is withheld. The reason carries the cause the fold
+    recorded (the same text every unaudited audit entry carries)."""
+    detail = cause.get("detail") if isinstance(cause.get("detail"), str) else str(cause.get("cause"))
+    _set_terminal(state, "halted")
+    state["certification"] = {
+        "shape": None,
+        "reason": ("audits-unseatable: " + detail + " — the round's fixes were not audited; no "
+                   "further round runs; certification withheld")}
+    _decision(state, "audits-unseatable", detail)
+    state["step"] = P_TERMINAL
+
+
 def _default_config(overrides=None):
     cfg = {
         "leg": "code",
@@ -9880,6 +9894,8 @@ def _reopened_content(row, member):
 def _fold_audits(state, config, artifact, session_dir=None):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
+    # axis: a mark from an earlier fold never halts a later round — see bite-proof record i2667_vendors_from_seat_map
+    state.pop("_auditsUnseatable", None)
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
     targets = state.get("_auditTargets") or []
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
@@ -9898,9 +9914,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # A target with no eligible auditor was never audited: any result submitted for it is ignored, so
     # it folds exactly like silence — `unaudited`, not-discharged, never credited as audited.
     no_auditor_ids = {tid for tid, vendor in expected_auditors.items() if not vendor}
+    unseatable_cause = None
     if no_auditor_ids:
         results = [r for r in results
                    if not (isinstance(r, dict) and r.get("id") in no_auditor_ids)]
+        # the one cause every record of this fold carries, built once from the inputs the selection read
+        unseatable_cause = receipt_disclosures.audit_unseatable_cause(state, config)
     # A fix may change behaviour its finding does not name only where the finding's one effective
     # decision is a guidance ruling that says so (`allowsChange`); the owner gate never carries it.
     # The binding decision is the one fixer dispatch resolves (`_row_decision`, merged members
@@ -10051,6 +10070,15 @@ def _fold_audits(state, config, artifact, session_dir=None):
     # Provenance rests on the adapter-recorded seat sources (never the fold path alone) — recorded
     # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
     _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
+    if unseatable_cause is not None:
+        # an unaudited entry for a target no auditor could take names why; its `reason` is unchanged
+        for entry in outcome["audits"]:
+            if isinstance(entry, dict) and entry.get("id") in no_auditor_ids:
+                entry["cause"] = dict(unseatable_cause)
+        # axis: a round whose every target has no auditor is marked, and `_after_audits` halts on it — see bite-proof record i2667_vendors_from_seat_map
+        if expected_auditors and not any(expected_auditors.values()):
+            _record_round(state, "auditsUnseatable", dict(unseatable_cause))
+            state["_auditsUnseatable"] = dict(unseatable_cause)
     _record_round(state, "audits", outcome["audits"])
     spawned_audits = [{"id": a.get("id"), "spawnedFrom": spawned_from[a.get("id")],
                        "ruling": a.get("ruling")}
@@ -10167,6 +10195,11 @@ def _fold_audits(state, config, artifact, session_dir=None):
 
 def _after_audits(state, config, session_dir=None):
     """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
+    # axis: a round whose every fix audit has no auditor ends the session before any later phase — see bite-proof record i2667_vendors_from_seat_map
+    unseatable = state.pop("_auditsUnseatable", None)
+    if isinstance(unseatable, dict):
+        _halt_audits_unseatable(state, unseatable)
+        return
     # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
     # axis: the bounded pass settles on its own settle, and a state holding both post-cap rounds never converges — see bite-proof record i2552_bounded_pass_b1
     if _is_post_cap_audit_round(state):
@@ -16689,7 +16722,8 @@ def _unfilled_seat_missing_envelope(session_dir, state, rnd, phase, attempt, sea
         "manifestSha256": manifest_sha,
         "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "reason": UNFILLED_SEAT_REASON,
-        "evidence": ("no auditor outside the makers' families is available for this target"
+        "evidence": ("no auditor outside the makers' families is available for this target: "
+                     + receipt_disclosures.audit_unseatable_cause(state)["detail"]
                      if phase == P_AUDITS else
                      "no reviewer outside the makers' families is available for this seat"
                      if phase in _NONPANEL_REVIEWER_PHASES else
@@ -19190,6 +19224,22 @@ def _parse_seat_map(raw):
     return loaded, None
 
 
+def _seat_map_vendors(seat_map_obj):
+    """The vendors a `next --seat-map` names in its `liveVendors`: `(vendors, None)` with the sorted
+    distinct list, `(None, None)` when the key is absent or `[]` (no source), or `(None, refusal)`
+    when the value is not a list of registered vendor names (strings exactly as registered: no
+    stripping, no comma-separated form)."""
+    if not isinstance(seat_map_obj, dict) or "liveVendors" not in seat_map_obj:
+        return None, None
+    value = seat_map_obj["liveVendors"]
+    if isinstance(value, list) and not value:
+        return None, None
+    if not isinstance(value, list) or any(
+            not (isinstance(v, str) and v in model_registry.VENDORS) for v in value):
+        return None, {"ok": False, "reason": "seat-map-live-vendors-invalid", "value": value}
+    return sorted(set(value)), None
+
+
 def _parse_vendors(raw):
     """Parse the `--vendors` CLI value. Accepts BOTH a JSON list ('["codex","cursor"]') and a
     comma-separated string ('codex,cursor'). Returns (vendors, None) on success or (None, reason)
@@ -19429,6 +19479,7 @@ def _dispatch(args):
                                              "value": args.vendors}) + "\n")
                 return 1
             overrides["vendors"] = vendors
+            overrides["vendorsSource"] = "cli"
         if args.seat_map is not None:
             # Same fresh-state-only discipline as `--vendors`: the seat map is read ONCE at
             # new_state, so accepting it on existing state would silently ignore it (#723).
@@ -19442,6 +19493,24 @@ def _dispatch(args):
                 sys.stdout.write(json.dumps({"ok": False, "reason": "seat-map-not-fresh-state",
                                              "value": args.seat_map}) + "\n")
                 return 1
+            # One vendor source: the seat map's `liveVendors` feed `config.vendors` (the fix-auditor
+            # pool reads that list alone). Checked after the fresh-state check and before anything is
+            # written, so a refusal here leaves no state behind.
+            map_vendors, refusal = _seat_map_vendors(seat_map_obj)
+            if refusal is not None:
+                sys.stdout.write(json.dumps(refusal) + "\n")
+                return 1
+            if map_vendors is not None:
+                if args.vendors is not None:
+                    if set(overrides["vendors"]) != set(map_vendors):
+                        sys.stdout.write(json.dumps({
+                            "ok": False, "reason": "vendors-disagree-with-seat-map",
+                            "vendors": overrides["vendors"],
+                            "seatMapLiveVendors": map_vendors}) + "\n")
+                        return 1
+                else:
+                    overrides["vendors"] = map_vendors
+                    overrides["vendorsSource"] = "seat-map"
             overrides["seatMap"] = seat_map_obj
         if args.copy_proof is not None:
             # Same fresh-state-only discipline as `--seat-map`: the proof is checked ONCE at new_state,
