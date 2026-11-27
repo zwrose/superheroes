@@ -9,6 +9,7 @@
 - [The launcher provisions each build's worktree](#the-launcher-provisions-each-builds-worktree)
 - [iPhone lanes: launching and reaping their phones](#iphone-lanes-launching-and-reaping-their-phones)
 - [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
+- [Owner check-in while lanes run](#owner-check-in-while-lanes-run)
 - [Lapsed-pass parks and the send-back](#lapsed-pass-parks-and-the-send-back)
 - [Acting on the builders' account](#acting-on-the-builders-account)
 - [Adoption mechanics](#adoption-mechanics)
@@ -367,6 +368,51 @@ probe has three legs — `resultProduction`, `completionDetection`, `progressTel
 live-review failure rate. The canary strengthens what the `engine-auth` check must mean in a wave;
 it does not add a check to the preflight list. The walk and the owner's launch-without word live in
 `skills/showrunner/reference/dispatch-preflight.md`.
+
+## Owner check-in while lanes run
+
+This section is the one home for the advisor's check-in with the owner: its cadence, the note's
+shape, and the watch ceiling that keeps them. The charter's duty 9 and `showrunner-resume` point
+here.
+
+**While any lane is live, send the owner a status note at least every 30 minutes, even when nothing
+changed.** The first note goes out at once whenever a launch or relaunch takes a wave from no live
+lane to one, without waiting for the batch's launch report (send the two together when the report is
+already there), or when a seat resumes, never waiting on a watch. Every later note goes out no more
+than 30 minutes after the last note sent, so a note falls due during your own long work (a vet, a
+review read) as well. When nothing changed since the last note, its status is one line; a note is
+still a message to the owner, so the "Still on your machine" line opens it whenever that line is due
+(`skills/showrunner/reference/dispatch-preflight.md` § Until the cloud is fixed: the "Still on your
+machine" line).
+
+**The note's shape.** One line per live lane: its issue, its phase and its age (the time since its
+launch, and since its last activity). Then anything answered since the last note: a builder note, an
+owner question, a vet. Then anything waiting on the owner, or that nothing is.
+
+**Every wake sends the note.** A wave-watch wake, whether an event or the loop's own `timer`, sends
+the note first, then runs the liveness sweep (§ Liveness sweep and wave watch), then acts on the
+event and re-arms. An event is news, so the owner hears it in that note.
+
+**The ceiling.** Budget every wave-watch arm from the last note sent: set `--max-seconds` and
+`--max-total-seconds` both to the time left until the next note is due, less two minutes kept for
+the wake and the note, at most 1500 (25 minutes), rounded down to whole seconds before it is passed
+to both flags. When that leaves less than a minute (or nothing, because the arm came late), send the
+note first and arm from it. `--max-seconds` alone never wakes you: under `loop` a per-arm timer
+re-arms internally, and only `--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). These values replace the
+example values in `wave-watch.md` (`--max-seconds 2400` in its arming snippet,
+`--max-total-seconds 1680` under a `Monitor`) on every host; `wave-watch.md` stays the home of the
+arming pattern and every other flag.
+
+**Restarts and compaction.** A watch does not survive a restart, an app exit or compaction
+(`wave-watch.md` § The boundary the owner accepted). A restarted or compacted advisor seat with live
+lanes runs `showrunner-resume` first, whether or not a resume point exists. It sends its first note
+as soon as it reads a live lane, before any classification or arming, then arms each watch with
+this ceiling.
+
+**When the cadence is not held.** When lanes are live and no watch with this ceiling is armed or
+about to be re-armed (a batch the resume left unarmed, a refused arm, or a headless seat that cannot
+arm `loop`), tell the owner in the next note or report that the 30-minute check-in is not held, why,
+and what clears it. At a resume, this goes on line 3 of the report.
 
 ## Lapsed-pass parks and the send-back
 
