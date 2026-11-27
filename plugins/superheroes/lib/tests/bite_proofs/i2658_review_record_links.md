@@ -446,6 +446,30 @@ FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_an_u
 3 passed, 65 deselected in 1.07s
 ```
 
+## G12 — an unreadable earlier record leaves the test-lens count unavailable (`_test_lens`)
+
+Added by the builder after review rounds 2 and 3 of PR 2664.
+
+- **element / axis:** `if _is_unreadable_entry(other): part["findings"] = None` in `_test_lens`. The chosen row's `carried` marker is
+  still copied. Axis: when the earlier record could not be read, which findings were carried cannot be told. So the count
+  is unavailable, never credited to this round, and a carried row still reads as carried.
+- **neutralization:** `    if _is_unreadable_entry(other):` -> `    if _is_unreadable_entry(other) and False:`.
+- **detector / selector:** `test_an_unreadable_earlier_record_leaves_the_test_lens_count_unavailable`, `-k test_lens_count_unavailable`.
+- **raw red** (the builder's run on commit `6565498f`, the failure lines verbatim):
+
+```
+F                                                                        [100%]
+___ test_an_unreadable_earlier_record_leaves_the_test_lens_count_unavailable ___
+>       assert part["listed"] is True and part["ran"] is True and part["findings"] is None
+E       assert (True is True and True is True and 1 is None)
+FAILED plugins/superheroes/lib/tests/test_review_record_links_2658.py::test_an_unreadable_earlier_record_leaves_the_test_lens_count_unavailable
+1 failed, 57 deselected in 15.50s
+```
+
+- **restore:** the inverse edit.
+- **restore receipt:** `git status --porcelain` printed nothing after the restore (the tree matched commit `6565498f`).
+- **raw green:** shared with H8 in `i2658_parked_links.md` (`2 passed, 73 deselected in 4.26s`).
+
 ---
 
 Not in the declared set, and so not neutralized here: the `earlier` filter in `write` (the E17 guard), the

@@ -254,6 +254,37 @@ FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p14_a
 
 - **Raw green:** the shared green run below.
 
+## H8. Cleanup reads a non-default-base PR outside a native stack as having no link (`require_stack`)
+
+Added by the builder after review round 2 of PR 2664.
+
+- **Guarded element:** `cloud_parked.py`, `_linked_issues`: `if snapshot is None and require_stack: return [], "github"`, which `cloud_cleanup._plan` reaches by passing `require_stack=True`.
+- **Axis:** cleanup deletes branches and archives sessions, so it never takes an issue reference alone as a non-stack PR's lane. A park still binds such a PR through the timeline.
+- **Neutralization:** `    if snapshot is None and require_stack:` became `    if snapshot is None and require_stack and False:`.
+- **Raw red** (`-k test_p5_cleanup_refuses`, the builder's run on commit `6565498f`, failure lines verbatim):
+
+```
+F                                                                        [100%]
+_________ test_p5_cleanup_refuses_a_non_default_base_pr_not_in_a_stack _________
+>       assert CC.plan(cw.repo, REPO, TCC.PR, env=cw.env, run=cw.gh) == want
+E       assert {'ok': True, ...er/name', ...} == {'ok': False,...'pr-unlinked'}
+E         Differing items:
+E         {'ok': True} != {'ok': False}
+E         {'action': 'cleanup'}
+E         {'archiveText': 'Pull request #412 is merged, so this build is finished. Follow the section "When the advisor asks you to archive your session" in your cloud build reference.'}
+FAILED plugins/superheroes/lib/tests/test_cloud_parked_links_2658.py::test_p5_cleanup_refuses_a_non_default_base_pr_not_in_a_stack
+1 failed, 16 deselected in 1.23s
+```
+
+- **Restore:** the inverse edit.
+- **Restore receipt:** `git status --porcelain` printed nothing after both restores of that run (the tree matched commit `6565498f`).
+- **Raw green** (with G12 in `i2658_review_record_links.md`, one run):
+
+```
+..                                                                       [100%]
+2 passed, 73 deselected in 4.26s
+```
+
 ## The shared green (after all seven restores)
 
 ```
