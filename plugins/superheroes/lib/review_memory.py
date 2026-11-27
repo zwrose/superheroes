@@ -561,22 +561,40 @@ def update_round_record(path, round_no, updates, expected_hash=None, run_id=None
                           run_id=run_id, lease=lease)
 
 
+ROUND_RECORDS_UNREADABLE = "round-records-unreadable"
+
+
+class RoundRecordsUnreadable(ValueError):
+    """The round records a terminal compose reads cannot be read; `detail` says why."""
+
+    def __init__(self, detail):
+        super().__init__(f"{ROUND_RECORDS_UNREADABLE}: {detail}")
+        self.detail = detail
+
+
 def _terminal_fields_from_records(records_path):
     """Compose the readout's fixes / deferred / coverageDecisions from the DURABLE round records
     on disk. These are the unbounded synthesis outputs — a verdict carrying every fix + deferred
     reason + coverage decision inline is exactly the blob that outgrows the courier (live
     2026-07-02: the terminal-record write parked payload-stage-failed). They ride round-records.json
     (Python-written, never the courier), so finalize re-derives them here instead of pushing them
-    through. Missing/unreadable/corrupt -> empty lists (an early terminal has no rounds yet; the
-    loop that could not read its own records already parked upstream)."""
+    through. Missing -> empty lists (an early terminal has no rounds yet). Unreadable or corrupt
+    records, or a round whose fix block is not an object, raise RoundRecordsUnreadable naming why:
+    a terminal record composed from them would read every fix and deferral they hold as absent."""
     state = load_records_state(records_path, [])
+    # axis: unreadable or corrupt round records stop the terminal compose with a named reason, never read as no rounds — see bite-proof record i2672_unreadable_never_absent (M1)
+    if not state.get("ok"):
+        raise RoundRecordsUnreadable(f"the round records are {state.get('state') or 'unreadable'}"
+                                     + (f" ({state['reason']})" if state.get("reason") else ""))
     records = state.get("records") or []
     fixes, deferred, coverage = [], [], []
     seen_cov = set()
     for rec in sorted(records, key=lambda r: r.get("round") or 0):
-        if not isinstance(rec, dict):
-            continue
-        fix = rec.get("fix") if isinstance(rec.get("fix"), dict) else {}
+        fix = rec.get("fix")
+        # axis: a round whose fix block cannot be read stops the compose, so its fixes and deferrals are never dropped — see bite-proof record i2672_unreadable_never_absent (M2)
+        if fix is not None and not isinstance(fix, dict):
+            raise RoundRecordsUnreadable(f"round {rec.get('round')!r}: its fix block is not an object")
+        fix = fix or {}
         fixes.extend(fix.get("fixes") or [])
         deferred.extend(fix.get("deferred") or [])
         for cd in rec.get("coverageDecisions") or []:
@@ -676,8 +694,12 @@ def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=
             }
     record = {k: v for k, v in verdict.items() if k not in _TERMINAL_STRIP}
     if records_path:
-        record["fixes"], record["deferred"], record["coverageDecisions"] = \
-            _terminal_fields_from_records(records_path)
+        try:
+            record["fixes"], record["deferred"], record["coverageDecisions"] = \
+                _terminal_fields_from_records(records_path)
+        except RoundRecordsUnreadable as exc:
+            # nothing is written: the record on disk, if any, stays as it was
+            return {"ok": False, "reason": ROUND_RECORDS_UNREADABLE, "detail": exc.detail}
     else:
         record.setdefault("fixes", [])
         record.setdefault("deferred", [])

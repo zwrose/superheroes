@@ -607,8 +607,8 @@ def test_r2_a_record_with_no_other_session_predecessor_keeps_the_rows_raiser(tmp
     assert account["findings"][0][RAISED] == "premortem-reviewer"
 
 
-def test_r2_an_intervening_other_session_record_with_a_malformed_findings_list_is_skipped_not_the_end_of_the_walk(tmp_path):
-    # axis: history A (other, code-reviewer), C (other, malformed findings list), B (this session): the rewrite keeps code-reviewer
+def test_r2_an_intervening_other_session_record_with_a_malformed_findings_list_ends_the_walk(tmp_path):
+    # axis: history A (other, code-reviewer), C (other, malformed findings list), B (this session): the walk stops at C (#2672 reversed the old skip), so A's raiser is never read past it and the row keeps its own
     fake = RecordFake()
     _post(tmp_path, fake, "A", "code-reviewer")
     _post(tmp_path, fake, "C", "scoped finder")
@@ -620,9 +620,10 @@ def test_r2_an_intervening_other_session_record_with_a_malformed_findings_list_i
     _post(tmp_path, fake, "B", "premortem-reviewer")
     account = _session_account("B", "premortem-reviewer")
     other = rs._other_session_findings(account, {}, str(tmp_path), fake.readers())
-    assert other and other[0][RAISED] == "code-reviewer"
-    rs._fill(account, rs._earlier(account, {}, str(tmp_path), fake.readers()), other)
-    assert account["findings"][0][RAISED] == "code-reviewer"
+    assert isinstance(other, rs._Unreadable) and "findings list is malformed" in other.detail
+    assert rs._unreadable_checked([], other), "the record names the record the walk stopped at"
+    rs._fill(account, rs._earlier(account, {}, str(tmp_path), fake.readers()), [])
+    assert account["findings"][0][RAISED] == "premortem-reviewer"
 
 
 @pytest.mark.parametrize("failure", ["none", "non-list", "raises"])

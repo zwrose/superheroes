@@ -124,46 +124,96 @@ def _round_number(value):
     return i
 
 
+ROUND_UNREADABLE = "round-unreadable"
+
+
+class RoundUnreadable(ValueError):
+    """A round record a walker cannot read: it is not an object, or a field the walker reads (its dimensions, one
+    dimension's state, its findings) has the wrong shape. A walker that meets one stops and raises this, naming the
+    round, so a carry or a round walk never skips it and falls back to an older round."""
+
+    def __init__(self, detail):
+        super().__init__(f"{ROUND_UNREADABLE}: {detail}")
+        self.reason = ROUND_UNREADABLE
+        self.detail = detail
+
+
+def _where(rec, index):
+    rn = rec.get("round") if isinstance(rec, dict) else None
+    where = "a round record" if index is None else f"round record {index}"
+    return where + (f" (round {rn!r})" if rn is not None else "")
+
+
+def _readable_round(rec, index):
+    """`rec` when it is an object; otherwise raise RoundUnreadable naming its position."""
+    # axis: a round record that is not an object stops every walk, never skipped — see bite-proof record i2672_unreadable_never_absent (L1)
+    if not isinstance(rec, dict):
+        raise RoundUnreadable(f"{_where(rec, index)} is not an object")
+    return rec
+
+
+def _round_dimensions(rec, index):
+    """The round's dimensions map, {} when it holds none; raise RoundUnreadable when it is present but not an object."""
+    dims = _readable_round(rec, index).get("dimensions")
+    if dims is None:
+        return {}
+    # axis: a present dimensions field that is not an object is unreadable, so the walk never reads past it to an older round — see bite-proof record i2672_unreadable_never_absent (L1)
+    if not isinstance(dims, dict):
+        raise RoundUnreadable(f"{_where(rec, index)}: its dimensions are not an object")
+    return dims
+
+
+def _round_findings(rec, index):
+    """The round's findings, [] when it holds none; raise RoundUnreadable when they are not a list of objects."""
+    findings = _readable_round(rec, index).get("findings")
+    if findings is None:
+        return []
+    # axis: a findings field that is not a list of objects is unreadable, never read as no findings — see bite-proof record i2672_unreadable_never_absent (L2)
+    if not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
+        raise RoundUnreadable(f"{_where(rec, index)}: its findings are not a list of objects")
+    return findings
+
+
 def _previous_dimension_state(records):
     """Fold every round's dimensions, later
-    rounds overwriting earlier, into the `previous` map plan_round consumes."""
+    rounds overwriting earlier, into the `previous` map plan_round consumes. An unreadable round raises
+    RoundUnreadable."""
     previous = {}
-    for rec in records or []:
-        dims = rec.get("dimensions") if isinstance(rec, dict) else None
-        if not isinstance(dims, dict):
-            continue
-        for name, dim in dims.items():
+    for index, rec in enumerate(records or []):
+        for name, dim in _round_dimensions(rec, index).items():
             previous[name] = dim
     return previous
 
 
 def _carry_forward_dimension(records, name, carried_from_round):
     """The most recent prior state for a skipped
-    dimension, stamped skipped. Missing → a low-confidence empty skip."""
-    for rec in reversed(records or []):
-        dims = rec.get("dimensions") if isinstance(rec, dict) else None
-        if isinstance(dims, dict) and isinstance(dims.get(name), dict):
-            out = dict(dims[name])
-            out["status"] = "skipped"
-            out["carriedFromRound"] = carried_from_round
-            return out
+    dimension, stamped skipped. Missing → a low-confidence empty skip. An unreadable round met on the walk back, or a
+    newer round whose state for this dimension is not an object, raises RoundUnreadable: the carry never reaches past
+    it to an older round."""
+    rows = list(records or [])
+    for index in range(len(rows) - 1, -1, -1):
+        dims = _round_dimensions(rows[index], index)
+        if name not in dims:
+            continue
+        # axis: a dimension state that cannot be read stops the carry instead of carrying an older round's state — see bite-proof record i2672_unreadable_never_absent (L1)
+        if not isinstance(dims[name], dict):
+            raise RoundUnreadable(f"{_where(rows[index], index)}: the state of dimension {name!r} is not an object")
+        out = dict(dims[name])
+        out["status"] = "skipped"
+        out["carriedFromRound"] = carried_from_round
+        return out
     return {"status": "skipped", "findings": [], "confidence": "low",
             "carriedFromRound": carried_from_round}
 
 
-def _surfaced_blocking_severities(record):
+def _surfaced_blocking_severities(record, index=None):
     """The NEW (non-carried) blocking severities
-    a round surfaced."""
-    if not isinstance(record, dict):
-        return []
-    findings = record.get("findings")
-    if not isinstance(findings, list):
-        return []
+    a round surfaced. An unreadable round raises RoundUnreadable, never reads as none surfaced."""
+    findings = _round_findings(record, index)
     # #276/#291: route the blocking partition through the shared fail-closed predicate so a mis-cased
     # blocker (e.g. lowercase `critical`) reaches the surfaced list — the confirmation gate's
     # case-normalized Critical match then parks on it (was case-sensitive `in BLOCKING`, which dropped it).
-    return [f.get("severity") for f in findings
-            if isinstance(f, dict) and circuit_breaker.is_blocking(f.get("severity"))]
+    return [f.get("severity") for f in findings if circuit_breaker.is_blocking(f.get("severity"))]
 
 
 def _confirmation_qualifies(record):
@@ -191,8 +241,10 @@ def _rework_across(records):
 
 def _panel_window(records):
     """The qualifying confirmation panels and every record from
-    the last one onward (findings/rework since the last panel land on THOSE rounds' records)."""
-    allr = [r for r in (records or []) if isinstance(r, dict)]
+    the last one onward (findings/rework since the last panel land on THOSE rounds' records). An unreadable round
+    raises RoundUnreadable: it is never dropped from the window."""
+    # axis: the panel window never filters out an unreadable round — see bite-proof record i2672_unreadable_never_absent (L1)
+    allr = [_readable_round(r, i) for i, r in enumerate(records or [])]
     qualifying = [r for r in allr if r.get("kind") == "confirmation" and _confirmation_qualifies(r)]
     if not qualifying:
         return qualifying, []
@@ -280,13 +332,13 @@ def _load_deferred_set(path):
 
 def _assemble_rounds(records, deferred_set):
     """Prior rounds shaped for the breaker, deferred findings
-    removed so a deferral never counts toward recurrence or progress."""
+    removed so a deferral never counts toward recurrence or progress. An unreadable round raises RoundUnreadable:
+    the breaker never sees a history with a round missing."""
     skip = set((deferred_set or {}).keys())
     out = []
-    for rec in records or []:
-        if not isinstance(rec, dict):
-            continue
-        findings = [f for f in (rec.get("findings") or [])
+    for index, rec in enumerate(records or []):
+        # axis: an unreadable round stops the breaker's round walk instead of being skipped — see bite-proof record i2672_unreadable_never_absent (L2)
+        findings = [f for f in _round_findings(rec, index)
                     if circuit_breaker.finding_identity(f) not in skip]
         rn = _round_number(rec.get("round"))
         rnd = rec.get("round") if rn is None else rn
@@ -376,8 +428,8 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
     round-entry read is one leaf, not two. `latestCoverageDecisionIds` rides for the shell's
     confirmation coverage-marker check (a decision lost between marking and confirmation → park)."""
     coverage = _load_coverage_state(coverage_path, coverage_mode) if coverage_path else None
-    state = _load_records(path, dimensions)
-    if not state.get("ok"):
+
+    def _run_all_deep(why, unreadable_round=None):
         # Fail-closed direction: unreadable memory → run every dimension deep, no confirmation.
         out = {
             "ok": True,
@@ -386,29 +438,39 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
             "enterConfirmation": False,
             "escalationPolicy": "deep-only",
             "memoryUnreadable": True,
-            "dimensions": {d: {"action": "run", "tier": "reviewer-deep",
-                               "reason": "round memory unreadable — run-all-deep"}
+            "dimensions": {d: {"action": "run", "tier": "reviewer-deep", "reason": why}
                            for d in (dimensions or [])},
             "carried": {},
             "latestCoverageDecisionIds": [],
         }
+        if unreadable_round is not None:
+            out["unreadableRound"] = unreadable_round
         if coverage is not None:
             out["coverage"] = coverage
         return out
+
+    state = _load_records(path, dimensions)
+    if not state.get("ok"):
+        return _run_all_deep("round memory unreadable — run-all-deep")
     records = state.get("records") or []
-    enter_confirmation = _confirmation_ready(records, round_no, just_marked, doc_mode=doc_mode)
-    plan = review_round_policy.plan_round({
-        "round": round_no,
-        "dimensions": dimensions or [],
-        "changedSubjects": changed_subjects,
-        "previous": _previous_dimension_state(records),
-        "confirmation": enter_confirmation,
-    })
-    scheduled = plan.get("dimensions") or {}
-    carried = {}
-    for name, sched in scheduled.items():
-        if isinstance(sched, dict) and sched.get("action") == "skip":
-            carried[name] = _carry_forward_dimension(records, name, sched.get("carriedFromRound"))
+    try:
+        enter_confirmation = _confirmation_ready(records, round_no, just_marked, doc_mode=doc_mode)
+        plan = review_round_policy.plan_round({
+            "round": round_no,
+            "dimensions": dimensions or [],
+            "changedSubjects": changed_subjects,
+            "previous": _previous_dimension_state(records),
+            "confirmation": enter_confirmation,
+        })
+        scheduled = plan.get("dimensions") or {}
+        carried = {}
+        for name, sched in scheduled.items():
+            if isinstance(sched, dict) and sched.get("action") == "skip":
+                carried[name] = _carry_forward_dimension(records, name, sched.get("carriedFromRound"))
+    except RoundUnreadable as exc:
+        # axis: an unreadable round stops the schedule walk and names itself; nothing is skipped or carried from older rounds — see bite-proof record i2672_unreadable_never_absent (L1)
+        return _run_all_deep(f"{exc.reason}: {exc.detail} — run-all-deep",
+                             {"reason": exc.reason, "detail": exc.detail})
     out = {
         "ok": True,
         "round": round_no,
@@ -595,6 +657,13 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         if terminal in ("clean", "clean-with-skips"):
             out["certification"] = _certification_summary(records)
         return out
+    except RoundUnreadable as exc:
+        # axis: an unreadable round stops the tally's round walk with its named reason, never read as an absent round — see bite-proof record i2672_unreadable_never_absent (L2)
+        return {"ok": True, "schemaVersion": SCHEMA_VERSION, "terminal": "cannot-certify",
+                "gate": "cannot-certify", "confidence": "low", "round": round_no,
+                "missing": safe_missing, "breaker": {"halt": False},
+                "reason": _clamp_reason(f"{exc.reason}: {exc.detail}"),
+                "unreadableRound": {"reason": exc.reason, "detail": exc.detail}}
     except Exception as exc:  # noqa: BLE001 — fail closed on any tally error, like the shell's catch
         return {"ok": True, "schemaVersion": SCHEMA_VERSION, "terminal": "halted",
                 "gate": "cannot-certify", "confidence": "low", "round": round_no,
