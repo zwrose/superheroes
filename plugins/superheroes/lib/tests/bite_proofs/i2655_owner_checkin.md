@@ -12,8 +12,10 @@ Guarded-element set (fixed): S1 home heading, S2 Contents entry, S3 charter duty
 S4 showrunner-resume Step 6 citation.
 
 How the proof ran: one neutralization at a time, a targeted edit to doc prose with the edit tool,
-never to the test; one red run; the inverse edit; then the next. S2 to S4 ran the whole file, so each
+never to the test; one red run; the inverse edit; then the next. S2 and S3 ran the whole file, so each
 red shows the other three tests still green (`1 failed, 3 passed`): the red is that mutation's alone.
+S4's current replay runs its own test by exact node (`1 failed`, then `1 passed`); its earlier
+whole-file run, on the Step 6 wording before it was reworded, is kept as history in its entry.
 Command: `scripts/pinned-python -B -m pytest <the detector>[::<test>] -q --tb=line`. Raw output is
 trimmed to the failing test's name and its assertion line. Nothing was redacted.
 
@@ -63,4 +65,5 @@ trimmed to the failing test's name and its assertion line. Nothing was redacted.
 
 ## Green
 
-After every restore: `4 passed`, and `git status --short` clean.
+After each restore: the whole-file runs (S1 to S3) read `4 passed`; S4's exact-node replay reads
+`1 passed`. `git status --short` was clean after every restore.
