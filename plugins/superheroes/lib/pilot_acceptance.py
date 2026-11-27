@@ -59,6 +59,10 @@ REASON_EVIDENCE_SURFACE_UNBOUND = "acceptance-evidence-surface-unbound"
 REASON_EVIDENCE_DECLARATION_ABSENT = "acceptance-evidence-declaration-absent"
 REASON_EVIDENCE_DECLARATION_NOT_ATTESTED = "acceptance-evidence-declaration-not-attested"
 
+REASON_REPORT_UNBOUND = "acceptance-report-unbound"
+REASON_REPORT_PROJECT_MISMATCH = "acceptance-report-project-mismatch"
+REASON_REPORT_COMMIT_MISMATCH = "acceptance-report-commit-mismatch"
+
 REASON_CLI_REPORT_PATH_INVALID = "acceptance-cli-report-path-invalid"
 REASON_CLI_REPORT_INVALID = "acceptance-cli-report-invalid"
 REASON_CLI_DECLARATIONS_INVALID = "acceptance-cli-declarations-invalid"
@@ -345,8 +349,51 @@ def _ok_clauses(reference_record, resolved_rows, report_data, declarations_block
     }
 
 
+def bind_report(reference_record, report_data):
+    """Refuse a report whose own `reference` does not name the matrix's project and commit.
+
+    A report backs a matrix only when its top-level `reference` names the same project and
+    the same commit as the matrix's pinned reference. A report that names neither (or only
+    one) refuses as unbound; a differing value refuses naming the mismatch.
+    """
+    if not isinstance(report_data, dict):
+        raise PilotAcceptanceError(REASON_CLI_REPORT_INVALID)
+    bound = report_data.get("reference")
+    if not isinstance(bound, dict):
+        raise PilotAcceptanceError(
+            REASON_REPORT_UNBOUND, "report names no reference project or commit"
+        )
+    missing = [
+        key for key in ("project", "commit")
+        if not isinstance(bound.get(key), str) or not bound.get(key)
+    ]
+    if missing:
+        raise PilotAcceptanceError(
+            REASON_REPORT_UNBOUND, "report names no reference %s" % " or ".join(missing)
+        )
+    mismatches = []
+    for key in ("commit", "project"):
+        # bite-axis: report binding — run evidence backs only the commit and project it names.
+        if bound[key] != reference_record.get(key):
+            mismatches.append(
+                "report %s %r differs from reference %s %r"
+                % (key, bound[key], key, reference_record.get(key))
+            )
+    if mismatches:
+        reason = (
+            REASON_REPORT_COMMIT_MISMATCH
+            if bound["commit"] != reference_record.get("commit")
+            else REASON_REPORT_PROJECT_MISMATCH
+        )
+        raise PilotAcceptanceError(reason, "; ".join(mismatches))
+
+
 def matrix(reference_record, rows, report_data, declarations_block, *, generated_at):
-    """Aggregate resolved rows into a matrix dict with an ok verdict."""
+    """Aggregate resolved rows into a matrix dict with an ok verdict.
+
+    Refuses (`bind_report`) when the report is not bound to the reference's project and commit.
+    """
+    bind_report(reference_record, report_data)
     resolved_rows = resolve(rows, report_data, declarations_block)
     clauses = _ok_clauses(
         reference_record, resolved_rows, report_data, declarations_block
@@ -836,6 +883,7 @@ def main(argv):
         ref = reference(parsed.project, parsed.commit, dirty=dirty_value)
         report_data = _load_report(parsed.report_path)
         _validate_report_schema(report_data)
+        bind_report(ref, report_data)
         declarations_block = _coerce_declarations_block(report_data)
         rows = framework_rows(report_data, declarations_block)
         matrix_data = matrix(
@@ -847,6 +895,8 @@ def main(argv):
         )
     except PilotAcceptanceError as exc:
         sys.stderr.write("%s\n" % exc.reason)
+        if exc.detail:
+            sys.stderr.write("%s\n" % exc.detail)
         return 2
 
     if parsed.format == "markdown":

@@ -27,9 +27,14 @@ def _reference(**overrides):
     return base
 
 
+def _bound(project="example", commit=_VALID_SHA1):
+    return {"project": project, "commit": commit}
+
+
 def _report_data(**overrides):
     base = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound(),
         "ok": True,
         "unexercised": [],
         "exercises": [],
@@ -62,6 +67,7 @@ def _declarations_block(**overrides):
 def _empty_report():
     return {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound(),
         "ok": True,
         "unexercised": [],
         "warnings": [],
@@ -514,6 +520,100 @@ def test_matrix_ok_true_when_all_clauses_hold():
     assert data["okClauses"]["declarations_ok"] is True
 
 
+# --- report binding -----------------------------------------------------------
+
+_OTHER_SHA1 = "c" * 40
+
+
+def test_matrix_refuses_report_from_another_commit():
+    report = _report_data(reference=_bound(commit=_OTHER_SHA1))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert _OTHER_SHA1 in exc.value.detail
+    assert _VALID_SHA1 in exc.value.detail
+
+
+def test_matrix_refuses_report_from_another_project():
+    report = _report_data(reference=_bound(project="other-project"))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_PROJECT_MISMATCH
+    assert "other-project" in exc.value.detail
+    assert "example" in exc.value.detail
+
+
+def test_matrix_refuses_report_differing_in_both_names_both():
+    report = _report_data(reference=_bound(project="other-project", commit=_OTHER_SHA1))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.bind_report(_reference(), report)
+    assert exc.value.reason == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert _OTHER_SHA1 in exc.value.detail
+    assert "other-project" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [
+        None,
+        "example",
+        {},
+        {"project": "example"},
+        {"commit": _VALID_SHA1},
+        {"project": "", "commit": _VALID_SHA1},
+        {"project": "example", "commit": None},
+    ],
+)
+def test_matrix_refuses_unbound_report(bound):
+    report = _report_data()
+    if bound is None:
+        del report["reference"]
+    else:
+        report["reference"] = bound
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_UNBOUND
+
+
+def test_matrix_matching_report_still_backs_exercised_row():
+    rows = [
+        pa.row(
+            area="a",
+            claim="c",
+            status=pa.STATUS_EXERCISED,
+            evidence={"exercise": "reclaim-sweep", "surface": "pilot_reclaim.sweep"},
+        )
+    ]
+    report = _report_data(exercises=[_exercise("reclaim-sweep", ["pilot_reclaim.sweep"])])
+    data = pa.matrix(
+        _reference(),
+        rows,
+        report,
+        _declarations_block(),
+        generated_at=_GENERATED_AT,
+    )
+    assert data["rows"][0]["status"] == pa.STATUS_EXERCISED
+    assert data["ok"] is True
+
+
 # --- ownership two-row rule ---------------------------------------------------
 
 def _passing_ownership_report():
@@ -674,6 +774,7 @@ def test_coerce_declarations_malformed_envelope_refuses():
 def test_cli_matrix_with_malformed_declarations_report():
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -694,6 +795,7 @@ def test_cli_matrix_with_malformed_declarations_report():
 def test_cli_matrix_with_null_declarations_report():
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -845,6 +947,7 @@ def _cli_argv(report_path, **extra):
 def _minimal_passing_report():
     return {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": True,
         "unexercised": [],
         "exercises": [
@@ -869,6 +972,7 @@ def test_cli_derives_dirty_from_git_status(tmp_path):
     (tmp_path / "dirty-marker.txt").write_text("dirty", encoding="utf-8")
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -945,6 +1049,35 @@ def test_cli_exit_2_on_refusal():
     assert proc.returncode == 2
     assert pa.REASON_REFERENCE_COMMIT_INVALID in proc.stderr
     assert proc.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "bound, reason, named",
+    [
+        ({"project": "demo", "commit": "c" * 40}, pa.REASON_REPORT_COMMIT_MISMATCH, "c" * 40),
+        ({"project": "elsewhere", "commit": _VALID_SHA1}, pa.REASON_REPORT_PROJECT_MISMATCH, "elsewhere"),
+        (None, pa.REASON_REPORT_UNBOUND, "project or commit"),
+    ],
+)
+def test_cli_refuses_report_not_bound_to_reference(bound, reason, named):
+    report = _minimal_passing_report()
+    if bound is None:
+        del report["reference"]
+    else:
+        report["reference"] = bound
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = _write_report(tmpdir, report)
+        proc = subprocess.run(
+            _cli_argv(path),
+            capture_output=True,
+            text=True,
+            cwd=_LIB,
+        )
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    lines = proc.stderr.splitlines()
+    assert lines[0] == reason
+    assert named in proc.stderr
 
 
 def test_cli_markdown_format_on_stdout():

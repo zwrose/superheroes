@@ -3477,6 +3477,9 @@ directory**; pass `--dirty` or `--clean` to override explicitly.
 | `acceptance-evidence-surface-unbound` | downgrade: passing record's `surfaces` does not contain the cited surface |
 | `acceptance-evidence-declaration-absent` | downgrade: no declaration row matches the cited pointer |
 | `acceptance-evidence-declaration-not-attested` | downgrade: declaration row exists but is not `attested` |
+| `acceptance-report-unbound` | the report's top-level `reference` does not name both a `project` and a `commit` |
+| `acceptance-report-project-mismatch` | the report's `reference.project` differs from the matrix reference's project (stderr names both) |
+| `acceptance-report-commit-mismatch` | the report's `reference.commit` differs from the matrix reference's commit (stderr names every differing field) |
 | `acceptance-cli-report-path-invalid` | `--report-path` missing or empty |
 | `acceptance-cli-report-invalid` | report file unreadable, not a JSON object, or wrong `schemaVersion` |
 | `acceptance-cli-declarations-invalid` | `declarations` is present but not a JSON object |
