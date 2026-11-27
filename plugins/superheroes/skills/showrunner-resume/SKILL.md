@@ -116,7 +116,7 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 **Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
-**Check in, then arm with the check-in ceiling.** While any lane is live, send the owner the first check-in note in the shape `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Owner check-in while lanes run gives, before you arm; every watch this step arms carries that section's ceiling, in place of `wave-watch.md`'s example values. When no watch with the ceiling is armed, line 3 of the report carries that section's not-held report.
+**Check in, then arm with the check-in ceiling.** As soon as Step 3 reads a live lane, send the owner the first check-in note in the shape `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Owner check-in while lanes run gives, with the facts read so far, whether or not any batch is armed here; every watch this step arms carries that section's ceiling, in place of `wave-watch.md`'s example values. When no watch with the ceiling is armed, line 3 of the report carries that section's not-held report.
 
 **Re-check the waits before you arm.** An app exit or restart since the last seat armed its watchers kills every one of them silently, with no marker. Re-list the waits the session ledger records (`waiting on X; on X do Y`) and re-check each against the world directly; a wait whose X already happened is acted on now, not left to the new watcher (`wave-watch.md` § The boundary the owner accepted).
 
