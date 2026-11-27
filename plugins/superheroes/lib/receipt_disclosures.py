@@ -414,6 +414,76 @@ def auditor_constraints(state):
     return accumulated_maker_families(state), pinned_auditor_vendors(seat_map)
 
 
+CAUSE_FIXER_FAMILY_UNKNOWN = "fixer-family-unknown"
+CAUSE_RUNNER_CHANNEL_ONLY = "runner-channel-only"
+CAUSE_PINNED_ROSTER_EXCLUDES = "pinned-roster-excludes"
+CAUSE_NO_INDEPENDENT_VENDOR = "no-independent-vendor"
+# The one home of the audit-unseatable cause tokens: the classifier, its sentences and the tests read these.
+AUDIT_UNSEATABLE_CAUSES = (CAUSE_FIXER_FAMILY_UNKNOWN, CAUSE_RUNNER_CHANNEL_ONLY, CAUSE_PINNED_ROSTER_EXCLUDES,
+                           CAUSE_NO_INDEPENDENT_VENDOR)
+
+
+def audit_unseatable_cause(state, config=None):
+    """Why no fix auditor could be seated: a dict naming the cause and the list the pool read.
+
+    Reads the same inputs `independent_auditor` reads (the config's vendor list and fixer, the
+    makers and pinned vendors off the seat-map receipts, the runner-only channel flag); it holds no
+    selection rule of its own. Every cause's sentence names the vendor list and where it came from.
+    Never raises: a malformed state or config still yields a dict."""
+    try:
+        state = state if isinstance(state, dict) else {}
+        cfg = config if isinstance(config, dict) else state.get("config") or {}
+        cfg = cfg if isinstance(cfg, dict) else {}
+        fixer = cfg.get("fixerVendor")
+        fixer_fam = model_registry.family_for("implementer", fixer)
+        makers, pinned = auditor_constraints(state)
+        makers = frozenset(makers or ())
+        runner_only = bool(state.get("_advanceUsed"))
+        vendors = live_vendors(cfg)
+        host_vendor = None
+        unpinned_vendor = None
+        if fixer_fam is None:
+            cause = CAUSE_FIXER_FAMILY_UNKNOWN
+        else:
+            host_vendor = independent_auditor(cfg, fixer, runner_only=False, maker_families=makers,
+                                              pinned_vendors=pinned)[0] if runner_only else None
+            # axis: a live independent vendor that only the pinned roster keeps out is named as excluded by the pin — see break-it test test_pinned_auditor_cause_2667
+            unpinned_vendor = independent_auditor(cfg, fixer, runner_only=runner_only, maker_families=makers,
+                                                  pinned_vendors=None)[0] if pinned else None
+            cause = (CAUSE_RUNNER_CHANNEL_ONLY if host_vendor is not None
+                     else CAUSE_PINNED_ROSTER_EXCLUDES if unpinned_vendor is not None
+                     else CAUSE_NO_INDEPENDENT_VENDOR)
+        # axis: a vendor list whose source the session never recorded is named as unrecorded, never as the default
+        source = cfg.get("vendorsSource") if isinstance(cfg.get("vendorsSource"), str) and cfg.get("vendorsSource") else None
+        pool = ("the pool read the session's vendor list (config.vendors, %s) = [%s]"
+                % ("from " + source if source else "source not recorded", ", ".join(vendors)))
+        pin_text = (", and the pinned vendors (%s)" % ", ".join(sorted(pinned))) if pinned else ""
+        if cause == CAUSE_FIXER_FAMILY_UNKNOWN:
+            detail = ("the fixer's family is unknown (fixerVendor %s), so no auditor can be judged "
+                      "independent; %s%s" % (fixer, pool, pin_text))
+        elif cause == CAUSE_RUNNER_CHANNEL_ONLY:
+            detail = ("an independent vendor (%s) is live only as a host seat, and this durable-record "
+                      "session seats fix auditors only through the runner (codex or cursor); %s%s"
+                      % (host_vendor, pool, pin_text))
+        elif cause == CAUSE_PINNED_ROSTER_EXCLUDES:
+            detail = ("an independent vendor (%s) is live but excluded by the pinned roster, which lets only "
+                      "the pinned vendors (%s) audit; %s" % (unpinned_vendor, ", ".join(sorted(pinned)), pool))
+        else:
+            detail = ("no independent vendor available: %s%s; none is outside the fixer's family (%s) "
+                      "and the makers' families ([%s])"
+                      % (pool, pin_text, fixer_fam, ", ".join(sorted(makers))))
+        return {"cause": cause, "vendorList": "config.vendors", "vendors": vendors,
+                "vendorsSource": source, "fixerVendor": fixer, "fixerFamily": fixer_fam,
+                "makerFamilies": sorted(makers), "pinnedVendors": sorted(pinned) if pinned else None,
+                "runnerOnly": runner_only, "detail": detail}
+    except Exception as exc:  # never raises: a malformed state still names a cause
+        return {"cause": CAUSE_NO_INDEPENDENT_VENDOR, "vendorList": "config.vendors", "vendors": [],
+                "vendorsSource": None, "fixerVendor": None, "fixerFamily": None,
+                "makerFamilies": [], "pinnedVendors": None, "runnerOnly": False,
+                "detail": "no independent vendor available: the vendor list could not be read (%s)"
+                          % type(exc).__name__}
+
+
 def independent_auditor_available(config, maker_families=frozenset(), pinned_vendors=None):
     fixer = config.get("fixerVendor") if isinstance(config, dict) else None
     vendor, fam = independent_auditor(config, fixer, maker_families=maker_families,
