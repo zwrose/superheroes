@@ -135,12 +135,16 @@ def test_a_default_base_pr_linked_by_hand_with_no_timeline_mention_is_linked(tmp
 
 
 def test_a_stack_layer_closing_the_blocker_with_no_timeline_mention_is_not_linked(tmp_path, capsys):
-    # axis: a stack layer is linked only by the timeline cross-reference, never by a closing reference alone
-    fake = _world(prs=[_pr_row(101, closes=12)], responses={TIMELINE: (0, json.dumps([]))})
+    # axis: a stack layer is linked only by the timeline cross-reference, never by a closing reference alone, even
+    # when the blocker's closing references (read for a default-base pull request) name the stack layer
+    fake = _world(
+        prs=[_pr_row(101, closes=12), _pr_row(102, closes=12, base="main", links=[])],
+        responses={TIMELINE: (0, json.dumps([])), ("graphql", 12): _closing_answer([101])},
+    )
     out = _build_ready(tmp_path, capsys, fake, members=_Members({101: _in_stack(900, 1)}))
     assert out["reason"] == ic.REFUSAL_BLOCKER_OPEN
     assert out["blockers"]["held"][0]["why"] == NO_LINK_WHY
-    assert _graphql_calls(fake) == []
+    assert [call[8] for call in _graphql_calls(fake)] == ["number=12"]
 
 
 def test_a_card_never_clears_a_blocker_under_a_feature_in_another_repository(tmp_path, capsys):

@@ -2631,7 +2631,7 @@ def _apply_dependency_gate(
         return {"ok": False, "reason": "dependency-read-unavailable"}
     pr_lifecycle = pr_state["state"]
     # axis: merged dependency is not gated — trunk base is what merged deps are for
-    if pr_lifecycle == "MERGED":
+    if pr_lifecycle == "MERGED" and stack_check.same_commit((accepted or pr_state).get("head", pr_state["headRefOid"]), pr_state["headRefOid"]):
         return {
             "ok": True,
             "dependencyGate": {"applied": False, "reason": "dependency-not-open"},
@@ -4548,9 +4548,8 @@ def _check_premises(
     stack_gate = None
     if "stack" in stamped_premise:
         rows = _preflight_accepted(preflight_result["checks"], None)
-        # axis: on a stack premise every lower layer preflight accepted must still qualify at its accepted head — see bite-proof record wo_2652_stack_layer_blockers
+        # axis: on a stack premise every lower layer preflight accepted must still qualify at its accepted head, be in the launch base's history and name the launch's own stack — see bite-proof record wo_2652_stack_layer_blockers
         for row in [{}] if rows is False else rows:
-            # axis: an accepted lower layer's vetted head must be in the launch base's history, and a stacked row must name the launch's own stack, or it lapses — see bite-proof record wo_2652_stack_layer_blockers
             held = rows is not False and _git_scrubbed(repo_root, "merge-base", "--is-ancestor", row["head"], resolved_base,
                                                        env=env, timeout=_WORKTREE_GIT_TIMEOUT)
             recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (

@@ -189,8 +189,12 @@ def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_ga
     head = _head_sha(repo)
     monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
     body = _parked_vet_body(head) if withdrawn else _card_vet_body(head, parent=FEATURE)
+    # axis: the layer under test is the second accepted row, behind an intact first one, so every row is rechecked
+    intact = {"pr": 700, "form": "stack-card", "head": head, "stack": 1, "feature": FEATURE}
     row = {"pr": 701, "form": "stack-card", "head": head, "stack": 1, "feature": FEATURE}
-    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([intact, row])}})
+    bodies = {700: _card_vet_body(head, parent=FEATURE), 701: body}
+    positions = {700: 1, 701: position}
 
     def pr_lookup(*args, **kwargs):
         raise _StackGateReached()
@@ -198,8 +202,9 @@ def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_ga
     def launch():
         return L.launch_build(
             repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
-            pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, body, pr_number=pr), None),
-            membership_reader=lambda **kwargs: _membership_ok(position, head, pr_number=701) | {"stack": {"number": 1}},
+            pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, bodies[pr], pr_number=pr), None),
+            membership_reader=lambda **kwargs: _membership_ok(
+                positions[kwargs["pr"]], head, pr_number=kwargs["pr"]) | {"stack": {"number": 1}},
             pr_lookup=pr_lookup,
         )
 
