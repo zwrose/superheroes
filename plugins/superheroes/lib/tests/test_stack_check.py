@@ -591,6 +591,35 @@ def test_e28_stack_entry_null():
     _assert_refusal(result, sc.REASON_NOT_LINKED)
 
 
+def test_e28_stack_entry_key_missing_is_unreadable_not_not_linked():
+    page = {
+        "number": PR,
+        "baseRefName": STACK_BASE,
+        "headRefName": "branch-3",
+        "headRefOid": "oid3",
+    }
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "stackEntry is missing" in result["detail"]
+
+
+def test_e28_stack_entry_key_deleted_from_a_stacked_page_is_unreadable():
+    page = _pull_request(nodes=[_member(1)], stack_size=1)
+    del page["stackEntry"]
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
+def test_e28_stack_entry_explicit_none_still_reads_not_linked():
+    page = _pull_request(nodes=[_member(1)], stack_size=1)
+    page["stackEntry"] = None
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_NOT_LINKED)
+
+
 # --- register E29-E31: order-mismatch -------------------------------------------
 
 

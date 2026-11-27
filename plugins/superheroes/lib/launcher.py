@@ -42,6 +42,7 @@ import engine_pref  # noqa: E402
 import git_origin  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import host_model  # noqa: E402
+import issue_contract  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import launch_place  # noqa: E402
@@ -982,7 +983,10 @@ def walk_preflight(
             "class": check_class,
             "state": state,
             "reason": reason,
-            "evidence": entry.get("evidence", "") if isinstance(entry.get("evidence"), str) else "",
+            # base-state evidence given as JSON itself (the accepted-rows array, or anything else) is kept as its JSON
+            # text, never dropped, so the launch's acceptance reader sees and judges it
+            "evidence": entry["evidence"] if isinstance(entry.get("evidence"), str) else (
+                json.dumps(entry["evidence"]) if check_id == "base-state" and "evidence" in entry else ""),
         }
         if state == "fail":
             out_checks.append(entry_out)
@@ -2537,6 +2541,38 @@ def _apply_stack_gate(
     return {"ok": True, "stackGate": stack_gate}
 
 
+def _unique_keys(pairs):
+    """A decoded JSON object that refuses a repeated key, so a second value never silently replaces the first."""
+    keys = [key for key, _ in pairs]
+    # axis: base-state evidence with a repeated key in any object is unreadable — see bite-proof record wo_2652_stack_layer_blockers
+    if len(set(keys)) != len(keys):
+        raise ValueError("repeated key in base-state evidence")
+    return dict(pairs)
+
+
+def _preflight_accepted(preflight_checks, dependency):
+    """The row preflight's base-state check accepted `dependency` in, read from its evidence (check-blockers'
+    `blockers.accepted` array as JSON); None when the evidence is empty or names no such row; False when the
+    evidence is not that array, so an acceptance recorded any other way is never silently ignored. With no
+    `dependency`, every accepted row (an empty list when the evidence is empty)."""
+    entry = next((c for c in preflight_checks or () if c.get("id") == "base-state"), None)
+    if entry is None or not entry.get("evidence"):
+        return [] if dependency is None else None
+    try:
+        rows = json.loads(entry["evidence"], object_pairs_hook=_unique_keys)
+    except ValueError:
+        rows = None
+    # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted" — see bite-proof record wo_2652_stack_layer_blockers
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) and ll.is_positive_premise_int(row.get("pr")) and isinstance(row.get("form"), str)
+        and stack_check._validate_head_sha(row.get("head")) is None
+        and (row.get("feature") is None or ll.is_positive_premise_int(row.get("feature")))
+        for row in rows
+    ):
+        return False
+    return rows if dependency is None else next((row for row in rows if row.get("pr") == dependency), None)
+
+
 def _apply_dependency_gate(
     stamped_premise,
     resolved_base_commit,
@@ -2544,8 +2580,14 @@ def _apply_dependency_gate(
     env,
     pr_vet_reader,
     deadline=None,
+    accepted=None,
+    membership_reader=None,
+    below=None,
 ):
-    """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing."""
+    """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing.
+
+    `accepted` is the row preflight's base-state check accepted the dependency in, or None when it recorded
+    none; an accepted dependency must still qualify at launch, a card one for the same feature."""
     dependency = stamped_premise["dependency"]
     if deadline is not None and time.monotonic() >= deadline:
         return {"ok": False, "reason": "dependency-read-unavailable"}
@@ -2589,7 +2631,7 @@ def _apply_dependency_gate(
         return {"ok": False, "reason": "dependency-read-unavailable"}
     pr_lifecycle = pr_state["state"]
     # axis: merged dependency is not gated — trunk base is what merged deps are for
-    if pr_lifecycle == "MERGED":
+    if pr_lifecycle == "MERGED" and stack_check.same_commit((accepted or pr_state).get("head", pr_state["headRefOid"]), pr_state["headRefOid"]):
         return {
             "ok": True,
             "dependencyGate": {"applied": False, "reason": "dependency-not-open"},
@@ -2608,8 +2650,20 @@ def _apply_dependency_gate(
             "reason": "dependency-read-unavailable",
             "detail": pr_lifecycle,
         }
-    # axis: draft dependency is work in flight — verdict is not consulted
+    head_sha = pr_state["headRefOid"]
+    mark = issue_contract.stack_card_mark(pr_state["body"])
+    # axis: a card mark pinned to an older head is a stack layer that moved after it was accepted; it refuses, never passes ungated
+    if mark is not None and not stack_check.same_commit(mark[0], head_sha):
+        lapsed = {"ok": False, "reason": "dependency-card-stale", "detail": head_sha}
+    else:
+        # a dependency preflight accepted that no longer qualifies at its current head refuses, never passes ungated
+        lapsed = None if accepted is None else {
+            "ok": False, "reason": "dependency-acceptance-lapsed", "detail": head_sha,
+        }
+    # axis: draft dependency is work in flight — verdict is not consulted, unless preflight accepted it — see bite-proof record wo_2652_stack_layer_blockers
     if pr_state.get("isDraft"):
+        if accepted is not None:
+            return lapsed
         return {
             "ok": True,
             "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
@@ -2623,15 +2677,39 @@ def _apply_dependency_gate(
         if detail:
             out["detail"] = detail
         return out
-    # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
+    form = "ready"
     if verdict != stack_check.VERDICT_READY:
-        return {
-            "ok": True,
-            "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
-        }
-    head_sha = pr_state["headRefOid"]
-    # axis: READY dependency requires base exactly equal to dependency head
+        # a dependency held only for a card on its stack's sheet, at its current head, is gated like a READY one
+        card_parent = issue_contract.stack_card_parent(pr_state["body"], head_sha)
+        # axis: an accepted dependency's card at launch must name the feature preflight accepted it for — see bite-proof record wo_2652_stack_layer_blockers
+        if accepted is not None and card_parent is not None and card_parent != accepted.get("feature"):
+            return lapsed
+        if card_parent is None:
+            # axis: a stale card, or a withdrawn card or READY line left at an older head after acceptance, refuses — see bite-proof record wo_2652_stack_layer_blockers
+            if lapsed is not None:
+                return lapsed
+            # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
+            return {
+                "ok": True,
+                "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
+            }
+        form = "stack-card"
+    # axis: READY or card-marked dependency requires base exactly equal to dependency head — see bite-proof record wo_2652_stack_layer_blockers
     if stack_check.same_commit(resolved_base_commit, head_sha):
+        if accepted is not None:
+            membership = (membership_reader or stack_check.read_membership)(
+                pr=dependency, repo=repo_name, deadline=read_deadline)
+            linked = membership.get("ok") is True
+            if not linked and membership.get("reason") != stack_check.REASON_NOT_LINKED:
+                return {"ok": False, "reason": "dependency-read-unavailable", "detail": membership.get("reason")}
+            queried = membership.get("queried") or {}
+            # axis: an accepted dependency that joined, left or changed stack after preflight, moved off the vetted head,
+            # or no longer sits below the launch's layer, lapses, never passes on its head alone — see bite-proof record wo_2652_stack_layer_blockers
+            if (membership["stack"]["number"] if linked else None) != accepted.get("stack") \
+                    or not stack_check.same_commit(queried.get("headRefOid"), head_sha) \
+                    or not stack_check.same_commit(accepted.get("head"), head_sha) \
+                    or (below is not None and not (linked and queried.get("position", below) < below)):
+                return lapsed
         return {
             "ok": True,
             "dependencyGate": {
@@ -2639,6 +2717,7 @@ def _apply_dependency_gate(
                 "dependency": dependency,
                 "dependencyHead": head_sha,
                 "verdict": verdict,
+                "form": form,
             },
         }
     return {
@@ -4450,13 +4529,12 @@ def _check_premises(
     resolved_base = premise_result["resolvedBaseCommit"]
     dependency_gate = None
     if "dependency" in stamped_premise:
-        gate_result = _apply_dependency_gate(
-            stamped_premise,
-            resolved_base,
-            repo_root,
-            env,
-            pr_vet_reader,
-            deadline=deadline,
+        accepted = _preflight_accepted(preflight_result["checks"], stamped_premise["dependency"])
+        gate_result = {"ok": False, "reason": "dependency-acceptance-unreadable"} if accepted is False else (
+            _apply_dependency_gate(
+                stamped_premise, resolved_base, repo_root, env, pr_vet_reader, deadline=deadline, accepted=accepted,
+                membership_reader=membership_reader,
+            )
         )
         if not gate_result["ok"]:
             extra = {}
@@ -4469,6 +4547,22 @@ def _check_premises(
         dependency_gate = gate_result["dependencyGate"]
     stack_gate = None
     if "stack" in stamped_premise:
+        rows = _preflight_accepted(preflight_result["checks"], None)
+        # axis: on a stack premise every lower layer preflight accepted must still qualify at its accepted head, be in the launch base's history and name the launch's own stack — see bite-proof record wo_2652_stack_layer_blockers
+        for row in [{}] if rows is False else rows:
+            held = rows is not False and _git_scrubbed(repo_root, "merge-base", "--is-ancestor", row["head"], resolved_base,
+                                                       env=env, timeout=_WORKTREE_GIT_TIMEOUT)
+            recheck = {"ok": False, "reason": "dependency-acceptance-unreadable"} if rows is False else (
+                {"ok": False, "reason": "dependency-acceptance-lapsed" if row.get("stack") != stamped_premise["stack"] or (held is not None and held.returncode == 1) else "dependency-read-unavailable", "detail": row["head"]}
+                if held is None or held.returncode != 0 or row.get("stack") != stamped_premise["stack"] else
+                _apply_dependency_gate({"dependency": row["pr"]}, row["head"], repo_root, env, pr_vet_reader,
+                                       deadline=deadline, accepted=row, membership_reader=membership_reader,
+                                       below=stamped_premise["layerPosition"] if row.get("stack") is not None else None))
+            if not recheck["ok"]:
+                return {"refusal": _refuse_unreserved(
+                    ctx, recheck["reason"], "dependency", stamped_premise, preflight_result,
+                    **({"detail": recheck["detail"]} if "detail" in recheck else {}),
+                )}
         gate_result = _apply_stack_gate(
             stamped_premise,
             resolved_base,

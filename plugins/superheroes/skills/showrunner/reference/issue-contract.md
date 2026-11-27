@@ -111,8 +111,8 @@ token below. Micro work never reaches this check.
 | `anchor-kind-unrecognized` | The Anchor header declares exactly one token that is not an anchor kind |
 | `anchor-kind-multiple` | The Anchor header declares two or more kind tokens |
 | `body-unreadable` | The body file could not be read (path typo, permission error, or invalid encoding) |
-| `blocker-open` | The issue has an open native blocker (a `blocked_by` dependency edge); the result names each one |
-| `blockers-unreadable` | The native blocker edges could not be read in full, or `--issue`/`--repo` was malformed or given alone; never read as no blockers |
+| `blocker-open` | The issue has an open native blocker that is not an accepted lower stack layer ([routing.md § Native dependency edges](routing.md#native-dependency-edges)); the result names each one in `held` |
+| `blockers-unreadable` | The native blocker edges could not be read in full, a lower layer's feature issue, pull request, vet or stack membership could not be read, `--issue`/`--repo` was malformed or given alone, or `--premise` on `check-blockers` was malformed; never read as no blockers |
 
 Header-form refusals are reported before emptiness — when both a malformed header and an empty
 Anchor hold, the reported token is the header-form refusal.
@@ -136,8 +136,10 @@ Marking an existing issue build-ready always passes `--issue` and `--repo`, so t
 issue's native `blocked_by` edges (the dependency edges GitHub records, where the owner records
 holds) rather than the body's prose about edges. A result whose `blockers.checked` is false is a
 body-only result and does not clear a marking; the body-only form (no `--issue`, no `--repo`) is for
-a body whose issue does not exist yet (the filing dry-run). `check-blockers --issue <n> --repo
-<owner/name>` is the edge read alone.
+a body whose issue does not exist yet (the filing dry-run). An open blocker refuses unless it is an
+accepted lower stack layer ([routing.md § Native dependency edges](routing.md#native-dependency-edges)).
+`check-blockers --issue <n> --repo <owner/name>` is the edge read alone; at a launch it also takes
+`--premise <file>`, the launch's own premise file.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.

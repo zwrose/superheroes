@@ -1,0 +1,245 @@
+"""A dependency preflight accepted must still qualify at launch; without a recorded acceptance the old gate stands."""
+import json
+import subprocess
+
+import pytest
+
+from test_issue_contract import FEATURE, NOT_LINKED, _in_stack
+from test_launcher import (
+    L,
+    _all_checks,
+    _card_vet_body,
+    _dependency_premise,
+    _head_sha,
+    _init_repo,
+    _ledger_env,
+    _membership_ok,
+    _parked_vet_body,
+    _pr_vet_state_ok,
+    _ready_vet_body,
+    _stack_premise,
+)
+
+
+def _gate(tmp_path, monkeypatch, body_at, accepted, base=None):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    if isinstance(accepted, dict) and accepted.get("head") == "h":
+        accepted = dict(accepted, head=head)  # "h" stands for the head preflight accepted, the current one
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    result = L._apply_dependency_gate(
+        _dependency_premise(repo, 701, issue=7), base or head, repo, {},
+        lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, body_at(head), pr_number=pr), None),
+        accepted=accepted, membership_reader=lambda **kwargs: dict(NOT_LINKED, queried={"headRefOid": head}),
+    )
+    return result, head
+
+
+def test_an_accepted_ready_dependency_whose_ready_line_stayed_behind_lapses(tmp_path, monkeypatch):
+    # axis: an accepted READY dependency that advanced past its READY line refuses at launch
+    stale = lambda head: _ready_vet_body(("1" if head[0] == "0" else "0") + head[1:])
+    result, head = _gate(tmp_path, monkeypatch, stale, {"pr": 701, "form": "ready", "head": "h", "feature": FEATURE})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_without_a_recorded_acceptance_the_ungated_not_ready_pass_stands(tmp_path, monkeypatch):
+    stale = lambda head: _ready_vet_body(("1" if head[0] == "0" else "0") + head[1:])
+    result, _ = _gate(tmp_path, monkeypatch, stale, None)
+    assert result["dependencyGate"] == {"applied": False, "reason": "dependency-not-ready"}
+
+
+@pytest.mark.parametrize("card_feature, expected_ok", [(FEATURE, True), (77, False)])
+def test_an_accepted_card_dependency_must_name_the_feature_it_was_accepted_for(
+    tmp_path, monkeypatch, card_feature, expected_ok,
+):
+    # axis: a current-head card rewritten to name another feature lapses the acceptance
+    body = lambda head: _card_vet_body(head, parent=card_feature)
+    result, head = _gate(tmp_path, monkeypatch, body, {"pr": 701, "form": "stack-card", "head": "h", "feature": FEATURE})
+    assert result["ok"] is expected_ok
+    if not expected_ok:
+        assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_an_accepted_dependency_that_moved_after_preflight_lapses_even_when_re_vetted(tmp_path, monkeypatch):
+    # axis: a READY dependency re-vetted at a new head after preflight accepted its earlier head lapses; the base
+    # equals the new head, so only the accepted head tells the two apart
+    ready = lambda head: _ready_vet_body(head)
+    result, head = _gate(tmp_path, monkeypatch, ready, {"pr": 701, "form": "ready", "head": "f" * 40, "feature": FEATURE})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_a_stack_premise_lapses_an_accepted_layer_missing_from_the_launch_base(tmp_path, monkeypatch):
+    # axis: an accepted lower layer whose vetted head is not in the launch base's history lapses before the stack gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    # a real commit the launch base's history does not contain (a root commit made beside it)
+    elsewhere = subprocess.run(["git", "-C", str(repo), "commit-tree", "HEAD^{tree}", "-m", "divergent"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    row = {"pr": 701, "form": "ready", "head": elsewhere, "stack": 1, "feature": FEATURE}
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
+
+    def pr_lookup(*args, **kwargs):
+        raise _StackGateReached()
+
+    result = L.launch_build(
+        repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
+        pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(elsewhere, _ready_vet_body(elsewhere), pr_number=pr), None),
+        membership_reader=lambda **kwargs: _membership_ok(1, elsewhere, pr_number=701) | {"stack": {"number": 1}},
+        pr_lookup=pr_lookup,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-acceptance-lapsed"
+
+
+def test_a_stack_premise_lapses_an_unstacked_accepted_row(tmp_path, monkeypatch):
+    # axis: on a stack premise an accepted row recorded outside any stack (a dependency-only preflight reused) lapses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    row = {"pr": 701, "form": "ready", "head": head, "stack": None, "feature": FEATURE}
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([row])}})
+
+    def pr_lookup(*args, **kwargs):
+        raise _StackGateReached()
+
+    result = L.launch_build(
+        repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
+        pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, _ready_vet_body(head), pr_number=pr), None),
+        membership_reader=lambda **kwargs: dict(NOT_LINKED, queried={"headRefOid": head}),
+        pr_lookup=pr_lookup,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-acceptance-lapsed"
+
+
+def test_a_card_at_launch_lapses_an_acceptance_recorded_with_no_feature(tmp_path, monkeypatch):
+    # axis: a READY dependency accepted under a feature in another repository (recorded feature None) that falls back
+    # to a card at the same head lapses
+    body = lambda head: _card_vet_body(head, parent=FEATURE)
+    result, head = _gate(tmp_path, monkeypatch, body, {"pr": 701, "form": "ready", "head": "h", "feature": None})
+    assert result == {"ok": False, "reason": "dependency-acceptance-lapsed", "detail": head}
+
+
+def test_the_accepted_row_is_read_only_from_base_state_rows_naming_the_dependency():
+    rows = [{"pr": 702, "form": "ready", "head": "a" * 40}, {"pr": 701, "form": "stack-card", "head": "b" * 40}]
+    checks = lambda evidence, check="base-state": [{"id": check, "evidence": evidence}]
+    assert L._preflight_accepted(checks(json.dumps(rows)), 701) == rows[1]
+    assert L._preflight_accepted(checks(json.dumps(rows)), 703) is None
+    assert L._preflight_accepted(checks("[]"), 701) is None
+    assert L._preflight_accepted(checks(""), 701) is None
+    assert L._preflight_accepted(checks("Accepted PR #701 at abc", "engine-auth"), 701) is None
+    assert L._preflight_accepted(None, 701) is None
+    # axis: base-state evidence that is not the accepted-rows array is unreadable, never "nothing accepted"
+    for unreadable in ("Accepted PR #701 at abc", "{}", "[1]", "not json", json.dumps(rows[1]),
+                       json.dumps([{"pr": "701", "form": "ready", "head": "h"}]), json.dumps([{"pr": 701}]),
+                       json.dumps([{"pr": 701, "form": "ready"}]), json.dumps([{"pr": 701, "form": "ready", "head": 5}]),
+                       # axis: a head that is not a 40-character hex commit id (a NUL included) is unreadable, never passed to Git
+                       json.dumps([{"pr": 701, "form": "ready", "head": "x" * 40}]),
+                       json.dumps([{"pr": 701, "form": "ready", "head": "a" * 39 + "\u0000"}])):
+        assert L._preflight_accepted(checks(unreadable), 701) is False, unreadable
+    # axis: with no dependency named, every accepted row is returned (an empty list for empty evidence)
+    assert L._preflight_accepted(checks(json.dumps(rows)), None) == rows
+    assert L._preflight_accepted(checks(""), None) == []
+    assert L._preflight_accepted(checks("{}"), None) is False
+
+
+@pytest.mark.parametrize("case, expected_ok", [
+    ("not-linked", True), ("joined", False), ("unreadable", False), ("not-linked-moved", False),
+])
+def test_an_accepted_unstacked_dependency_is_reread_for_stack_membership(tmp_path, monkeypatch, case, expected_ok):
+    # axis: an accepted dependency that joined a stack, whose membership cannot be read, or whose membership was read
+    # at another head than the vetted one, refuses at launch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    joined = _in_stack(900, 1)
+    joined["queried"]["headRefOid"] = head
+    membership = {
+        "not-linked": dict(NOT_LINKED, queried={"headRefOid": head}),
+        "joined": joined,
+        "unreadable": {"ok": False, "reason": "stack-unreadable", "detail": "x"},
+        "not-linked-moved": dict(NOT_LINKED, queried={"headRefOid": "f" * 40}),
+    }[case]
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    reads = []
+    result = L._apply_dependency_gate(
+        _dependency_premise(repo, 701, issue=7), head, repo, {},
+        lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, _ready_vet_body(head), pr_number=pr), None),
+        accepted={"pr": 701, "form": "ready", "head": head, "stack": None, "feature": FEATURE},
+        membership_reader=lambda **kwargs: reads.append(kwargs["pr"]) or membership,
+    )
+    assert reads == [701]
+    assert result["ok"] is expected_ok, result
+    if not expected_ok:
+        assert result["reason"] == ("dependency-read-unavailable" if case == "unreadable" else "dependency-acceptance-lapsed")
+
+
+def test_an_unaccepted_draft_keeps_the_ungated_pass_even_with_a_stale_card(tmp_path, monkeypatch):
+    # axis: with no recorded acceptance a draft dependency stays work in flight, as before this change
+    stale_card = lambda head: _card_vet_body(("1" if head[0] == "0" else "0") + head[1:], parent=FEATURE)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    result = L._apply_dependency_gate(
+        _dependency_premise(repo, 701, issue=7), head, repo, {},
+        lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, stale_card(head), pr_number=pr, is_draft=True), None),
+    )
+    assert result == {"ok": True, "dependencyGate": {"applied": False, "reason": "dependency-not-ready"}}
+
+
+@pytest.mark.parametrize("evidence", [[{"pr": 701, "form": "ready"}], {"pr": 701, "form": "ready"}, None])
+def test_walk_preflight_keeps_base_state_json_evidence_as_its_json_text(tmp_path, evidence):
+    # axis: base-state evidence given as JSON (array or not) is kept for the acceptance reader, never dropped
+    repo = _init_repo(tmp_path / "repo")
+    out = L.walk_preflight(_all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": evidence}}), repo)
+    assert out["ok"] is True, out
+    entry = next(check for check in out["checks"] if check["id"] == "base-state")
+    assert json.loads(entry["evidence"]) == evidence
+
+
+class _StackGateReached(Exception):
+    pass
+
+
+@pytest.mark.parametrize("withdrawn, position", [(True, 1), (False, 1), (False, 2)],
+                         ids=["card-withdrawn", "card-intact", "moved-to-the-launch-layer"])
+def test_a_stack_premise_rechecks_every_accepted_lower_layer_before_the_stack_gate(
+    tmp_path, monkeypatch, withdrawn, position,
+):
+    # axis: on a stack premise an accepted lower layer whose card was withdrawn at the same head, or that no longer
+    # sits below the launch's layer, refuses; an intact one below it passes on to the stack gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    head = _head_sha(repo)
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", lambda *args, **kwargs: ("acme/widgets", None))
+    body = _parked_vet_body(head) if withdrawn else _card_vet_body(head, parent=FEATURE)
+    # axis: the layer under test is the second accepted row, behind an intact first one, so every row is rechecked
+    intact = {"pr": 700, "form": "stack-card", "head": head, "stack": 1, "feature": FEATURE}
+    row = {"pr": 701, "form": "stack-card", "head": head, "stack": 1, "feature": FEATURE}
+    checks = _all_checks(**{"base-state": {"state": "pass", "reason": "", "evidence": json.dumps([intact, row])}})
+    bodies = {700: _card_vet_body(head, parent=FEATURE), 701: body}
+    positions = {700: 1, 701: position}
+
+    def pr_lookup(*args, **kwargs):
+        raise _StackGateReached()
+
+    def launch():
+        return L.launch_build(
+            repo, 7, _stack_premise(repo, stack=1, layerPosition=2, issue=7), checks, str(tmp_path / "logs"),
+            pr_vet_reader=lambda pr, slug, **kwargs: (_pr_vet_state_ok(head, bodies[pr], pr_number=pr), None),
+            membership_reader=lambda **kwargs: _membership_ok(
+                positions[kwargs["pr"]], head, pr_number=kwargs["pr"]) | {"stack": {"number": 1}},
+            pr_lookup=pr_lookup,
+        )
+
+    if withdrawn or position >= 2:
+        result = launch()
+        assert result["ok"] is False
+        assert result["reason"] == "dependency-acceptance-lapsed"
+    else:
+        with pytest.raises(_StackGateReached):
+            launch()

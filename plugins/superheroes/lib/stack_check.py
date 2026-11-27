@@ -220,7 +220,7 @@ def _graphql_argv(owner, name, pr, first, after=None):
     return argv
 
 
-def _refusal(reason, detail, repo=None, pr=None, pages=0):
+def _refusal(reason, detail, repo=None, pr=None, pages=0, queried=None):
     return {
         "ok": False,
         "reason": reason,
@@ -228,7 +228,7 @@ def _refusal(reason, detail, repo=None, pr=None, pages=0):
         "repo": repo,
         "pr": pr,
         "stack": None,
-        "queried": None,
+        "queried": queried,
         "members": [],
         "pages": pages,
     }
@@ -489,11 +489,17 @@ def _parse_membership_page(payload, repo, pr, pages, snapshot, stack_size, colle
             "required pullRequest field is missing or of the wrong type",
             repo=repo, pr=pr, pages=pages)
 
+    # axis: stackEntry is missing altogether (an explicit null is not-linked, an absent key is unreadable) — see bite-proof record wo_2652_stack_layer_blockers
+    if "stackEntry" not in pull_request:
+        return None, _refusal(REASON_STACK_UNREADABLE,
+            "stackEntry is missing", repo=repo, pr=pr, pages=pages)
+
     stack_entry = pull_request.get("stackEntry")
     # axis: stackEntry is null
     if stack_entry is None:
-        return None, _refusal(REASON_NOT_LINKED,
-            "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+        # axis: a not-linked answer keeps the head it was read at, so a caller can tie it to its own snapshot — see bite-proof record wo_2652_stack_layer_blockers
+        return None, _refusal(REASON_NOT_LINKED, "pull request is not in a stack", repo=repo, pr=pr, pages=pages,
+            queried={"headRefOid": pr_head_oid})
 
     entry_position = stack_entry.get("position") if isinstance(stack_entry, dict) else None
     # axis: stackEntry is present but not an object, or position is missing/not an int
@@ -1247,6 +1253,15 @@ def _transport_rest(
     return payload, None
 
 
+def _left_mid_read(refusal, earlier_snapshot, repo, pr, pages):
+    """A not-linked answer after an earlier page or pass read the pull request in a stack is a moved snapshot."""
+    # axis: a pull request that leaves its stack while it is being read is an order mismatch, never a definitive absence — see bite-proof record wo_2652_stack_layer_blockers
+    if earlier_snapshot is not None and refusal.get("reason") == REASON_NOT_LINKED:
+        return _refusal(REASON_ORDER_MISMATCH, "pull request left its stack during the read", repo=repo, pr=pr,
+            pages=pages)
+    return refusal
+
+
 def _parse_rest_pull(pull, repo, pr, pages):
     """Return (snapshot, refusal) from the pull-request GET — exactly one is non-None."""
     head = pull.get("head")
@@ -1269,8 +1284,8 @@ def _parse_rest_pull(pull, repo, pr, pages):
     stack = pull.get("stack")
     # axis: REST stack key is absent or null
     if stack is None:
-        return None, _refusal(REASON_NOT_LINKED,
-            "pull request is not in a stack", repo=repo, pr=pr, pages=pages)
+        return None, _refusal(REASON_NOT_LINKED, "pull request is not in a stack", repo=repo, pr=pr, pages=pages,
+            queried={"headRefOid": head_sha})
 
     stack_number = stack.get("number") if isinstance(stack, dict) else None
     stack_position = stack.get("position") if isinstance(stack, dict) else None
@@ -1402,7 +1417,7 @@ def _read_membership_rest(
 
         snapshot, refusal = _parse_rest_pull(pull, repo, pr, pages)
         if refusal is not None:
-            return refusal
+            return _left_mid_read(refusal, prior_snapshot, repo, pr, pages)
 
         stack_payload, refusal = _transport_rest(
             _rest_stack_argv(owner, name, snapshot["stack_number"]), timeout, run, repo, pr, pages,
@@ -1538,7 +1553,7 @@ def _read_membership_graphql(
             if page_refusal is not None and page_result is not None:
                 raise AssertionError("_parse_membership_page returned both page and refusal")
             if page_refusal is not None:
-                return page_refusal
+                return _left_mid_read(page_refusal, snapshot or prior_snapshot, repo, pr, pages)
             if page_result is None:
                 raise AssertionError("_parse_membership_page returned neither page nor refusal")
 

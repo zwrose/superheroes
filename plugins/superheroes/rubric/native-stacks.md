@@ -170,17 +170,27 @@ the premise shape change is in `TRANSITION.md`:
   is present without the stack pair, is not a positive integer, or sits on `layerPosition` 1 (the
   bottom layer is never gated).
 - `dependency-closed-unmerged` — the premise names a closed, unmerged dependency pull request.
-- `dependency-open-ready-pr` — the premise names an open dependency pull request with a READY
-  vet and the resolved base commit is not that pull request's current head.
+- `dependency-open-ready-pr` — the premise names an open dependency pull request whose vet reads
+  READY, or carries the card mark, and the resolved base commit is not that pull request's current
+  head.
+- `dependency-card-stale` — the dependency pull request's vet carries the card mark pinned to an
+  earlier head than its current one: the layer moved after it was accepted, so the launch refuses
+  until the advisor vets the new head.
+- `dependency-acceptance-lapsed` — preflight's base-state evidence accepted the dependency, and at
+  launch it no longer qualifies at its current head (back to draft, card withdrawn or naming another
+  feature, no READY line, or it joined, left or changed stack). A stack premise rechecks every accepted
+  lower layer the same way, at its accepted head, before the layer gate. `dependency-acceptance-unreadable`
+  — that evidence is not the accepted-rows array, so the launch refuses rather than skip the recheck.
 - `dependency-read-unavailable` — the launcher could not read the dependency pull request or its
   vet and the gate could not run.
 
 The launcher's `stack-read-unavailable` is its own token, never an alias of the reader's
 `stack-unreadable`. The bottom layer (`layerPosition == 1`) is **not** gated — the launcher reads
 nothing there, because a stack cannot be read without a member pull request, so a bottom-layer
-premise claiming an occupied position is not caught. A child whose only blocker is an open pull
-request with a READY vet launches immediately as a native stack layer on that pull request's head;
-waiting for the merge is a defect, not caution.
+premise claiming an occupied position is not caught. A layer whose only open
+blockers are accepted lower layers launches at once as a native stack layer; waiting for the merge
+is a defect, not caution. Which blockers are accepted is stated once, in
+[routing.md § Native dependency edges](../skills/showrunner/reference/routing.md#native-dependency-edges).
 
 ## How membership is verified
 
