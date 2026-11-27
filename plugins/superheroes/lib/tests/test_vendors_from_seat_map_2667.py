@@ -136,14 +136,17 @@ def test_an_all_unseatable_audits_fold_halts_with_the_cause():
     RD._fold_audits(state, state["config"], {"results": []})
     assert state["terminal"] == "halted"
     assert state["step"] == RD.P_TERMINAL
-    assert state["decisions"][-1]["kind"] == "audits-unseatable"
+    assert state["decisions"][-1]["kind"] == RD.AUDITS_UNSEATABLE
     marked = _last_round(state)["auditsUnseatable"]
-    assert marked["cause"] == "no-independent-vendor"
+    assert marked["cause"] == RDISC.CAUSE_NO_INDEPENDENT_VENDOR
     reason = state["certification"]["reason"]
-    assert reason.startswith("audits-unseatable:")
+    assert reason.startswith(RD.AUDITS_UNSEATABLE + ":")
     assert marked["detail"] in reason
     assert "config.vendors" in marked["detail"] and "claude" in marked["detail"]
     assert state["decisions"][-1]["detail"] == marked["detail"]
+    # axis: the emitted (verdict, decision) pair is the terminal-cause table's own key, so a drifted key fails here
+    assert RD.decision_kinds.map_terminal_cause(state["terminal"], state["decisions"][-1]["kind"]) == {
+        "kind": "loop", "reason": "detector"}
     entries = [a for a in _last_round(state)["audits"] if a["id"] in ids]
     assert len(entries) == len(ids)
     for entry in entries:
@@ -170,9 +173,9 @@ def test_an_all_unseatable_audits_round_ends_the_session_through_next_and_submit
     assert payload["verdict"] == "halted"
     ok, state = RD.load_state(d)
     assert ok and state["terminal"] == "halted"
-    assert state["certification"]["reason"].startswith("audits-unseatable:")
+    assert state["certification"]["reason"].startswith(RD.AUDITS_UNSEATABLE + ":")
     assert "config.vendors" in state["certification"]["reason"]
-    assert state["decisions"][-1]["kind"] == "audits-unseatable"
+    assert state["decisions"][-1]["kind"] == RD.AUDITS_UNSEATABLE
     phases = [p for p, _r in seen]
     last_audits = max(i for i, p in enumerate(phases) if p == RD.P_AUDITS)
     # only the armed post-fix verify gate runs after the audits: no scoped finder, seams check, fixer
@@ -194,7 +197,7 @@ def test_an_armed_post_fix_verify_runs_before_the_halt():
     assert isinstance(state.get("_auditsUnseatable"), dict)
     RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=(None, None))
     assert state["terminal"] == "halted"
-    assert state["decisions"][-1]["kind"] == "audits-unseatable"
+    assert state["decisions"][-1]["kind"] == RD.AUDITS_UNSEATABLE
     assert state["step"] == RD.P_TERMINAL
 
 
@@ -203,22 +206,36 @@ def test_an_armed_post_fix_verify_runs_before_the_halt():
 def test_the_three_causes_each_name_the_vendor_list_they_read():
     # axis: I3 — one builder, three causes, each reading the same inputs the selection reads
     assert set(RDISC.AUDIT_UNSEATABLE_CAUSES) == {
-        "fixer-family-unknown", "runner-channel-only", "pinned-roster-excludes", "no-independent-vendor"}
+        RDISC.CAUSE_FIXER_FAMILY_UNKNOWN, RDISC.CAUSE_RUNNER_CHANNEL_ONLY, RDISC.CAUSE_PINNED_ROSTER_EXCLUDES,
+        RDISC.CAUSE_NO_INDEPENDENT_VENDOR}
     unknown = RDISC.audit_unseatable_cause({"config": {"vendors": ["claude", "codex"]}})
-    assert unknown["cause"] == "fixer-family-unknown" and unknown["fixerFamily"] is None
+    assert unknown["cause"] == RDISC.CAUSE_FIXER_FAMILY_UNKNOWN and unknown["fixerFamily"] is None
     runner = RDISC.audit_unseatable_cause(
         {"config": {"vendors": ["claude", "codex"], "fixerVendor": "codex"}, "_advanceUsed": True})
-    assert runner["cause"] == "runner-channel-only" and runner["runnerOnly"] is True
+    assert runner["cause"] == RDISC.CAUSE_RUNNER_CHANNEL_ONLY and runner["runnerOnly"] is True
     assert "claude" in runner["detail"]
     none = RDISC.audit_unseatable_cause(
         {"config": {"vendors": ["claude"], "fixerVendor": "claude", "vendorsSource": "cli"}})
-    assert none["cause"] == "no-independent-vendor"
+    assert none["cause"] == RDISC.CAUSE_NO_INDEPENDENT_VENDOR
     assert none["vendorsSource"] == "cli" and none["vendors"] == ["claude"]
     assert none["vendorList"] == "config.vendors" and none["fixerFamily"] == "anthropic"
     for cause in (unknown, runner, none):
         assert cause["cause"] in RDISC.AUDIT_UNSEATABLE_CAUSES
         assert "config.vendors" in cause["detail"]
+        assert "from " + cause["vendorsSource"] in cause["detail"]
         assert cause["pinnedVendors"] is None
+
+
+def test_the_pinned_roster_cause_names_the_excluded_vendor_and_the_list_source():
+    # axis: I3 — a live independent vendor kept out only by the pinned roster is named, with the vendor list's source
+    state = {"config": {"vendors": ["claude", "codex"], "fixerVendor": "claude", "vendorsSource": "seat-map"},
+             "seatMapReceipts": [{"round": "1", "map": {
+                 "makerFamilies": ["anthropic"],
+                 "seats": {"code-reviewer": {"vendor": "cursor", "source": "pinned"}}}}]}
+    cause = RDISC.audit_unseatable_cause(state)
+    assert cause["cause"] == RDISC.CAUSE_PINNED_ROSTER_EXCLUDES
+    assert cause["pinnedVendors"] == ["cursor"]
+    assert "codex" in cause["detail"] and "from seat-map" in cause["detail"]
 
 
 def test_the_cause_builder_never_raises_on_a_malformed_state():
@@ -263,7 +280,7 @@ def test_a_healthy_session_is_unchanged():
     assert "auditsUnseatable" not in _last_round(state)
     assert "_auditsUnseatable" not in state
     assert all("cause" not in a for a in _last_round(state)["audits"])
-    assert not [d for d in state["decisions"] if d["kind"] == "audits-unseatable"]
+    assert not [d for d in state["decisions"] if d["kind"] == RD.AUDITS_UNSEATABLE]
 
 
 # E4 / E5 -------------------------------------------------------------------------------------
@@ -271,7 +288,7 @@ def test_a_healthy_session_is_unchanged():
 def test_a_stale_mark_never_halts_a_later_healthy_round():
     # axis: I2 — a mark left by an earlier fold is cleared at the top of every audits fold
     state = _fix_state(_cfg(vendors=["claude", "codex"]))
-    state["_auditsUnseatable"] = {"cause": "no-independent-vendor", "detail": "stale"}
+    state["_auditsUnseatable"] = {"cause": RDISC.CAUSE_NO_INDEPENDENT_VENDOR, "detail": "stale"}
     targets = _targets(state)
     RD._fold_audits(state, state["config"], {"results": [
         dict({"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",

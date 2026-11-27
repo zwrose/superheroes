@@ -1872,7 +1872,7 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
     # A round whose every fix audit has no auditor ends the session `halted` / `audits-unseatable` right
     # after the audits fold (#2667), so the fixes' own diff is never scanned and the review is not certified.
     assert refusal["verdict"] == "halted" and refusal["certificationShape"] is None
-    assert state["decisions"][-1]["kind"] == "audits-unseatable"
+    assert state["decisions"][-1]["kind"] == RD.AUDITS_UNSEATABLE
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True
@@ -1928,7 +1928,7 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
     # re-pinned: the round's only fix audit has no auditor, so the session halts `audits-unseatable`
     # right after the audits fold, and the receipt names the decision and the cause
     assert result["verdict"] == "halted" and result["certificationShape"] is None
-    unseatable = [d for d in result["decisions"] if d["kind"] == "audits-unseatable"]
+    unseatable = [d for d in result["decisions"] if d["kind"] == RD.AUDITS_UNSEATABLE]
     assert len(unseatable) == 1
     assert "fixer's family is unknown" in unseatable[0]["detail"]
     assert result["certification"]["reason"].startswith("audits-unseatable: ")
