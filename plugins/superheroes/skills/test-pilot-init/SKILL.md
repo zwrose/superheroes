@@ -199,7 +199,7 @@ python3 -B "$ROOT_DIR/lib/pilot_conformance.py" "${CONFORMANCE_ARGS[@]}" > "$REP
 python3 -B "$ROOT_DIR/lib/pilot_acceptance.py" matrix \
   --report-path "$REPORT_JSON" \
   --project "$PROJECT_NAME" \
-  --commit "$(git rev-parse HEAD)" \
+  --commit "$(python3 -B "$ROOT_DIR/lib/pilot_conformance.py" head --cwd .)" \
   --format markdown
 ```
 
@@ -218,8 +218,8 @@ report, not an error to swallow** — show the operator which surfaces came back
 is **false** when any row is `unexercised`, when the reference worktree is
 dirty, or when the run itself left surfaces `unexercised` — that is the honest
 outcome for a project that has not exercised everything, **not a failure to
-work around**. `--commit` must be a **full object id** (run `git rev-parse
-HEAD` in the reference project — not a branch name). **Dirty** is derived from
+work around**. `--commit` must be a **full object id**; the recipe takes it
+from `pilot_conformance.py head --cwd .`, the lookup the run stamps. **Dirty** is derived from
 `git status --porcelain` in the **CLI process's current working directory** when
 neither `--dirty` nor `--clean` is passed; pass `--dirty` or `--clean` to
 override. The run **never** writes into the repository when `--allow-live-effects` is not passed. The

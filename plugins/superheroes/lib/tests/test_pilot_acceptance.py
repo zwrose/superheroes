@@ -1033,6 +1033,102 @@ def test_conformance_reference_refusal_runs_no_exercise(
     assert ran == []
 
 
+@pytest.mark.parametrize("bound", [True, False])
+def test_bound_run_reads_inputs_and_exercises_without_git_routing(
+    tmp_path, monkeypatch, capsys, bound
+):
+    """A bound run resolves its inputs and runs its exercises with no inherited GIT_DIR; an
+    unbound run is unchanged; the variable is back once the run ends."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    _commit_checkout(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    git_dir = str(elsewhere / ".git")
+    monkeypatch.setenv("GIT_DIR", git_dir)
+    seen = {}
+
+    def fake_resolve_inputs(cwd, **kwargs):
+        seen["inputs"] = os.environ.get("GIT_DIR")
+        return {}, []
+
+    @pc.register("routing-probe", surfaces=["pilot_reclaim.sweep"])
+    def probe(inputs, now):
+        seen["exercise"] = os.environ.get("GIT_DIR")
+        return pc.exercise_record(
+            exercise="routing-probe",
+            surfaces=["pilot_reclaim.sweep"],
+            result=pc.RESULT_PASS,
+            reason=None,
+            evidence="probe ran",
+            exercised_at=now,
+        )
+
+    monkeypatch.setattr(pc, "resolve_inputs", fake_resolve_inputs)
+    monkeypatch.setattr(pc, "default_exercises", lambda: [probe])
+    argv = ["pilot_conformance.py", "run", "--cwd", str(checkout), "--now", _GENERATED_AT]
+    if bound:
+        argv += ["--project", "demo"]
+    exit_code = pc.main(argv)
+    captured = capsys.readouterr()
+    assert exit_code in (0, 1), captured.err
+    expected = None if bound else git_dir
+    assert seen == {"inputs": expected, "exercise": expected}
+    assert os.environ.get("GIT_DIR") == git_dir
+
+
+def test_head_verb_prints_cwd_head_despite_inherited_git_dir(tmp_path, monkeypatch, capsys):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    expected = _commit_checkout(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    other = _commit_checkout(elsewhere)
+    assert other != expected
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    assert pc.main(["pilot_conformance.py", "head", "--cwd", str(checkout)]) == 0
+    assert capsys.readouterr().out == expected + "\n"
+
+
+def test_head_verb_refuses_a_folder_that_is_no_checkout(tmp_path, capsys):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    assert pc.main(["pilot_conformance.py", "head", "--cwd", str(folder)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def test_e2e_head_and_stamp_agree_under_inherited_git_dir(tmp_path, monkeypatch):
+    """The documented recipe under an inherited GIT_DIR: `head` and the stamp name one commit."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    head_proc = subprocess.run(
+        [sys.executable, "-B", os.path.join(_LIB, "pilot_conformance.py"), "head",
+         "--cwd", str(reach_root)],
+        capture_output=True, text=True, cwd=_LIB, env=_pinned_git_env(),
+    )
+    assert head_proc.returncode == 0, head_proc.stderr
+    assert head_proc.stdout.strip() == commit
+    conformance_proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", head_proc.stdout.strip())
+    assert matrix_proc.returncode in (0, 1), matrix_proc.stderr
+    assert matrix_proc.stderr == ""
+
+
 def test_conformance_run_without_project_stamps_no_reference(tmp_path):
     reach_root, policy_root = _conformance_fixture(tmp_path)
     proc = _run_conformance(reach_root, policy_root)

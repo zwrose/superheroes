@@ -8,6 +8,7 @@ contract, report aggregation, run harness, default exercise assembly, input reso
 and CLI entry point.
 """
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -937,14 +938,31 @@ def _validate_cli_now(now):
     return now
 
 
-def report_reference(project, cwd):
-    """Return the `{project, commit}` binding a run report carries for the acceptance matrix.
+@contextlib.contextmanager
+def _without_git_routing():
+    """Run the body with every git routing variable removed from this process's environment.
 
-    The commit is the full object id `git rev-parse HEAD` reads in `cwd`; refuses
-    `conformance-cli-commit-unreadable` when it cannot be read as one.
+    A bound run (`--project`) reads its stamp, its branch, its calibration and its exercises from
+    the `--cwd` checkout alone; an inherited GIT_DIR (or another routing variable) would send some
+    of those reads to another checkout. The variables are put back when the body ends.
     """
-    if not isinstance(project, str) or not project or _has_control_char(project):
-        raise PilotConformanceError(REASON_CLI_PROJECT_INVALID)
+    saved = {
+        key: os.environ.pop(key)
+        for key in git_routing.GIT_ROUTING_VARS
+        if key in os.environ
+    }
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def checkout_head(cwd):
+    """The full object id of `cwd`'s HEAD, read with git routing variables removed.
+
+    The one commit lookup the report stamp and the documented matrix call sites share (the
+    `head` verb prints it). Refuses `conformance-cli-commit-unreadable` when it cannot be read.
+    """
     # bite-axis: checkout identity — inherited routing variables (GIT_DIR and the rest) would let
     # `git -C` read another checkout's HEAD, so the lookup runs with them removed.
     env = {
@@ -964,7 +982,18 @@ def report_reference(project, cwd):
     commit = proc.stdout.strip()
     if proc.returncode != 0 or not is_commit_oid(commit):
         raise PilotConformanceError(REASON_CLI_COMMIT_UNREADABLE)
-    return {"project": project, "commit": commit}
+    return commit
+
+
+def report_reference(project, cwd):
+    """Return the `{project, commit}` binding a run report carries for the acceptance matrix.
+
+    The commit is `checkout_head(cwd)`; refuses `conformance-cli-project-invalid` for an empty
+    project and `conformance-cli-commit-unreadable` when the commit cannot be read.
+    """
+    if not isinstance(project, str) or not project or _has_control_char(project):
+        raise PilotConformanceError(REASON_CLI_PROJECT_INVALID)
+    return {"project": project, "commit": checkout_head(cwd)}
 
 
 def _parse_run_args(args):
@@ -997,12 +1026,32 @@ def _parse_run_args(args):
     return parsed
 
 
+def _main_head(args):
+    """`head --cwd <path>`: print `checkout_head(path)`, the commit a bound run stamps."""
+    parser = argparse.ArgumentParser(prog="pilot_conformance.py head")
+    parser.add_argument("--cwd", required=True)
+    parsed = parser.parse_args(args)
+    cwd = os.path.realpath(parsed.cwd)
+    if not os.path.isdir(cwd):
+        sys.stderr.write("%s\n" % REASON_CLI_CWD_INVALID)
+        return 2
+    try:
+        commit = checkout_head(cwd)
+    except PilotConformanceError as exc:
+        sys.stderr.write("%s\n" % exc.reason)
+        return 2
+    sys.stdout.write(commit + "\n")
+    return 0
+
+
 def main(argv):
     """CLI entry point for the conformance run."""
     args = argv[1:]
     if not args:
         sys.stderr.write("Usage: pilot_conformance.py run --cwd <path> [options]\n")
         return 2
+    if args[0] == "head":
+        return _main_head(args[1:])
 
     parsed = _parse_run_args(args)
     if parsed is None:
@@ -1023,24 +1072,26 @@ def main(argv):
             return 2
 
     reach_roots = parsed.reach_roots or None
+    bound = parsed.project is not None
+    # bite-axis: one checkout — a bound run's stamp, inputs and exercises all read `--cwd`.
+    scope = _without_git_routing() if bound else contextlib.nullcontext()
     try:
-        reference = None
-        if parsed.project is not None:
-            reference = report_reference(parsed.project, cwd)
-        inputs, resolution = resolve_inputs(
-            cwd,
-            policy_root=parsed.policy_root,
-            reach_roots=reach_roots,
-            slots_dir=parsed.slots_dir,
-            slot_ref=parsed.slot_ref,
-            branch=parsed.branch,
-            slot=parsed.slot,
-            artifacts_dir=parsed.artifacts_dir,
-            registry_path=parsed.registry_path,
-            now=now,
-            allow_live_effects=parsed.allow_live_effects,
-        )
-        report_data = run(default_exercises(), inputs=inputs, now=now)
+        with scope:
+            reference = report_reference(parsed.project, cwd) if bound else None
+            inputs, resolution = resolve_inputs(
+                cwd,
+                policy_root=parsed.policy_root,
+                reach_roots=reach_roots,
+                slots_dir=parsed.slots_dir,
+                slot_ref=parsed.slot_ref,
+                branch=parsed.branch,
+                slot=parsed.slot,
+                artifacts_dir=parsed.artifacts_dir,
+                registry_path=parsed.registry_path,
+                now=now,
+                allow_live_effects=parsed.allow_live_effects,
+            )
+            report_data = run(default_exercises(), inputs=inputs, now=now)
     except PilotConformanceError as exc:
         sys.stderr.write("%s\n" % exc.reason)
         return 2
