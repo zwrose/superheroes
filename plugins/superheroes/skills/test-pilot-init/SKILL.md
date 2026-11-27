@@ -190,15 +190,16 @@ block, run the headless conformance pass (normative CLI in
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPORT_JSON="$(mktemp)"
 trap 'rm -f "$REPORT_JSON"' EXIT
-CONFORMANCE_ARGS=(run --cwd .)
+PROJECT_NAME="$(basename "$(pwd)")"
+CONFORMANCE_ARGS=(run --cwd . --project "$PROJECT_NAME")
 if [ -n "${PILOT_REGISTRY:-}" ]; then
   CONFORMANCE_ARGS+=(--registry-path "$PILOT_REGISTRY")
 fi
 python3 -B "$ROOT_DIR/lib/pilot_conformance.py" "${CONFORMANCE_ARGS[@]}" > "$REPORT_JSON"
 python3 -B "$ROOT_DIR/lib/pilot_acceptance.py" matrix \
   --report-path "$REPORT_JSON" \
-  --project "$(basename "$(pwd)")" \
-  --commit "$(git rev-parse HEAD)" \
+  --project "$PROJECT_NAME" \
+  --commit "$(python3 -B "$ROOT_DIR/lib/pilot_conformance.py" head --cwd .)" \
   --format markdown
 ```
 
@@ -217,8 +218,8 @@ report, not an error to swallow** — show the operator which surfaces came back
 is **false** when any row is `unexercised`, when the reference worktree is
 dirty, or when the run itself left surfaces `unexercised` — that is the honest
 outcome for a project that has not exercised everything, **not a failure to
-work around**. `--commit` must be a **full object id** (run `git rev-parse
-HEAD` in the reference project — not a branch name). **Dirty** is derived from
+work around**. `--commit` must be a **full object id**; the recipe takes it
+from `pilot_conformance.py head --cwd .`, the lookup the run stamps. **Dirty** is derived from
 `git status --porcelain` in the **CLI process's current working directory** when
 neither `--dirty` nor `--clean` is passed; pass `--dirty` or `--clean` to
 override. The run **never** writes into the repository when `--allow-live-effects` is not passed. The

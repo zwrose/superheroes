@@ -12,6 +12,7 @@ _LIB = os.path.realpath(os.path.join(_HERE, ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import git_routing  # noqa: E402
 import pilot_acceptance as pa  # noqa: E402
 import pilot_conformance as pc  # noqa: E402
 import pilot_conformance_declarations as pcd  # noqa: E402
@@ -27,9 +28,14 @@ def _reference(**overrides):
     return base
 
 
+def _bound(project="example", commit=_VALID_SHA1):
+    return {"project": project, "commit": commit}
+
+
 def _report_data(**overrides):
     base = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound(),
         "ok": True,
         "unexercised": [],
         "exercises": [],
@@ -62,6 +68,7 @@ def _declarations_block(**overrides):
 def _empty_report():
     return {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound(),
         "ok": True,
         "unexercised": [],
         "warnings": [],
@@ -514,6 +521,100 @@ def test_matrix_ok_true_when_all_clauses_hold():
     assert data["okClauses"]["declarations_ok"] is True
 
 
+# --- report binding -----------------------------------------------------------
+
+_OTHER_SHA1 = "c" * 40
+
+
+def test_matrix_refuses_report_from_another_commit():
+    report = _report_data(reference=_bound(commit=_OTHER_SHA1))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert _OTHER_SHA1 in exc.value.detail
+    assert _VALID_SHA1 in exc.value.detail
+
+
+def test_matrix_refuses_report_from_another_project():
+    report = _report_data(reference=_bound(project="other-project"))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_PROJECT_MISMATCH
+    assert "other-project" in exc.value.detail
+    assert "example" in exc.value.detail
+
+
+def test_matrix_refuses_report_differing_in_both_names_both():
+    report = _report_data(reference=_bound(project="other-project", commit=_OTHER_SHA1))
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.bind_report(_reference(), report)
+    assert exc.value.reason == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert _OTHER_SHA1 in exc.value.detail
+    assert "other-project" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [
+        None,
+        "example",
+        {},
+        {"project": "example"},
+        {"commit": _VALID_SHA1},
+        {"project": "", "commit": _VALID_SHA1},
+        {"project": "example", "commit": None},
+    ],
+)
+def test_matrix_refuses_unbound_report(bound):
+    report = _report_data()
+    if bound is None:
+        del report["reference"]
+    else:
+        report["reference"] = bound
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa.matrix(
+            _reference(),
+            _ok_base_rows(),
+            report,
+            _declarations_block(),
+            generated_at=_GENERATED_AT,
+        )
+    assert exc.value.reason == pa.REASON_REPORT_UNBOUND
+
+
+def test_matrix_matching_report_still_backs_exercised_row():
+    rows = [
+        pa.row(
+            area="a",
+            claim="c",
+            status=pa.STATUS_EXERCISED,
+            evidence={"exercise": "reclaim-sweep", "surface": "pilot_reclaim.sweep"},
+        )
+    ]
+    report = _report_data(exercises=[_exercise("reclaim-sweep", ["pilot_reclaim.sweep"])])
+    data = pa.matrix(
+        _reference(),
+        rows,
+        report,
+        _declarations_block(),
+        generated_at=_GENERATED_AT,
+    )
+    assert data["rows"][0]["status"] == pa.STATUS_EXERCISED
+    assert data["ok"] is True
+
+
 # --- ownership two-row rule ---------------------------------------------------
 
 def _passing_ownership_report():
@@ -674,6 +775,7 @@ def test_coerce_declarations_malformed_envelope_refuses():
 def test_cli_matrix_with_malformed_declarations_report():
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -694,6 +796,7 @@ def test_cli_matrix_with_malformed_declarations_report():
 def test_cli_matrix_with_null_declarations_report():
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -712,7 +815,57 @@ def test_cli_matrix_with_null_declarations_report():
     assert proc.stdout.startswith("## Acceptance matrix")
 
 
-def test_e2e_conformance_run_then_matrix_cli(tmp_path):
+def _pinned_git_env():
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
+def _fixture_git_env():
+    """The fixture's own git calls: pinned config, and no inherited routing variable, so a test
+    that sets GIT_DIR for the run under test never redirects the fixture's commits."""
+    env = _pinned_git_env()
+    for key in git_routing.GIT_ROUTING_VARS:
+        if key not in ("GIT_CONFIG_GLOBAL",):
+            env.pop(key, None)
+    return env
+
+
+def _git(path, *args):
+    return subprocess.run(
+        ["git", "-C", str(path)] + list(args),
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_fixture_git_env(),
+    )
+
+
+def _commit_checkout(path, object_format=None):
+    """Make `path` a git checkout with one commit; return that commit's full id."""
+    if object_format is None:
+        _git(path, "init", "-q")
+    else:
+        _git(path, "init", "-q", "--object-format=%s" % object_format)
+    _git(path, "add", "-A")
+    _git(
+        path,
+        "-c",
+        "user.name=Pilot Fixture",
+        "-c",
+        "user.email=pilot-fixture@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+    )
+    return _git(path, "rev-parse", "HEAD").stdout.strip()
+
+
+def _conformance_fixture(tmp_path):
     from test_pilot_conformance import _write_calibration_layer  # noqa: E402
 
     reach_root = tmp_path / "reach"
@@ -738,8 +891,11 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         encoding="utf-8",
     ) as handle:
         json.dump(policy, handle)
-    report_path = tmp_path / "report.json"
-    conformance_argv = [
+    return reach_root, policy_root
+
+
+def _run_conformance(reach_root, policy_root, *extra):
+    argv = [
         sys.executable,
         "-B",
         os.path.join(_LIB, "pilot_conformance.py"),
@@ -752,18 +908,18 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         str(reach_root),
         "--now",
         _GENERATED_AT,
-    ]
-    conformance_proc = subprocess.run(
-        conformance_argv,
+    ] + list(extra)
+    return subprocess.run(
+        argv,
         capture_output=True,
         text=True,
         cwd=_LIB,
+        env=_pinned_git_env(),
     )
-    assert conformance_proc.stderr == ""
-    # conformance may exit 1 when surfaces unexercised
-    with open(report_path, "w", encoding="utf-8") as handle:
-        handle.write(conformance_proc.stdout)
-    matrix_argv = [
+
+
+def _run_matrix_cli(report_path, project, commit):
+    argv = [
         sys.executable,
         "-B",
         os.path.join(_LIB, "pilot_acceptance.py"),
@@ -771,24 +927,301 @@ def test_e2e_conformance_run_then_matrix_cli(tmp_path):
         "--report-path",
         str(report_path),
         "--project",
-        "demo",
+        project,
         "--commit",
-        _VALID_SHA1,
+        commit,
         "--generated-at",
         _GENERATED_AT,
         "--clean",
         "--format",
         "markdown",
     ]
-    matrix_proc = subprocess.run(
-        matrix_argv,
-        capture_output=True,
-        text=True,
-        cwd=_LIB,
+    return subprocess.run(argv, capture_output=True, text=True, cwd=_LIB)
+
+
+def test_conformance_run_with_project_stamps_reference(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode in (0, 1)
+    assert proc.stderr == ""
+    report = json.loads(proc.stdout)
+    assert report["reference"] == {"project": "demo", "commit": commit}
+    assert len(commit) == 40
+
+
+def test_conformance_run_stamps_a_sha256_commit(tmp_path):
+    """A SHA-256 checkout's 64-character commit id is stamped whole and backs the matrix."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root, object_format="sha256")
+    assert len(commit) == 64
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode in (0, 1), proc.stderr
+    report = json.loads(proc.stdout)
+    assert report["reference"] == {"project": "demo", "commit": commit}
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
+    assert matrix_proc.returncode in (0, 1), matrix_proc.stderr
+    assert matrix_proc.stderr == ""
+
+
+def test_bound_run_keeps_the_callers_git_config_selection(tmp_path, monkeypatch, capsys):
+    """Only checkout-location variables leave a bound run; GIT_CONFIG_GLOBAL stays as chosen."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    _commit_checkout(checkout)
+    chosen = str(tmp_path / "chosen.gitconfig")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", chosen)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    seen = {}
+
+    def fake_resolve_inputs(cwd, **kwargs):
+        seen["config"] = os.environ.get("GIT_CONFIG_GLOBAL")
+        seen["dir"] = os.environ.get("GIT_DIR")
+        return {}, []
+
+    monkeypatch.setattr(pc, "resolve_inputs", fake_resolve_inputs)
+    monkeypatch.setattr(pc, "default_exercises", lambda: [])
+    exit_code = pc.main([
+        "pilot_conformance.py", "run", "--cwd", str(checkout), "--now", _GENERATED_AT,
+        "--project", "demo",
+    ])
+    capsys.readouterr()
+    assert exit_code in (0, 1)
+    assert seen == {"config": chosen, "dir": None}
+    assert set(pc.CHECKOUT_LOCATION_VARS) == (
+        set(git_routing.GIT_ROUTING_VARS) - {"GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"}
     )
+
+
+def test_conformance_run_with_project_refuses_unreadable_commit(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def test_conformance_run_refuses_invalid_project(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    _commit_checkout(reach_root)
+    proc = _run_conformance(reach_root, policy_root, "--project", "")
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.strip() == pc.REASON_CLI_PROJECT_INVALID
+
+
+def test_conformance_run_unreadable_commit_ignores_inherited_git_dir(tmp_path, monkeypatch):
+    """A --cwd that is no checkout still refuses when an inherited GIT_DIR names a real one."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def _refusal_probe(monkeypatch):
+    """Swap in one registered exercise that records each call, so a test sees whether any ran."""
+    ran = []
+
+    @pc.register("refusal-probe", surfaces=["pilot_reclaim.sweep"])
+    def probe(inputs, now):
+        ran.append("probe")
+        return pc.exercise_record(
+            exercise="refusal-probe",
+            surfaces=["pilot_reclaim.sweep"],
+            result=pc.RESULT_PASS,
+            reason=None,
+            evidence="probe ran",
+            exercised_at=now,
+        )
+
+    monkeypatch.setattr(pc, "default_exercises", lambda: [probe])
+    return ran
+
+
+@pytest.mark.parametrize(
+    "project, make_checkout, reason",
+    [
+        ("demo", False, pc.REASON_CLI_COMMIT_UNREADABLE),
+        ("", True, pc.REASON_CLI_PROJECT_INVALID),
+    ],
+)
+def test_conformance_reference_refusal_runs_no_exercise(
+    tmp_path, monkeypatch, capsys, project, make_checkout, reason
+):
+    """bite-axis: preflight order — a refused stamp stops the run before any exercise runs."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    if make_checkout:
+        _commit_checkout(checkout)
+    ran = _refusal_probe(monkeypatch)
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        str(checkout),
+        "--now",
+        _GENERATED_AT,
+        "--allow-live-effects",
+        "--project",
+        project,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == reason
+    assert ran == []
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_bound_run_reads_inputs_and_exercises_without_git_routing(
+    tmp_path, monkeypatch, capsys, bound
+):
+    """A bound run resolves its inputs and runs its exercises with no inherited GIT_DIR; an
+    unbound run is unchanged; the variable is back once the run ends."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    _commit_checkout(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    git_dir = str(elsewhere / ".git")
+    monkeypatch.setenv("GIT_DIR", git_dir)
+    seen = {}
+
+    def fake_resolve_inputs(cwd, **kwargs):
+        seen["inputs"] = os.environ.get("GIT_DIR")
+        return {}, []
+
+    @pc.register("routing-probe", surfaces=["pilot_reclaim.sweep"])
+    def probe(inputs, now):
+        seen["exercise"] = os.environ.get("GIT_DIR")
+        return pc.exercise_record(
+            exercise="routing-probe",
+            surfaces=["pilot_reclaim.sweep"],
+            result=pc.RESULT_PASS,
+            reason=None,
+            evidence="probe ran",
+            exercised_at=now,
+        )
+
+    monkeypatch.setattr(pc, "resolve_inputs", fake_resolve_inputs)
+    monkeypatch.setattr(pc, "default_exercises", lambda: [probe])
+    argv = ["pilot_conformance.py", "run", "--cwd", str(checkout), "--now", _GENERATED_AT]
+    if bound:
+        argv += ["--project", "demo"]
+    exit_code = pc.main(argv)
+    captured = capsys.readouterr()
+    assert exit_code in (0, 1), captured.err
+    expected = None if bound else git_dir
+    assert seen == {"inputs": expected, "exercise": expected}
+    assert os.environ.get("GIT_DIR") == git_dir
+
+
+def test_head_verb_prints_cwd_head_despite_inherited_git_dir(tmp_path, monkeypatch, capsys):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    expected = _commit_checkout(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    other = _commit_checkout(elsewhere)
+    assert other != expected
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    assert pc.main(["pilot_conformance.py", "head", "--cwd", str(checkout)]) == 0
+    assert capsys.readouterr().out == expected + "\n"
+
+
+def test_head_verb_refuses_a_folder_that_is_no_checkout(tmp_path, capsys):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    assert pc.main(["pilot_conformance.py", "head", "--cwd", str(folder)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def test_e2e_head_and_stamp_agree_under_inherited_git_dir(tmp_path, monkeypatch):
+    """The documented recipe under an inherited GIT_DIR: `head` and the stamp name one commit."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    head_proc = subprocess.run(
+        [sys.executable, "-B", os.path.join(_LIB, "pilot_conformance.py"), "head",
+         "--cwd", str(reach_root)],
+        capture_output=True, text=True, cwd=_LIB, env=_pinned_git_env(),
+    )
+    assert head_proc.returncode == 0, head_proc.stderr
+    assert head_proc.stdout.strip() == commit
+    conformance_proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", head_proc.stdout.strip())
+    assert matrix_proc.returncode in (0, 1), matrix_proc.stderr
+    assert matrix_proc.stderr == ""
+
+
+def test_conformance_run_without_project_stamps_no_reference(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    proc = _run_conformance(reach_root, policy_root)
+    assert proc.returncode in (0, 1)
+    assert "reference" not in json.loads(proc.stdout)
+
+
+def test_e2e_conformance_run_then_matrix_cli(tmp_path):
+    """The documented pipeline, end to end: a stamped report backs a matrix for its own pair."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    conformance_proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert conformance_proc.stderr == ""
+    # conformance may exit 1 when surfaces unexercised
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
     assert matrix_proc.returncode in (0, 1)
     assert matrix_proc.stderr == ""
     assert matrix_proc.stdout.startswith("## Acceptance matrix")
+
+    other_commit = _run_matrix_cli(report_path, "demo", "c" * 40)
+    assert other_commit.returncode == 2
+    assert other_commit.stderr.splitlines()[0] == pa.REASON_REPORT_COMMIT_MISMATCH
+    assert commit in other_commit.stderr
+
+    other_project = _run_matrix_cli(report_path, "elsewhere", commit)
+    assert other_project.returncode == 2
+    assert other_project.stderr.splitlines()[0] == pa.REASON_REPORT_PROJECT_MISMATCH
+
+
+def test_e2e_unstamped_report_refuses_as_unbound(tmp_path):
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    commit = _commit_checkout(reach_root)
+    conformance_proc = _run_conformance(reach_root, policy_root)
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_proc = _run_matrix_cli(report_path, "demo", commit)
+    assert matrix_proc.returncode == 2
+    assert matrix_proc.stdout == ""
+    assert matrix_proc.stderr.splitlines()[0] == pa.REASON_REPORT_UNBOUND
 
 
 # --- framework_rows totality --------------------------------------------------
@@ -845,6 +1278,7 @@ def _cli_argv(report_path, **extra):
 def _minimal_passing_report():
     return {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": True,
         "unexercised": [],
         "exercises": [
@@ -869,6 +1303,7 @@ def test_cli_derives_dirty_from_git_status(tmp_path):
     (tmp_path / "dirty-marker.txt").write_text("dirty", encoding="utf-8")
     report = {
         "schemaVersion": pc.SCHEMA,
+        "reference": _bound("demo"),
         "ok": False,
         "unexercised": list(pc.REQUIRED_SURFACES),
         "exercises": [],
@@ -895,6 +1330,29 @@ def test_cli_derives_dirty_from_git_status(tmp_path):
     assert proc.returncode == 1
     data = json.loads(proc.stdout)
     assert data["reference"]["dirty"] is True
+
+
+def test_cli_dirty_ignores_inherited_git_dir(tmp_path):
+    """Dirtiness is read from the CLI's own checkout even when GIT_DIR names a clean one."""
+    dirty_checkout = tmp_path / "dirty"
+    dirty_checkout.mkdir()
+    (dirty_checkout / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    _commit_checkout(dirty_checkout)
+    (dirty_checkout / "tracked.txt").write_text("v2\n", encoding="utf-8")
+    clean_checkout = tmp_path / "clean"
+    clean_checkout.mkdir()
+    (clean_checkout / "tracked.txt").write_text("v1\n", encoding="utf-8")
+    _commit_checkout(clean_checkout)
+    report = _minimal_passing_report()
+    path = _write_report(tmpdir=str(tmp_path), report=report)
+    argv = _cli_argv(path)
+    argv.remove("--clean")
+    env = _pinned_git_env()
+    env["GIT_DIR"] = str(clean_checkout / ".git")
+    env["GIT_WORK_TREE"] = str(clean_checkout)
+    proc = subprocess.run(argv, capture_output=True, text=True, cwd=dirty_checkout, env=env)
+    assert proc.returncode == 1, proc.stderr
+    assert json.loads(proc.stdout)["reference"]["dirty"] is True
 
 
 def test_cli_exit_0_on_ok_matrix():
@@ -945,6 +1403,35 @@ def test_cli_exit_2_on_refusal():
     assert proc.returncode == 2
     assert pa.REASON_REFERENCE_COMMIT_INVALID in proc.stderr
     assert proc.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "bound, reason, named",
+    [
+        ({"project": "demo", "commit": "c" * 40}, pa.REASON_REPORT_COMMIT_MISMATCH, "c" * 40),
+        ({"project": "elsewhere", "commit": _VALID_SHA1}, pa.REASON_REPORT_PROJECT_MISMATCH, "elsewhere"),
+        (None, pa.REASON_REPORT_UNBOUND, "project or commit"),
+    ],
+)
+def test_cli_refuses_report_not_bound_to_reference(bound, reason, named):
+    report = _minimal_passing_report()
+    if bound is None:
+        del report["reference"]
+    else:
+        report["reference"] = bound
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = _write_report(tmpdir, report)
+        proc = subprocess.run(
+            _cli_argv(path),
+            capture_output=True,
+            text=True,
+            cwd=_LIB,
+        )
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    lines = proc.stderr.splitlines()
+    assert lines[0] == reason
+    assert named in proc.stderr
 
 
 def test_cli_markdown_format_on_stdout():
