@@ -376,9 +376,9 @@ shape, and the watch ceiling that keeps them. The charter's duty 9 and `showrunn
 here.
 
 **While any lane is live, send the owner a status note at least every 30 minutes, even when nothing
-changed.** The first note goes out at once when the first lane of a wave launches, without waiting
-for the batch's launch report (send the two together when the report is already there), or when a
-seat resumes, never waiting on a watch. Every later note goes out no more than 30 minutes
+changed.** The first note goes out at once whenever a launch or relaunch takes a wave from no live
+lane to one, without waiting for the batch's launch report (send the two together when the report is
+already there), or when a seat resumes, never waiting on a watch. Every later note goes out no more than 30 minutes
 after the last note sent, so a note falls due during your own long work (a vet, a review read) as
 well. When nothing changed since the last note, the note is one line.
 
@@ -392,8 +392,8 @@ event and re-arms. An event is news, so the owner hears it in that note.
 
 **The ceiling.** Budget every wave-watch arm from the last note sent: set `--max-seconds` and
 `--max-total-seconds` both to the time left until the next note is due, at most 1500 (25 minutes).
-When less than a minute is left (or none, because the arm came late), send the note first and arm
-from it. `--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
+When less than two minutes are left (or none, because the arm came late), send the note first and
+arm from it. `--max-seconds` alone never wakes you: under `loop` a per-arm timer re-arms internally, and only
 `--max-total-seconds` ends the loop (`wave-watch.md` § Timing flags). These values replace the
 example values in `wave-watch.md` (`--max-seconds 2400` in its arming snippet,
 `--max-total-seconds 1680` under a `Monitor`) on every host; `wave-watch.md` stays the home of the
