@@ -134,6 +134,13 @@ def test_e2_a_timeline_page_that_fails_is_unreadable_never_a_partial_read(monkey
     pytest.param({"event": "cross-referenced", "source": {"issue": {"number": 7, "pull_request": {}}}},
                  id="pr-row-without-a-repository"),
     pytest.param(cross_ref(7, None), id="pr-row-with-a-repository-name-that-is-not-a-string"),
+    pytest.param(cross_ref(0), id="pr-row-with-number-zero"),
+    pytest.param(cross_ref(7, ""), id="pr-row-with-a-blank-repository"),
+    pytest.param(cross_ref(7, "no-slash"), id="pr-row-with-a-repository-that-is-not-a-slug"),
+    pytest.param(cross_ref(7, "o/r?"), id="pr-row-with-a-repository-that-is-not-a-github-slug"),
+    pytest.param({}, id="a-row-with-no-event"),
+    pytest.param({"event": None}, id="a-row-with-a-null-event"),
+    pytest.param({"event": "  "}, id="a-row-with-a-blank-event"),
 ])
 def test_e3_a_malformed_timeline_row_is_unreadable_never_skipped(row):
     # axis: E3; a row the reader cannot make sense of skipped, so a link it may have held reads as no link
@@ -444,6 +451,11 @@ def test_an_unreadable_earlier_record_leaves_the_test_lens_count_unavailable():
     assert rr._test_lens([row], found, HEAD, {"findings": []})["findings"] == 1  # a readable record carried nothing
     line = rr._test_lens_line({"testLens": part, "reviewers": [row]})
     assert line.endswith("its finding count is unavailable because an earlier review record could not be read.")
+    # a carried test row stays carried in the part and its line when the earlier record is unreadable
+    carried_row = dict(row, carried={"commit": EARLIER})
+    part = rr._test_lens([carried_row], found, HEAD, entry)
+    assert part["carried"] == {"commit": EARLIER} and part["findings"] is None
+    assert rr._test_lens_line({"testLens": part, "reviewers": [carried_row]}).startswith("Test lens: carried from the earlier review of")
 
 
 HASH_REFUSAL = ("the earlier record's posted text fails the integrity check it recorded (its hash or length), "
@@ -464,10 +476,11 @@ def test_a_record_whose_hash_failed_is_never_carried_from(damage):
     assert rr.carry_refusal(damaged, EARLIER, None, None, HEAD, []) == HASH_REFUSAL
     # a damaged own record is never read for what it carried from
     assert rr.carry_source(dict(own, transitDamage=damage), EARLIER, "s-2", [{"finalCommit": {"sha": EARLIER}}])["sessionId"] == "s-2"
-    # a damaged record at another commit is not the one carried from, so the walk reaches the intact matching record
+    # a damaged record's own commit cannot be trusted, so it stops the walk even when it names another commit
     intact = {"sessionId": "s-1", "finalCommit": {"sha": EARLIER}, "findings": []}
     other = dict(damaged, finalCommit={"sha": "d" * 40})
-    assert rr.carry_source(own, EARLIER, "s-2", [intact, other]) is intact
+    assert rr.carry_source(own, EARLIER, "s-2", [intact, other]) is other
+    assert rr.carry_source(own, EARLIER, "s-2", [other, intact]) is intact  # one older than the match is never reached
     # redacted text alone is not a failed integrity check
     assert rr.carry_refusal(dict(damaged, transitDamage={"redactedFields": ["x"]}), EARLIER, None, None, HEAD, []) != HASH_REFUSAL
 

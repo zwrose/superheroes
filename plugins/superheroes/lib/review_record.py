@@ -439,7 +439,8 @@ def recorded_links(candidates, repo, pr, get_issue, list_timeline):
             repository = issue.get("repository")
             full_name = repository.get("full_name") if isinstance(repository, dict) else None
             # axis: a cross-reference whose PR number or repository name cannot be read is unreadable, never "no link"
-            if not _is_pos_int(number) or not isinstance(full_name, str) or not _REPO_RE.fullmatch(full_name):
+            # the strict GitHub owner/name slug (cloud_builder's), so a value such as `o/r?` is unreadable, never another repository
+            if not _is_pos_int(number) or not isinstance(full_name, str) or not cloud_builder._REPO_RE.fullmatch(full_name):
                 return None
             # axis: only a cross-reference from this PR number counts, so another PR of the repository never links the issue
             # axis: only a cross-reference from this repository counts, so another repository's PR with the same number never links the issue
@@ -792,6 +793,9 @@ def carry_source(prior, last_reviewed, session_id, history):
     for rec in reversed(history):
         # axis: an earlier record that could not be read stops the walk, so a carry never looks past it to an older record — see bite-proof record i2658_review_record_links (G9)
         if _is_unreadable_entry(rec):
+            return rec
+        # axis: a record that fails its recorded integrity check stops the walk before its commit is read, since that commit cannot be trusted to say it is not the record carried from; carry_refusal refuses it — see bite-proof record i2658_review_record_links
+        if _hash_failed(rec):
             return rec
         final = rec.get("finalCommit") if isinstance(rec, dict) else None
         if isinstance(final, dict) and final.get("sha") == last_reviewed:
@@ -1915,8 +1919,7 @@ def _test_lens(reviewers, findings, final_sha, other=None):
     # axis: with the earlier record unreadable, which findings were carried cannot be told, so the count is unavailable, never credited to this round — see bite-proof record i2658_review_record_links
     if _is_unreadable_entry(other):
         part["findings"] = None
-        return part
-    if carried:
+    elif carried:
         part["carriedFindings"] = carried
     # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
     if chosen and isinstance(chosen.get("carried"), dict):
