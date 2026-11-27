@@ -5,7 +5,6 @@ report and declaration receipts, framework-authored rows, matrix aggregation, an
 """
 import argparse
 import json
-import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -73,7 +72,6 @@ REASON_CLI_DIRTY_CONFLICTING = "acceptance-cli-dirty-conflicting"
 REASON_CLI_DIRTY_UNRESOLVED = "acceptance-cli-dirty-unresolved"
 REASON_CLI_GENERATED_AT_INVALID = "acceptance-cli-generated-at-invalid"
 
-_COMMIT_OID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _EXERCISE_EVIDENCE_KEYS = frozenset({"exercise", "surface"})
 _DECLARATION_EVIDENCE_KEYS = frozenset({"kind", "slotRef", "digest"})
 _UNEXERCISED_EVIDENCE_KEYS = frozenset({"reason"})
@@ -149,7 +147,7 @@ def _is_unexercised_evidence(evidence):
 def reference(project, commit, *, dirty):
     """Return a pinned reference record for the acceptance matrix."""
     _validate_label(project, REASON_REFERENCE_PROJECT_INVALID)
-    if not isinstance(commit, str) or not _COMMIT_OID_RE.match(commit):
+    if not pc.is_commit_oid(commit):
         # bite-axis: commit oid — only full lowercase hex object ids; short shas and refs refuse.
         raise PilotAcceptanceError(REASON_REFERENCE_COMMIT_INVALID)
     if dirty is not True and dirty is not False:

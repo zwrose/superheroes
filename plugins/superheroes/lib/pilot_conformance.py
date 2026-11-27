@@ -18,6 +18,7 @@ import sys
 import tempfile
 from datetime import timezone
 
+import git_routing
 import store
 
 SCHEMA = 1
@@ -102,7 +103,13 @@ REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
 REASON_CLI_PROJECT_INVALID = "conformance-cli-project-invalid"
 REASON_CLI_COMMIT_UNREADABLE = "conformance-cli-commit-unreadable"
 
-_COMMIT_OID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+_COMMIT_OID_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def is_commit_oid(value):
+    """True for a full lowercase hex object id (40 or 64 characters): the one rule the report
+    stamp and the acceptance matrix's reference both apply to a commit."""
+    return isinstance(value, str) and _COMMIT_OID_RE.fullmatch(value) is not None
 
 _EXERCISE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
 EVIDENCE_MAX_LEN = 500
@@ -938,17 +945,24 @@ def report_reference(project, cwd):
     """
     if not isinstance(project, str) or not project or _has_control_char(project):
         raise PilotConformanceError(REASON_CLI_PROJECT_INVALID)
+    # bite-axis: checkout identity — inherited routing variables (GIT_DIR and the rest) would let
+    # `git -C` read another checkout's HEAD, so the lookup runs with them removed.
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in git_routing.GIT_ROUTING_VARS
+    }
     try:
         proc = subprocess.run(
             ["git", "-C", cwd, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         raise PilotConformanceError(REASON_CLI_COMMIT_UNREADABLE)
     commit = proc.stdout.strip()
-    if proc.returncode != 0 or not _COMMIT_OID_RE.match(commit):
+    if proc.returncode != 0 or not is_commit_oid(commit):
         raise PilotConformanceError(REASON_CLI_COMMIT_UNREADABLE)
     return {"project": project, "commit": commit}
 

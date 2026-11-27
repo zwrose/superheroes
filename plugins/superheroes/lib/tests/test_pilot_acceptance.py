@@ -12,6 +12,7 @@ _LIB = os.path.realpath(os.path.join(_HERE, ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import git_routing  # noqa: E402
 import pilot_acceptance as pa  # noqa: E402
 import pilot_conformance as pc  # noqa: E402
 import pilot_conformance_declarations as pcd  # noqa: E402
@@ -821,13 +822,23 @@ def _pinned_git_env():
     return env
 
 
+def _fixture_git_env():
+    """The fixture's own git calls: pinned config, and no inherited routing variable, so a test
+    that sets GIT_DIR for the run under test never redirects the fixture's commits."""
+    env = _pinned_git_env()
+    for key in git_routing.GIT_ROUTING_VARS:
+        if key not in ("GIT_CONFIG_GLOBAL",):
+            env.pop(key, None)
+    return env
+
+
 def _git(path, *args):
     return subprocess.run(
         ["git", "-C", str(path)] + list(args),
         capture_output=True,
         text=True,
         check=True,
-        env=_pinned_git_env(),
+        env=_fixture_git_env(),
     )
 
 
@@ -949,7 +960,77 @@ def test_conformance_run_refuses_invalid_project(tmp_path):
     _commit_checkout(reach_root)
     proc = _run_conformance(reach_root, policy_root, "--project", "")
     assert proc.returncode == 2
+    assert proc.stdout == ""
     assert proc.stderr.strip() == pc.REASON_CLI_PROJECT_INVALID
+
+
+def test_conformance_run_unreadable_commit_ignores_inherited_git_dir(tmp_path, monkeypatch):
+    """A --cwd that is no checkout still refuses when an inherited GIT_DIR names a real one."""
+    reach_root, policy_root = _conformance_fixture(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "marker.txt").write_text("elsewhere\n", encoding="utf-8")
+    _commit_checkout(elsewhere)
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    proc = _run_conformance(reach_root, policy_root, "--project", "demo")
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.strip() == pc.REASON_CLI_COMMIT_UNREADABLE
+
+
+def _refusal_probe(monkeypatch):
+    """Swap in one registered exercise that records each call, so a test sees whether any ran."""
+    ran = []
+
+    @pc.register("refusal-probe", surfaces=["pilot_reclaim.sweep"])
+    def probe(inputs, now):
+        ran.append("probe")
+        return pc.exercise_record(
+            exercise="refusal-probe",
+            surfaces=["pilot_reclaim.sweep"],
+            result=pc.RESULT_PASS,
+            reason=None,
+            evidence="probe ran",
+            exercised_at=now,
+        )
+
+    monkeypatch.setattr(pc, "default_exercises", lambda: [probe])
+    return ran
+
+
+@pytest.mark.parametrize(
+    "project, make_checkout, reason",
+    [
+        ("demo", False, pc.REASON_CLI_COMMIT_UNREADABLE),
+        ("", True, pc.REASON_CLI_PROJECT_INVALID),
+    ],
+)
+def test_conformance_reference_refusal_runs_no_exercise(
+    tmp_path, monkeypatch, capsys, project, make_checkout, reason
+):
+    """bite-axis: preflight order — a refused stamp stops the run before any exercise runs."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "marker.txt").write_text("checkout\n", encoding="utf-8")
+    if make_checkout:
+        _commit_checkout(checkout)
+    ran = _refusal_probe(monkeypatch)
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        str(checkout),
+        "--now",
+        _GENERATED_AT,
+        "--allow-live-effects",
+        "--project",
+        project,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == reason
+    assert ran == []
 
 
 def test_conformance_run_without_project_stamps_no_reference(tmp_path):
