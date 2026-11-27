@@ -453,8 +453,10 @@ def audit_unseatable_cause(state, config=None):
             cause = (CAUSE_RUNNER_CHANNEL_ONLY if host_vendor is not None
                      else CAUSE_PINNED_ROSTER_EXCLUDES if unpinned_vendor is not None
                      else CAUSE_NO_INDEPENDENT_VENDOR)
-        source = cfg.get("vendorsSource") or "default"
-        pool = "the pool read the session's vendor list (config.vendors, from %s) = [%s]" % (source, ", ".join(vendors))
+        # axis: a vendor list whose source the session never recorded is named as unrecorded, never as the default
+        source = cfg.get("vendorsSource") if isinstance(cfg.get("vendorsSource"), str) and cfg.get("vendorsSource") else None
+        pool = ("the pool read the session's vendor list (config.vendors, %s) = [%s]"
+                % ("from " + source if source else "source not recorded", ", ".join(vendors)))
         pin_text = (", and the pinned vendors (%s)" % ", ".join(sorted(pinned))) if pinned else ""
         if cause == CAUSE_FIXER_FAMILY_UNKNOWN:
             detail = ("the fixer's family is unknown (fixerVendor %s), so no auditor can be judged "
@@ -476,7 +478,7 @@ def audit_unseatable_cause(state, config=None):
                 "runnerOnly": runner_only, "detail": detail}
     except Exception as exc:  # never raises: a malformed state still names a cause
         return {"cause": CAUSE_NO_INDEPENDENT_VENDOR, "vendorList": "config.vendors", "vendors": [],
-                "vendorsSource": "default", "fixerVendor": None, "fixerFamily": None,
+                "vendorsSource": None, "fixerVendor": None, "fixerFamily": None,
                 "makerFamilies": [], "pinnedVendors": None, "runnerOnly": False,
                 "detail": "no independent vendor available: the vendor list could not be read (%s)"
                           % type(exc).__name__}

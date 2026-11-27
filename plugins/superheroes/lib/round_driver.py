@@ -19513,6 +19513,9 @@ def _dispatch(args):
                     overrides["vendors"] = map_vendors
                     overrides["vendorsSource"] = "seat-map"
             overrides["seatMap"] = seat_map_obj
+        if "vendors" not in overrides:
+            # a fresh CLI session that names no vendor list runs on the default one, and says so
+            overrides["vendorsSource"] = "default"
         if args.copy_proof is not None:
             # Same fresh-state-only discipline as `--seat-map`: the proof is checked ONCE at new_state,
             # so accepting it on existing state would silently ignore it.

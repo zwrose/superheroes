@@ -108,7 +108,7 @@ def test_seat_map_without_live_vendors_keeps_todays_default(tmp_path, capsys, ov
     assert rc == 0 and out["ok"], out
     ok, state = RD.load_state(d)
     assert ok and state["config"]["vendors"] == ["claude"]
-    assert "vendorsSource" not in state["config"]
+    assert state["config"]["vendorsSource"] == "default"
 
 
 @pytest.mark.parametrize("bad", ["claude,codex", ["claude", 5], ["claude", " codex"], ["acme"]],
@@ -222,8 +222,12 @@ def test_the_three_causes_each_name_the_vendor_list_they_read():
     for cause in (unknown, runner, none):
         assert cause["cause"] in RDISC.AUDIT_UNSEATABLE_CAUSES
         assert "config.vendors" in cause["detail"]
-        assert "from " + cause["vendorsSource"] in cause["detail"]
+        named = "from " + cause["vendorsSource"] if cause["vendorsSource"] else "source not recorded"
+        assert named in cause["detail"]
         assert cause["pinnedVendors"] is None
+    # axis: an explicit list whose source the session never recorded is named as unrecorded, never as the default
+    assert unknown["vendorsSource"] is None and "source not recorded" in unknown["detail"]
+    assert "from default" not in unknown["detail"]
 
 
 def test_the_pinned_roster_cause_names_the_excluded_vendor_and_the_list_source():
