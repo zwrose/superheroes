@@ -45,14 +45,23 @@ class Gh:
         self.sticky = False
         self.open_raw = None  # when set, the open-PR listing's raw stdout
         self.delete_script = []  # per DELETE, in order: (removes the branch, then times out)
-        self.closing = {}  # PR number -> the closingIssuesReferences rows `gh pr view` answers; absent, the read fails
+        # PR number -> the closingIssuesReferences rows `gh pr view` answers; None makes the read fail; absent, the
+        # rows are the issues the pull's `_closes` names (GitHub's own list for a `Closes #N` description), and the
+        # read fails for a pull that names none
+        self.closing = {}
+        self.timelines = {}  # issue number -> the REST timeline rows `repos/owner/name/issues/<n>/timeline` answers; absent, none
 
     def __call__(self, argv, **kw):
         assert argv[0] == "gh", argv
         self.calls.append(tuple(argv))
         if argv[1:3] == ["pr", "view"]:
             assert argv[4:] == ["--repo", REPO, "--json", "closingIssuesReferences"], argv
-            rows = self.closing.get(int(argv[3]))
+            number = int(argv[3])
+            if number in self.closing:
+                rows = self.closing[number]
+            else:
+                closes = self.pulls.get(number, {}).get("_closes")
+                rows = None if closes is None else [_ref(i) for i in closes]
             if rows is None:
                 return SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: HTTP 403")
             return SimpleNamespace(returncode=0, stdout=json.dumps({"closingIssuesReferences": rows}), stderr="")
@@ -93,8 +102,15 @@ class Gh:
             assert "--paginate" not in argv and page.isdigit(), argv
             rows = self.sub_issues.get(int(listing[len(base + "/issues/"):].split("/", 1)[0]), [])
             return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]), stderr="")
+        if listing.startswith(base + "/issues/") and listing.endswith("/timeline?per_page=100"):
+            assert "--paginate" not in argv and page.isdigit(), argv
+            rows = self.timelines.get(int(listing[len(base + "/issues/"):].split("/", 1)[0]), [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]), stderr="")
         if path.startswith(base + "/issues/") and path[len(base + "/issues/"):].isdigit():
-            issue = self.issues.get(int(path.rsplit("/", 1)[1]), {"parent_issue_url": None})
+            number = int(path.rsplit("/", 1)[1])
+            issue = self.issues.get(number, {"parent_issue_url": None})
+            if isinstance(issue, dict):
+                issue = dict(issue, number=number)  # a REST issue object names its own number
             return SimpleNamespace(returncode=0, stdout=json.dumps(issue), stderr="")
         assert path.startswith(base + "/git/ref/heads/"), path
         branch = urllib.parse.unquote(path[len(base + "/git/ref/heads/"):])
@@ -111,8 +127,22 @@ def _pull(issues=(101,), state="closed", merged=True, head_sha=None, head_repo=R
     head = {"ref": ref, "sha": head_sha, "repo": {"full_name": head_repo} if head_repo else None}
     return {"state": state, "merged": merged, "merged_at": "2026-10-12T10:00:00Z" if merged else None,
             "closed_at": closed_at if state == "closed" else None, "created_at": created_at,
-            "body": body,
-            "head": head, "base": {"ref": "main", "repo": {"full_name": REPO}}}
+            "body": body, "_closes": list(issues),
+            "head": head, "base": {"ref": "main", "repo": {"full_name": REPO, "default_branch": "main"}}}
+
+
+def _as_layer(w, number, issue, extra=()):
+    """Make pull `number` a layer of a native stack: a non-default base, a `number`, and a REST `stack` object,
+    with the timeline of `issue` (and of each `extra` issue) recording a cross-reference from it. It then has
+    no closing-list answer to give: a layer is linked only by the timeline."""
+    pull = w.gh.pulls[number]
+    pull["base"] = {"ref": "layer-below", "repo": {"full_name": REPO, "default_branch": "main"}}
+    pull["number"] = number
+    pull["stack"] = {"number": 7, "position": 2, "size": 3, "base": {"ref": "main"}}
+    pull.pop("_closes", None)
+    for n in (issue, *extra):
+        w.gh.timelines[n] = [{"event": "cross-referenced", "source": {"issue": {
+            "number": number, "pull_request": {}, "repository": {"full_name": REPO}}}}]
 
 
 def _open_pr(head_ref="other", base_ref="main", head_repo=REPO):
@@ -434,13 +464,16 @@ def test_a_pr_whose_close_line_sits_below_a_note_is_linked(w):
     assert out["linkSource"] == "github", out
 
 
-def test_a_note_above_the_close_line_with_githubs_list_unreadable_is_unlinked(w):
-    # axis: with GitHub's list unreadable only the first line is read, so a note above "Closes #N" leaves the PR unlinked
+def test_a_pr_whose_githubs_list_cannot_be_read_is_unreadable_never_unlinked(w):
+    # axis: with GitHub's list unreadable the PR's links are unreadable (the description is never read in its place), so nothing is sent or deleted
     _lane(w, "l-1", 101)
     pull = _pull(head_sha=w.head)
     pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
     w.gh.pulls[PR] = pull
-    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
+    w.gh.closing[PR] = None  # the read fails
+    assert _plan(w) == {"ok": False, "reason": "pr-links-unreadable"}
+    assert _branch(w) == {"ok": False, "reason": "pr-links-unreadable"}
+    assert w.gh.deletes == [] and BRANCH in _remote_branches(w)
 
 
 def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
@@ -449,11 +482,12 @@ def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
     pull = _pull(head_sha=w.head)
     pull["body"] = "A note.\n\nCloses other/repo#101\n\nthe work"
     w.gh.pulls[PR] = pull
+    w.gh.closing[PR] = [_ref(101, "other/repo")]
     assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
 
 
 def test_a_closing_example_in_code_does_not_link_a_second_issue(w):
-    # axis: Markdown code; a backticked example close line read as a second linked issue
+    # axis: Markdown code; a backticked example close line read as a second linked issue. GitHub's list decides which issues close
     _lane(w, "l-1", 101, session="session-a")
     _lane(w, "l-2", 202, session="session-b")
     pull = _pull(head_sha=w.head)
@@ -463,15 +497,17 @@ def test_a_closing_example_in_code_does_not_link_a_second_issue(w):
     assert out["ok"] and out["issue"] == 101 and out["launchId"] == "l-1", out
 
 
-def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
-    # axis: the sibling cases; a first-line link stopped linking, or a body with no keyword linked
-    assert CP._body_links("Closes #7.\n\nbody", REPO) == [7]
-    assert CP._body_links("the work\n\nmentions #8 in passing", REPO) == []
-    assert CP._body_links("Part of #9.\n\nbody", REPO) == [9]
-    assert CP._body_links("This PR fixes #10.", REPO) == [10]
-    assert CP._body_links("Closes other/repo-#202", REPO) == []
-    assert CP._body_links("See x/y#3 and a-#4", REPO) == []
-    assert CP._body_links("Part of (#9).", REPO) == [9]
+def test_the_first_line_candidates_are_its_closing_issues_and_its_bare_mentions(w):
+    # axis: the sibling cases; a first-line candidate stopped nominating, or one from below the first line, another repository or a longer word did
+    assert CP._first_line_candidates("Closes #7.\n\nbody", REPO) == [7]
+    assert CP._first_line_candidates("the work\n\nmentions #8 in passing", REPO) == []
+    assert CP._first_line_candidates("Part of #9.\n\nbody", REPO) == [9]
+    assert CP._first_line_candidates("This PR fixes #10.", REPO) == [10]
+    assert CP._first_line_candidates("Closes other/repo-#202", REPO) == []
+    assert CP._first_line_candidates("See x/y#3 and a-#4", REPO) == []
+    assert CP._first_line_candidates("Part of (#9).", REPO) == [9]
+    assert CP._first_line_candidates("Closes #7, see #8 and #7", REPO) == [7, 8]
+    assert CP._first_line_candidates(None, REPO) == []
 
 
 def _ref(number, repo=REPO):
@@ -493,15 +529,17 @@ def test_githubs_own_closing_list_decides_where_it_can_be_read_even_against_the_
     assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}  # GitHub's empty list is read, never the body's #202
 
 
-def test_the_body_is_read_only_when_githubs_list_cannot_be_read(w):
-    # axis: the fallback; an unreadable or malformed answer from GitHub read as no links instead of falling back
+def test_the_body_is_never_read_when_githubs_list_cannot_be_read(w):
+    # axis: the fallback is gone; an unreadable or malformed answer from GitHub is unreadable, never no links and never the body's
     _lane(w, "l-1", 101)
     w.gh.pulls[PR] = _pull(head_sha=w.head)
     out = _plan(w)
-    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
+    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "github", out
+    w.gh.closing[PR] = None  # the read fails, though the body says "Closes #101"
+    assert _plan(w) == {"ok": False, "reason": "pr-links-unreadable"}
     w.gh.closing[PR] = [{"number": 101}]  # an entry naming no repository is not GitHub's answer
-    out = _plan(w)
-    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
+    assert _plan(w) == {"ok": False, "reason": "pr-links-unreadable"}
+    assert _branch(w) == {"ok": False, "reason": "pr-links-unreadable"}
 
 
 def test_a_local_lane_is_no_cloud_lane(w):
@@ -541,7 +579,7 @@ def test_the_plan_carries_the_lanes_facts_and_the_newest_cloud_lane_of_the_issue
     assert got == {"ok": True, "action": "cleanup", "outcome": "merged", "repo": REPO, "pr": PR, "issue": 101,
                    "launchId": "l-2", "session": "session-two", "sessionId": "session_01AbCdEf123", "configDir": None,
                    "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "closedAt": "2026-10-12T10:00:00Z", "branch": BRANCH,
-                   "headSha": w.head, "linkSource": "body"}
+                   "headSha": w.head, "linkSource": "github"}
 
 
 _T1, _T2, _OPENED = 1_700_000_000, 1_700_100_000, "2023-11-15T00:00:00Z"  # _OPENED is between them
@@ -646,6 +684,7 @@ def test_the_cli_prints_one_json_object_and_exits_1_on_a_refusal(w, capsys, monk
     for key, value in w.env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(CC, "subprocess", SimpleNamespace(run=w.gh))
+    monkeypatch.setattr(CC._sib("cloud_builder"), "subprocess", SimpleNamespace(run=w.gh))  # the link read runs through it
     _lane(w, "l-1", 101)
     base = ["--repo-root", w.repo, "--repo", REPO, "--pr", str(PR)]
     assert CC.main(["plan"] + base) == 0
@@ -1145,14 +1184,15 @@ def test_a_closing_keyword_in_an_indented_block_never_binds_a_stack_layer_to_ano
     "\n\n`example\n\x0c\nFixes #999\n\x0c\nend`\n",
 ], ids=["code-element", "anchor-element", "anchor-on-a-list-line", "code-span-over-no-break-space-lines",
         "code-span-over-form-feed-lines"])
-def test_with_githubs_list_unreadable_markup_in_a_stack_layers_body_never_binds_another_lane(w, block):
-    # axis: the fail direction; with GitHub's list unreadable, only the description's first line is read, so markup GitHub does not read as a close link binds no other issue's lane
+def test_markup_below_a_stack_layers_first_line_never_binds_another_lane(w, block):
+    # axis: the fail direction; a stack layer's candidates are read from the description's first line only, so markup below it binds no other issue's lane, even where the timeline records a cross-reference for it
     _stack(w)
     _lane(w, "l-9", 999, session="session-z", ts=_T1)
-    w.gh.pulls[501]["body"] += block  # w.gh.closing has no entry for 501: GitHub's list is unreadable
+    w.gh.pulls[501]["body"] += block
+    _as_layer(w, 501, 201, extra=(999,))
     out = _plan_n(w, 501)
     assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
-    assert out["linkSource"] == "body", out
+    assert out["linkSource"] == "timeline", out
 
 
 def _plan_n(w, number, **kw):

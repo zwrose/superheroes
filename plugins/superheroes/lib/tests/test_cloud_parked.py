@@ -50,15 +50,26 @@ RENEW_WORDS = ("renew", "fresh pass", "new pass")
 
 
 class Gh:
-    """Fake `gh api`: answers keyed by the endpoint; comments are served 100 a page, by page number."""
+    """Fake `gh api`: answers keyed by the endpoint; comments and timeline rows are served 100 a page, by page
+    number. `gh pr view` answers GitHub's closing list: `closing[pr]` when set (None makes the read fail),
+    else the issues the pull's `_closes` names (none when it names none); `issue_objects[n]` and `timelines[n]`
+    answer the REST issue object and its timeline rows."""
 
     def __init__(self):
         self.comments, self.pulls, self.broken, self.calls = {}, {}, set(), []
         self.comment_reads, self.comments_fail_from = 0, None
+        self.closing, self.issue_objects, self.timelines = {}, {}, {}
 
     def __call__(self, argv, **_kw):
         self.calls.append(tuple(argv))
         assert "--paginate" not in argv, argv
+        if argv[1:3] == ["pr", "view"]:
+            assert argv[4:] == ["--repo", REPO, "--json", "closingIssuesReferences"], argv
+            pr = int(argv[3])
+            rows = self.closing[pr] if pr in self.closing else [_ref(i) for i in self.pulls[pr].get("_closes", [])]
+            if rows is None:
+                return SimpleNamespace(returncode=1, stdout="")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"closingIssuesReferences": rows}))
         path, _, page = argv[-1].partition("?per_page=100&page=")
         if path in self.broken:
             return SimpleNamespace(returncode=1, stdout="")
@@ -66,6 +77,12 @@ class Gh:
             return SimpleNamespace(returncode=0, stdout="not json")
         parts = path.split("/")
         number = int(parts[4])
+        if parts[3] == "issues" and len(parts) == 5:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(self.issue_objects.get(number, {"number": number})))
+        if parts[3] == "issues" and parts[5] == "timeline":
+            assert page.isdigit(), argv
+            rows = self.timelines.get(number, [])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows[(int(page) - 1) * 100:int(page) * 100]))
         if parts[3] == "issues":
             assert page.isdigit(), argv
             self.comment_reads += 1
@@ -102,9 +119,33 @@ def _record_comment(pr, missing, sha="h1", status=None):
     return {"id": 500 + pr, "body": RR.MARKER + "\n<details>\n\n```json\n" + json.dumps(rec) + "\n```\n</details>\n"}
 
 
+def _ref(number, repo=REPO):
+    """One row of GitHub's closingIssuesReferences list."""
+    owner, name = repo.split("/")
+    return {"number": number, "repository": {"name": name, "owner": {"login": owner}}}
+
+
+MAIN = {"ref": "main", "repo": {"default_branch": "main"}}  # a pull on its default base
+
+
 def _pull(issue=None, state="open", merged=False):
+    """A pull on its default base; `_closes` is what GitHub's closing list holds for it (the fake reads it)."""
     body = "Closes #%d\n\nthe work" % issue if issue else "the work"
-    return {"state": state, "merged": merged, "body": body, "head": {"sha": "h1"}}
+    return {"state": state, "merged": merged, "body": body, "head": {"sha": "h1", "ref": "work"}, "base": dict(MAIN),
+            "_closes": [issue] if issue else []}
+
+
+def _layer(pr, body, base="stack-below"):
+    """A pull that is a layer of a native stack: a non-default base, a number, and a REST `stack` object."""
+    return {"state": "open", "merged": False, "body": body, "number": pr, "head": {"sha": "h1", "ref": "work-%d" % pr},
+            "base": {"ref": base, "repo": {"default_branch": "main"}},
+            "stack": {"number": 7, "position": 2, "size": 3, "base": {"ref": "main"}}}
+
+
+def _cross_ref(pr, repo=REPO):
+    """A timeline row: a cross-reference from pull request `pr` of `repo`."""
+    return {"event": "cross-referenced",
+            "source": {"issue": {"number": pr, "pull_request": {}, "repository": {"full_name": repo}}}}
 
 
 def _account_file(directory, account):
@@ -212,7 +253,7 @@ def test_notice_for_a_lapsed_pass_park_names_the_pr_the_reason_and_the_renewal(w
     w.gh.comments[42] = [{"id": 1, "body": "hello"}, _lapsed_comment(42)]
     w.gh.pulls[42] = _pull(101)
     out = _notice(w, 42)
-    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42, "linkSource": "body"}
+    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42, "linkSource": "github"}
     assert out["text"].startswith("#42 is parked.") and "lapsed" in out["text"] and "Renew the pass" in out["text"]
     assert _entries(w) == [{"repo": REPO, "pr": 42, "parkedOn": "2026-10-05", "outcome": None,
                             "launchId": "l-42", "parkId": 942}]
@@ -262,7 +303,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [],
                    "adopt": [], "adopting": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
-        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "body"}]}
+        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "github"}]}
     assert _entries(w)[0]["outcome"] is None
 
 
@@ -324,7 +365,7 @@ def test_the_notice_by_stored_outcome_and_whether_the_park_is_newer(w, outcome, 
     out = _notice(w, 10)
     saved = _entries(w)[0]
     if newer:
-        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10, "linkSource": "body"}
+        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10, "linkSource": "github"}
         assert saved["outcome"] is None and saved["parkId"] == 1010 and saved["parkedOn"] == "2026-10-11"
     elif outcome in ("closed", "owner-let-through"):
         assert out == {"ok": True, "kind": "park-resolved", "pr": 10, "text": None}
@@ -841,21 +882,25 @@ def test_with_a_lapsed_pass_the_owner_hears_it_on_the_report_the_still_line_and_
 
 
 def test_a_pr_whose_closing_line_uses_another_accepted_form_still_finds_its_lane(w):
+    # GitHub's closing list decides, whatever form the closing line takes
     _lane(w, "l-a", 101, "session-a", "a")
     for pr, first in ((10, "Fixes: #101"), (11, "Closes %s#101." % REPO)):
         w.gh.comments[pr] = [_lapsed_comment(pr)]
-        w.gh.pulls[pr] = {"state": "open", "merged": False, "body": first + "\n\nthe work"}
+        w.gh.pulls[pr] = dict(_pull(101), body=first + "\n\nthe work")
         assert _notice(w, pr)["kind"] == "lapsed-pass"
     _renew(w)
     out = _send(w)
     assert out["noLane"] == [] and [s["pr"] for s in out["sendBack"]] == [10, 11]
 
 
-def test_a_pr_whose_first_line_only_says_part_of_an_issue_still_finds_its_cloud_lane(w):
+def test_a_stack_layer_whose_first_line_only_says_part_of_an_issue_still_finds_its_cloud_lane(w):
+    # a layer of a stack is linked by the timeline's cross-reference, never by the words "Part of #101" alone
     _lane(w, "l-a", 101, "session-a", "a")
     w.gh.comments[12] = [_lapsed_comment(12)]
-    w.gh.pulls[12] = {"state": "open", "merged": False, "body": "Part of #101.\n\nthe work", "head": {"sha": "h1"}}
-    assert _notice(w, 12)["kind"] == "lapsed-pass"
+    w.gh.pulls[12] = _layer(12, "Part of #101.\n\nthe work")
+    w.gh.timelines[101] = [_cross_ref(12)]
+    out = _notice(w, 12)
+    assert out["kind"] == "lapsed-pass" and out["linkSource"] == "timeline"
     assert _entries(w)[0]["launchId"] == "l-a"
     _renew(w)
     out = _send(w)
@@ -1155,7 +1200,7 @@ def test_a_recover_state_that_cannot_be_read_sends_nothing_back(w):
 def test_a_rebind_stays_on_the_superseded_lanes_own_issue(w):
     _lane(w, "l-old", 101, "old-session", "a", finished=True)
     w.gh.comments[10] = [_lapsed_comment(10)]
-    w.gh.pulls[10] = {"state": "open", "merged": False, "body": "Closes #101, closes #102", "head": {"sha": "h1"}}
+    w.gh.pulls[10] = dict(_pull(), body="Closes #101, closes #102", _closes=[101, 102])
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     _supersede(w, "l-old")
     _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
@@ -1223,7 +1268,7 @@ def _adopt_item(pr, issue, launch_id, session, park_id, cause):
     return {"pr": pr, "repo": REPO, "issue": issue, "launchId": launch_id, "parkId": park_id,
             "cloudSessionName": session, "configDir": None, "cause": cause,
             "notice": cloud_builder.superseded_notice_text(launch_id), "message": CP.ADOPT_MESSAGE % launch_id,
-            "linkSource": "body"}
+            "linkSource": "github"}
 
 
 def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and_adopted_once_renewed(w):
@@ -1232,7 +1277,7 @@ def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and
     w.gh.pulls[10] = _pull(101)
     out = _notice(w, 10)
     assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "cause": "rejected", "text": CP.REJECTED_NOTICE_TEXT % 10,
-                   "linkSource": "body"}
+                   "linkSource": "github"}
     assert "401" in out["text"] and "sign-in was rejected" in out["text"]
     assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": "2026-10-05", "outcome": None,
                             "launchId": "l-a", "parkId": 910, "cause": "rejected"}]
@@ -1241,7 +1286,7 @@ def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and
     w.gh.comments[11] = [_park_comment(11, free)]
     w.gh.pulls[11] = _pull()
     assert _notice(w, 11) == {"ok": True, "kind": "lapsed-pass", "pr": 11, "cause": "rejected",
-                              "text": CP.REJECTED_NOTICE_TEXT % 11, "linkSource": "body"}
+                              "text": CP.REJECTED_NOTICE_TEXT % 11, "linkSource": "github"}
     assert _entries(w)[1]["cause"] == "rejected"
     # not yet renewed: the record was written before the lane started
     _renew(w)
@@ -1277,7 +1322,7 @@ def test_a_newer_park_of_the_other_cause_replaces_the_entry_and_the_newest_park_
                             "parkId": 1010, "cause": "rejected"}]
     w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-09T10:00:00Z", cid=1011))
     assert _notice(w, 10) == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10,
-                              "linkSource": "body"}
+                              "linkSource": "github"}
     assert "cause" not in _entries(w)[0] and _entries(w)[0]["parkId"] == 1011
 
 
@@ -1300,7 +1345,7 @@ def test_t2_a_lane_started_before_the_renewal_is_adopted_and_one_started_after_i
     assert out["adopt"] == [_adopt_item(10, 101, "l-a", "session-a", 910, "rejected")]
     assert out["adopt"][0]["message"] == CP.ADOPT_MESSAGE % "l-a"
     assert out["sendBack"] == [{"pr": 11, "repo": REPO, "issue": 102, "launchId": "l-b", "parkId": 911,
-                                "cloudSessionName": "session-b", "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "body"}]
+                                "cloudSessionName": "session-b", "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "github"}]
     assert [s["pr"] for s in out["sendBack"]] == [11] and 10 not in [s["pr"] for s in out["sendBack"]]
     assert out["notRenewed"] == [] and out["adopting"] == []
     assert [e["outcome"] for e in _entries(w)] == ["adopting", None]

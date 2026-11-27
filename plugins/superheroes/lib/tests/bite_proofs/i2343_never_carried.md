@@ -4,6 +4,8 @@ Detector file: `plugins/superheroes/lib/tests/test_review_record_carried_2343.py
 
 The detectors the entries name are the tests that carry a `# bite-proof:` line (T1, T2, T3, T4, T5, T6, T7). The extra case `test_e_a_no_earlier_record_at_all_keeps_the_finding` carries an `# axis:` line only and is not part of any proof.
 
+**Superseded in part (issue 2658).** T6 here pinned an older record of another session carrying a finding past an unreadable latest record. Issue 2658 reversed that axis: an unreadable latest record now stops the walk and the finding is kept, with the re-check naming the record. T6 now carries that axis, and its bite-proof is `i2658_review_record_links.md`. The T6 captures below are the record of the earlier behaviour.
+
 ## 1. A finding only this session's own record lists is not carried (left-for-owner and undecided)
 
 - **Axis:** a finding counts as carried only when the earlier record of another session lists it, for every outcome, never on this session's own earlier record.

@@ -289,7 +289,9 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     if closed is None:
         return _refusal("pr-unreadable"), None
     cp = _sib("cloud_parked")
-    issues, link_source = cp._linked_issues(pull, repo, pr, env, run)
+    issues, link_source = cp._linked_issues(pull, repo, pr, env, run, require_stack=True)
+    if link_source == "unreadable":  # axis: an unreadable link read refuses, never reads as no link — see bite-proof record i2658_parked_links
+        return _refusal("pr-links-unreadable"), None
     if not issues:
         return _refusal("pr-unlinked"), None
     head_ref = _name(pull.get("head"), "ref")

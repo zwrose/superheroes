@@ -137,9 +137,9 @@ def _write(tmp_path, rd, acct):
 
 
 @pytest.mark.parametrize("finding", CASES)
-def test_t6_an_unreadable_latest_record_leaves_the_older_other_session_record_to_carry_the_finding(tmp_path, finding):
-    # axis: the latest record unreadable, the newest readable record of another session carries the finding and the unreadable one is listed
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2343_never_carried.md
+def test_t6_an_unreadable_latest_record_stops_the_older_other_session_record_from_carrying_the_finding(tmp_path, finding):
+    # axis: the latest record unreadable, the older readable record of another session read past it to settle the finding (issue 2658, I2)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2658_review_record_links.md
     fake, calls = Fake(), []
     rd = _wired(fake, calls)
     assert _write(tmp_path, rd, account([], [finding], session="s-0"))["ok"]
@@ -147,9 +147,11 @@ def test_t6_an_unreadable_latest_record_leaves_the_older_other_session_record_to
     fake.comments.append({"id": bad, "author": "a", "body": rr.MARKER + "\nhand edited", "url": "u-bad"})
     assert _write(tmp_path, rd, account([entry()], [finding], session="s-1"))["ok"]
     rec = rr.read(7, readers=rd)
-    assert the_one(rec)["outcome"] == "fixed" and [r["result"] for r in rec["carriedRechecks"]] == ["fixed"]
+    assert the_one(rec)["outcome"] == finding.get("outcome")
+    assert [r["result"] for r in rec["carriedRechecks"]] == ["kept"]
+    assert "an earlier review record could not be read (u-bad" in json.dumps(rec["carriedRechecks"][0])
     assert rec["earlierRecordsNotChecked"] == [{"id": bad, "url": "u-bad", "why": "unreadable"}]
-    assert calls == [(str(tmp_path), FIX, HEAD)]
+    assert calls == []
 
 
 def test_t7_two_writes_by_one_session_never_move_the_finding_the_first_listed(tmp_path):

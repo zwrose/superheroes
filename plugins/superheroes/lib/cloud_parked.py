@@ -41,6 +41,7 @@ ADOPT_MESSAGE = ("A newer launch takes over this pull request's review: a renewe
                  "a running session, so a fresh session adopts your pushed branch. Do not run the review. "
                  "Run your wake check for a newer launch now, with --launch-id %s, and follow your cloud "
                  "reference's steps for superseded: true.")
+LINK_SOURCES = ("github", "timeline", "unreadable")  # where a PR's linked issues were read; "unreadable" is never "no link"
 _ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
 _LAUNCH_KEY = "launchId"  # the lane the park came from; absent on an entry written before it was kept
 _PARK_KEY = "parkId"  # id of the latest park comment seen; absent on an entry written before it was kept
@@ -301,32 +302,94 @@ def _let_through(repo, pr, env, run, head):
     return not parked and covers
 
 
-def _first_line_mentions(body):
-    """Every `#N` the body's first line names, in order (a non-closing link): one at the line's start, or right
-    after whitespace or `(`, so another repository's `x/y#3` or a `repo-#3` never counts."""
+_MENTION_RE = re.compile(r"(?:^|(?<=[\s(]))#([1-9]\d*)")
+
+
+def _first_line_candidates(body, repo):
+    """The issues a description's first line may link, in order, duplicates removed: those its closing keywords
+    name in `repo`, then every `#N` it names. A `#N` counts at the line's start, or right after whitespace or
+    `(`, so another repository's `x/y#3` or a `repo-#3` never counts. These only nominate: GitHub's timeline
+    confirms (`_linked_issues`)."""
     if not isinstance(body, str):
         return []
-    return [int(n) for n in dict.fromkeys(re.findall(r"(?:^|(?<=[\s(]))#([1-9]\d*)", body.split("\n", 1)[0]))]
+    first = body.split("\n", 1)[0]
+    mentions = [int(n) for n in _MENTION_RE.findall(first)]
+    return list(dict.fromkeys(_sib("review_record").closing_issues(first, repo) + mentions))
 
 
-def _body_links(body, repo):
-    """The issues the PR body links: those its closing keywords close (the body fallback's read), else any
-    `#N` its first line names."""
-    return _sib("review_record").closing_issues(body, repo) or _first_line_mentions(body)
+def _base_names(pull):
+    """(base ref, the base repository's default branch), each a non-blank string; None for either that cannot be
+    read, a blank name included."""
+    base = pull.get("base")
+    ref = base.get("ref") if isinstance(base, dict) else None
+    where = base.get("repo") if isinstance(base, dict) else None
+    default = where.get("default_branch") if isinstance(where, dict) else None
+
+    def named(value):
+        # axis: a blank branch name is unreadable, never a name to compare — see bite-proof record i2658_parked_links
+        return value if isinstance(value, str) and value.strip() else None
+    return named(ref), named(default)
 
 
-def _linked_issues(pull, repo, pr, env, run):
-    """(issues, source) for the PR: those GitHub's own closingIssuesReferences list closes (`source`
-    "github"), with nothing closed, any `#N` the body's first line names; or, when that list cannot be read
-    (`source` "body"), only the description's first line: the issues its closing keywords close, else any
-    `#N` it names."""
-    code, out = _sib("cloud_builder")._gh(
-        run, ["pr", "view", str(pr), "--repo", repo, "--json", "closingIssuesReferences"], env)
-    found = _sib("review_record").github_closing_issues(out if code == 0 else None, repo)
-    if found is None:
-        body = pull.get("body")
-        return _body_links(body.split("\n", 1)[0] if isinstance(body, str) else body, repo), "body"
-    return found or _first_line_mentions(pull.get("body")), "github"
+def _timeline_rows(repo, n, env, run):
+    """Every REST timeline row of issue `n`, or None when any page cannot be read (read as `_comments` reads)."""
+    def fetch(endpoint):
+        code, out = _sib("cloud_builder")._gh(run, ["api", endpoint], env)
+        return out if code == 0 else None
+    return _sib("gh_pages").read(fetch, "repos/%s/issues/%d/timeline" % (repo, n))
+
+
+def _issue_object(repo, n, env, run):
+    """The REST issue object `n`, or None when it cannot be read or is not JSON."""
+    code, out = _sib("cloud_builder")._gh(run, ["api", "repos/%s/issues/%d" % (repo, n)], env)
+    if code != 0:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def _linked_issues(pull, repo, pr, env, run, *, require_stack=False):
+    """(issues, source): the issues GitHub records as linked from this PR in this repository, and where that was
+    read. A description mention alone is never a link, and a read that cannot be made is never "no link".
+
+    - a PR on its default base: GitHub's own closingIssuesReferences list, in this repository (`source`
+      "github"); an empty list is readable and means no link;
+    - a PR on any other base, inside a native stack or not yet linked into one (an upper layer before the advisor
+      links it): GitHub gives it no closing references, so its links are the description's first-line candidates
+      that GitHub's REST issue timeline records a cross-reference from this PR for (`source` "timeline"). With
+      `require_stack` (cleanup, which deletes branches and archives sessions), a PR not in a native stack has no
+      link (`source` "github"), and its timeline is not read;
+    - a failed, refused or malformed read of any of these, or a pull whose base cannot be read: `([], "unreadable")`."""
+    # axis: a base that cannot be read leaves the links unreadable, never "no link" — see bite-proof record i2658_parked_links
+    base_ref, default = _base_names(pull)
+    if base_ref is None or default is None:
+        return [], "unreadable"
+    if base_ref == default:
+        code, out = _sib("cloud_builder")._gh(
+            run, ["pr", "view", str(pr), "--repo", repo, "--json", "closingIssuesReferences"], env)
+        found = _sib("review_record").github_closing_issues(out if code == 0 else None, repo)
+        # axis: a closing list that cannot be read is unreadable, never "no link" — see bite-proof record i2658_parked_links
+        if found is None:
+            return [], "unreadable"
+        # axis: the description's first line never links a default-base PR, only GitHub's list does — see bite-proof record i2658_parked_links
+        return found, "github"
+    sc = _sib("stack_check")
+    snapshot, refusal = sc._parse_rest_pull(pull, repo, pr, 0)
+    # axis: a non-default-base PR not yet in a native stack is read like a stack layer, never as no link; any other stack refusal is unreadable — see bite-proof record i2658_parked_links
+    if snapshot is None and refusal.get("reason") != sc.REASON_NOT_LINKED:
+        return [], "unreadable"
+    # axis: cleanup takes a non-default-base PR outside a native stack as having no link, so an issue reference alone never selects a lane to archive or a branch to delete — see bite-proof record i2658_parked_links
+    if snapshot is None and require_stack:
+        return [], "github"
+    # axis: a non-default-base PR's candidates link only when GitHub's timeline records a cross-reference from this PR — see bite-proof record i2658_parked_links
+    confirmed = _sib("review_record").recorded_links(
+        _first_line_candidates(pull.get("body"), repo), repo, pr,
+        lambda n: _issue_object(repo, n, env, run), lambda n: _timeline_rows(repo, n, env, run))
+    if confirmed is None:
+        return [], "unreadable"
+    return confirmed, "timeline"
 
 
 def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
@@ -396,13 +459,20 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         # axis: an unreadable recovery record refuses before the park id is saved, so a retry can still rebind to the replacement
         if old and not recover_readable:
             return _refusal("recover-state-unreadable")
+        # axis: a park with no saved launch whose links cannot be read refuses before anything is saved, so it never reads as "no link" — see bite-proof record i2658_parked_links
+        if not old and link_source == "unreadable":
+            return _refusal("pr-links-unreadable")
         rebind = bool(old) and old in superseded
         if rebind:
             _, was, why = _lane(repo_root, issues, env, old)
+            # axis: a rebind whose ledger read fails refuses before the new park is saved, so the same park can be retried — see bite-proof record i2658_parked_links
+            if why:
+                return _refusal(why)
             issues = [was["issue"]] if was else issues
+        # axis: a saved, unsuperseded launch is looked up whatever the link read says, since `_lane` ignores the issues when given a launch id — see bite-proof record i2658_parked_links
         launch_id, _, ledger_reason = (
             _lane(repo_root, issues, env, None if rebind else old,
-                  reserved_by=_park_time(parks[-1])) if issues else (None, {}, None))
+                  reserved_by=_park_time(parks[-1])) if (issues or (old and not rebind)) else (None, {}, None))
         if ledger_reason:
             return _refusal(ledger_reason)
         entries[:] = [e for e in entries if e not in known]
@@ -477,6 +547,10 @@ def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             continue
         issues, link_source = _linked_issues(pull, e["repo"], e["pr"], env, run)
+        # axis: an entry with no saved launch whose links cannot be read is unread, never a no-link PR — see bite-proof record i2658_parked_links
+        if link_source == "unreadable" and not e.get(_LAUNCH_KEY):
+            out["unread"].append({"pr": e["pr"], "reason": "pr-links-unreadable"})
+            continue
         launch_id, lane, ledger_reason = (
             _lane(repo_root, issues, env, e[_LAUNCH_KEY]) if e.get(_LAUNCH_KEY) else (None, {}, None))
         if ledger_reason:

@@ -21,7 +21,9 @@ CLI:
   review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 
 In a cloud session (CLAUDE_CODE_REMOTE is "true") the repo, PR and issue reads go through `gh api` REST, and the
-closing issues come from the closing keywords on the PR body's plain prose lines (see `_markdown_prose`).
+cloud reader confirms each description-named closing issue (the closing keywords on the PR body's plain prose lines,
+see `_markdown_prose`) against GitHub's REST issue timeline (`recorded_links`): the description alone never links an
+issue, and a link read that cannot be made is disclosed as unreadable, never read as "no link".
 """
 from __future__ import annotations
 
@@ -265,10 +267,15 @@ def _pr_meta(pr, repo):
     d = _gh_json("pr", "view", str(pr), "--json", "headRefOid,body,closingIssuesReferences",
                  *(["--repo", repo] if repo else []))
     try:
-        refs = [i["number"] for i in d.get("closingIssuesReferences") or [] if isinstance(i, dict)]
-        return {"head": d["headRefOid"], "body": d.get("body") or "", "issues": refs}
+        meta = {"head": d["headRefOid"], "body": d.get("body") or ""}
+        # axis: an issue counts only in the record's own repository; an entry with no repository, or no repository to compare, leaves the links unreadable — see bite-proof record i2658_review_record_links (G5)
+        issues = github_closing_issues(json.dumps({"closingIssuesReferences": d.get("closingIssuesReferences")}), repo) \
+            if repo else None
     except (KeyError, TypeError, AttributeError):
         return None
+    if issues is None:
+        return dict(meta, issues=[], issueLinks="unreadable")
+    return dict(meta, issues=issues)
 
 
 def _issue_body(n, repo):
@@ -373,14 +380,102 @@ def _closing_issues(body, repo):
 closing_issues = _closing_issues
 
 
+def _is_pos_int(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+
+def recorded_links(candidates, repo, pr, get_issue, list_timeline):
+    """The `candidates` (issue numbers, in order, duplicates removed) that GitHub records as linked from pull request
+    `pr` of `repo`, or None when any read fails or any row cannot be read. The description's words never make a link:
+    an issue is linked only when its REST timeline holds a `cross-referenced` row whose source is pull request `pr`
+    of `repo` (the repository compared without case).
+
+    `get_issue(n)` returns the REST issue object or None; a target that is a pull request is not linked, and its
+    timeline is not read. `list_timeline(n)` returns every REST timeline row (all pages) or None. A read that returns
+    None, a non-dict issue, an issue whose number is not `n`, a timeline that is not a list, a row that is not a dict,
+    a row whose `event` is not a non-blank string, and a cross-reference whose source is not an issue or whose pull
+    request row has no positive int number or no `owner/name` repository slug are unreadable: the answer is None,
+    never "no link"."""
+    # axis: a repository that is not owner/name, or a PR number that is not an int, leaves the whole answer unreadable
+    if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)) or not _is_pos_int(pr):
+        return None
+    wanted, found = [], []
+    for n in candidates:
+        if n not in wanted:
+            wanted.append(n)
+    for n in wanted:
+        try:
+            target = get_issue(n)
+            # axis: an issue read that fails, or answers another number, is unreadable, never "no link"
+            if not isinstance(target, dict) or not _is_pos_int(target.get("number")) or target["number"] != n:
+                return None
+            # axis: a target that is a pull request is readable and is not linked; its timeline is not read
+            if "pull_request" in target:
+                continue
+            rows = list_timeline(n)
+        except Exception:  # noqa: BLE001 — fail closed: a read that raises is unreadable
+            return None
+        # axis: a timeline that cannot be read whole is unreadable, never "no link"
+        if not isinstance(rows, list):
+            return None
+        linked = False
+        for row in rows:
+            # axis: a malformed timeline row is unreadable, never skipped
+            if not isinstance(row, dict):
+                return None
+            event = row.get("event")
+            # axis: a row whose event cannot be read is unreadable, never skipped as an unrelated event — see bite-proof record i2658_review_record_links
+            if not isinstance(event, str) or not event.strip():
+                return None
+            if event != "cross-referenced":
+                continue
+            source = row.get("source")
+            issue = source.get("issue") if isinstance(source, dict) else None
+            if not isinstance(issue, dict):
+                return None
+            if "pull_request" not in issue:
+                continue
+            number = issue.get("number")
+            repository = issue.get("repository")
+            full_name = repository.get("full_name") if isinstance(repository, dict) else None
+            # axis: a cross-reference whose PR number or repository name cannot be read is unreadable, never "no link"
+            # the strict GitHub owner/name slug (cloud_builder's), so a value such as `o/r?` is unreadable, never another repository
+            if not _is_pos_int(number) or not isinstance(full_name, str) or not cloud_builder._REPO_RE.fullmatch(full_name):
+                return None
+            # axis: only a cross-reference from this PR number counts, so another PR of the repository never links the issue
+            # axis: only a cross-reference from this repository counts, so another repository's PR with the same number never links the issue
+            if number == pr and full_name.lower() == repo.lower():
+                linked = True
+        # axis: the issue is linked only when the timeline holds the cross-reference; the description's words alone never link it
+        if linked:
+            found.append(n)
+    return found
+
+
 def _pr_meta_rest(pr, repo):
+    """The PR as the cloud reader reads it: head, body, and the issues GitHub records as linked from it.
+
+    The body only nominates candidates: the issues its closing keywords name (and the first line's, for the lane call).
+    Each is confirmed against GitHub's REST issue timeline (`recorded_links`); an unconfirmed one is not linked. Any
+    read that cannot be made whole leaves the links unreadable (`issueLinks`), never empty. The completeness limit:
+    only an issue the description names with a closing keyword can be found, so a link made in GitHub's Development
+    sidebar is not seen. A cross-reference from a PR with a non-default base counts too: the record only matches the
+    build's own issue to it, and it selects no launch."""
     d = _gh_json("api", _api(repo, f"pulls/{pr}"))
     try:
         body = d.get("body") or ""
-        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo),
-                "laneIssues": _closing_issues(body.split("\n", 1)[0], repo)}
+        head = d["head"]["sha"]
+        issues_c = _closing_issues(body, repo)
+        lane_c = _closing_issues(body.split("\n", 1)[0], repo)
     except (KeyError, TypeError, AttributeError):
         return None
+    confirmed = recorded_links(
+        issues_c, repo, pr,
+        lambda n: _gh_json("api", _api(repo, f"issues/{n}")),
+        lambda n: _read_pages(_api(repo, f"issues/{n}/timeline"))) if repo else None
+    if confirmed is None:
+        return {"head": head, "body": body, "issues": [], "laneIssues": [], "issueLinks": "unreadable"}
+    return {"head": head, "body": body, "issues": confirmed, "laneIssues": [n for n in lane_c if n in confirmed]}
 
 
 def _issue_body_rest(n, repo):
@@ -583,9 +678,35 @@ def _full_sha(value):
     return isinstance(value, str) and _FULL_SHA.fullmatch(value) is not None
 
 
+# An earlier record that cannot be read, as a history consumer meets it in place of the record: never absent, never
+# skipped. `UNREADABLE_RECORD` is its one key; its value names the comment's url and why it could not be read.
+UNREADABLE_RECORD = "unreadableRecord"
+
+
+def _unreadable_entry(url, detail):
+    return {UNREADABLE_RECORD: {"url": url, "detail": detail}}
+
+
+def _is_unreadable_entry(rec):
+    return isinstance(rec, dict) and UNREADABLE_RECORD in rec
+
+
+def _hash_failed(rec):
+    """True when the reader found `rec`'s posted text no longer matching a hash or length it recorded (its
+    `transitDamage` holds `sentHashMatches: False`, `hashMatches: False`, or a length that differs). Such a record is
+    still read and shown to the vet; it is never the authority a carry credits reviewers from."""
+    damage = rec.get("transitDamage") if isinstance(rec, dict) else None
+    if not isinstance(damage, dict):
+        return False
+    return (damage.get("sentHashMatches") is False or damage.get("hashMatches") is False
+            or ("recordedChars" in damage and damage.get("recordedChars") != damage.get("foundChars")))
+
+
 def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None, ci_state=None):
     """None when a record may carry `prior`'s reviewers for an empty returning round, else a short plain reason naming
     the first leg that fails. The one home of the carry rule: the session writer and the record writer both ask it.
+
+    Before every leg: when `prior` is an unreadable earlier record (`_unreadable_entry`), the reason names it.
 
     The legs, in order: `prior`'s final commit is `last_reviewed`; every finding of `prior` has an outcome; the
     returning-review decider (`decide`, default `returning_review.decide`), asked afresh from git, answers `changed`
@@ -593,6 +714,13 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     and a reviewer row of `prior` ran and covers its final commit. A fault in `decide` is a refusal. `ci_state`
     (`sha -> CI's state`), when given, is passed to `decide` as its CI reader, so a `prior` written with CI pending
     can count as finished."""
+    if _is_unreadable_entry(prior):
+        why = prior[UNREADABLE_RECORD].get("detail") if isinstance(prior[UNREADABLE_RECORD], dict) else None
+        return f"an earlier review record could not be read ({why}), so the record this session carried from cannot be checked"
+    # axis: a record whose posted text fails its own recorded hash is shown to the vet but never carried from — see bite-proof record i2658_review_record_links
+    if _hash_failed(prior):
+        return ("the earlier record's posted text fails the integrity check it recorded (its hash or length), "
+                "so its reviewers are not carried")
     final = prior.get("finalCommit") if isinstance(prior, dict) else None
     # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
     if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
@@ -649,17 +777,26 @@ def revalidated_copies(copies, repo_root, base, head):
 def carry_source(prior, last_reviewed, session_id, history):
     """The record a carry is judged against: `prior`, unless `prior` is this same session's own earlier carried record
     (same `sessionId`, a reviewer row carried from `last_reviewed`). A rewrite of that session then reads the record
-    that one carried from: the latest of `history` (the readable records older than `prior`, oldest first) whose final
+    that one carried from: the latest of `history` (the records older than `prior`, oldest first) whose final
     commit is `last_reviewed`. Only the writer's own reading of the posted records decides; no such record leaves
-    `prior`, which `carry_refusal` then refuses."""
+    `prior`, which `carry_refusal` then refuses. An unreadable record (`_unreadable_entry`) met before a match is
+    returned in its place, so the walk never looks past a record it could not read; `carry_refusal` then refuses
+    naming it."""
     rows = prior.get("reviewers") if isinstance(prior, dict) else None
     # axis: only this session's own carried record, read from the posted records, is looked through; another session's record at a later head still refuses — see bite-proof record c1l11d_wo_a_carried_review
     own = (isinstance(rows, list) and isinstance(session_id, str) and prior.get("sessionId") == session_id
            and any(isinstance(v, dict) and isinstance(v.get("carried"), dict) and v["carried"].get("commit") == last_reviewed
                    for v in rows))
-    if not own:
+    # axis: a damaged own record, or one whose findings list is malformed, is never read for what it carried from; it is the source, and carry_refusal refuses it
+    if not own or _hash_failed(prior) or not _findings_listed(prior):
         return prior
     for rec in reversed(history):
+        # axis: an earlier record that could not be read stops the walk, so a carry never looks past it to an older record — see bite-proof record i2658_review_record_links (G9)
+        if _is_unreadable_entry(rec):
+            return rec
+        # axis: a record that fails its recorded integrity check stops the walk before its commit is read, since that commit cannot be trusted to say it is not the record carried from; carry_refusal refuses it — see bite-proof record i2658_review_record_links
+        if _hash_failed(rec):
+            return rec
         final = rec.get("finalCommit") if isinstance(rec, dict) else None
         if isinstance(final, dict) and final.get("sha") == last_reviewed:
             return rec
@@ -1376,12 +1513,19 @@ def _lane_reason(text):
     return _REASON_LEAD_RE.sub("", text or "").strip() or None
 
 
+ISSUE_LINKS_UNREADABLE_LINE = (" The PR's linked issues could not be read, so no issue's lane call or build lane marker "
+                               "was matched to them.")
+
+
 def _lane(a, rd, meta):
     m = rd["lane_marker"](a.get("repoRoot"))
     hit, source = _lane_call(a, rd, meta)
-    if isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full" \
-            and m.get("branch") == m.get("currentBranch") and meta \
-            and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
+    unreadable = isinstance(meta, dict) and meta.get("issueLinks") == "unreadable"
+    disclosed = {"issueLinks": "unreadable"} if unreadable else {}
+    marker_full = (isinstance(m, dict) and m.get("schema") == build_lane.BUILD_LANE_SCHEMA and m.get("lane") == "full"
+                   and m.get("branch") == m.get("currentBranch") and meta)
+    # axis: a full build lane marker decides the lane only when its issue is one of the PR's linked issues; with the links unreadable it is never matched and never promotes the lane, and the session's own lane and evidence requirements stand — see bite-proof record i2658_review_record_links (G7)
+    if marker_full and not unreadable and str(m.get("issue")) in {str(n) for n in meta["issues"]}:
         # The marker decides the value only; a reason is shown with where it came from, never as a fact code holds.
         if hit and _lane_reason(hit.group(2)):
             reason, reason_source = _lane_reason(hit.group(2)), source
@@ -1389,10 +1533,11 @@ def _lane(a, rd, meta):
             reason, reason_source = a["laneReason"], SESSION
         else:
             reason, reason_source = None, None
-        return {"value": "full", "source": "build lane marker", "reason": reason, "reasonSource": reason_source}
+        return {"value": "full", "source": "build lane marker", "reason": reason, "reasonSource": reason_source,
+                **disclosed}
     if hit:
-        return {"value": hit.group(1), "source": source, "reason": _lane_reason(hit.group(2))}
-    return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
+        return {"value": hit.group(1), "source": source, "reason": _lane_reason(hit.group(2)), **disclosed}
+    return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"], **disclosed}
 
 
 _CAPPED_LANES = ("micro", "light")  # the lanes this writer holds to the round cap; the full lane's driver holds its own
@@ -1771,7 +1916,10 @@ def _test_lens(reviewers, findings, final_sha, other=None):
             "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
             # axis: the own count leaves out every carried finding, so a round that raised nothing reads zero — see bite-proof record i2338_carried_record
             "findings": own}
-    if carried:
+    # axis: with the earlier record unreadable, which findings were carried cannot be told, so the count is unavailable, never credited to this round — see bite-proof record i2658_review_record_links
+    if _is_unreadable_entry(other):
+        part["findings"] = None
+    elif carried:
         part["carriedFindings"] = carried
     # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
     if chosen and isinstance(chosen.get("carried"), dict):
@@ -2191,8 +2339,13 @@ def _drop_stale_open_marker(findings):
 def _earlier_session_record(prior, history, session_id):
     """The record of another session that the carried facts are read against: the first of `prior`, then `history`
     newest first, that is a record whose `sessionId` differs from ``session_id``; None when there is none. A rewrite of
-    this session's own record therefore looks past it to the record that session carried from."""
+    this session's own record therefore looks past it to the record that session carried from. An unreadable earlier
+    record (`_unreadable_entry`) met before one of another session stops the walk: the answer is that entry, which
+    holds no findings, so nothing is carried from behind it and the re-check can name it."""
     for rec in (prior, *reversed(list(history or ()))):
+        # axis: an earlier record that could not be read stops the walk, so a record older than it is never taken as the earlier one — see bite-proof record i2658_review_record_links (G10)
+        if _is_unreadable_entry(rec):
+            return rec
         # axis: the earlier record is the latest one of ANOTHER session, so a same-session rewrite looks past its own record — see bite-proof record i2338_carried_record
         if isinstance(rec, dict) and rec.get("sessionId") != session_id:
             return rec
@@ -2244,6 +2397,10 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
             why = f"the check found it still applies: {evidence}"
         elif settled == "unsettled":
             why = f"the check could not settle it: {evidence}"
+        # axis: an earlier record that could not be read is named as the reason, never read as an absent one — see bite-proof record i2658_review_record_links
+        elif _is_unreadable_entry(other):
+            detail = other[UNREADABLE_RECORD].get("detail") if isinstance(other[UNREADABLE_RECORD], dict) else None
+            why = f"an earlier review record could not be read ({detail}), so it cannot show this finding carried"
         # axis: a finding counts as carried only when the earlier record of another session lists it, for every outcome, never on this session's own record — see bite-proof record i2343_never_carried
         elif _key(f) not in other_keys:
             why = "not carried from an earlier record"
@@ -3387,7 +3544,9 @@ def _test_lens_line(r):
             + (f"; {_plural(findings, 'finding', 'findings')} raised"
                + (f" in this round, {_plural(carried_n, 'finding', 'findings')} carried over from an earlier review"
                   if carried_n else "")
-               if isinstance(findings, int) and not isinstance(findings, bool) else "")
+               if isinstance(findings, int) and not isinstance(findings, bool)
+               else "; its finding count is unavailable because an earlier review record could not be read"
+               if "findings" in part and findings is None else "")
             + ".")
 
 
@@ -3469,7 +3628,8 @@ def _summary(r, level):
         waits_text,
         *([listed_line] if listed_line else []),
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
-        + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
+        + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + "."
+        + (ISSUE_LINKS_UNREADABLE_LINE if lane.get("issueLinks") == "unreadable" else ""),
         floor_line,
         withheld_line,
         # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
@@ -3838,6 +3998,33 @@ def _unreadable_detail(latest, by_id):
     return f"{where}: the parts index is malformed"
 
 
+def _parsed(comment, by_id):
+    """The record `comment` parses to, or None when it does not parse or parsing raises."""
+    try:
+        return _parse_body(comment["body"], by_id)
+    except Exception:  # noqa: BLE001 — a body that raises while parsing is unreadable, not fatal
+        return None
+
+
+def _usable(comment, by_id):
+    """The parsed record of `comment` when it can be read: it parses to a dict and its findings list is well formed
+    (`_findings_listed`). None otherwise, and when parsing raises. The one readability test of `write` and
+    `read_history`."""
+    parsed = _parsed(comment, by_id)
+    return parsed if isinstance(parsed, dict) and _findings_listed(parsed) else None
+
+
+def _unreadable_summary(comment, by_id):
+    """A short phrase for why `comment`, a record comment `_usable` could not read, is unreadable."""
+    where = comment.get("url") or "the existing record"
+    try:
+        if isinstance(_parsed(comment, by_id), dict):
+            return f"{where}: the record's findings list is malformed"
+        return _unreadable_detail(comment, by_id)
+    except Exception as e:  # noqa: BLE001 — a detail that cannot be built still names the comment
+        return f"{where}: the record could not be read ({type(e).__name__})"
+
+
 def _comments(rd, pr, repo, failed="the PR comments could not be listed"):
     comments = rd["list_comments"](pr, repo)
     if comments is None:
@@ -3978,9 +4165,9 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
         latest = found[-1] if found else None
         prior, not_checked, history = None, [], []
         for c in found:
-            parsed = _parse_body(c["body"], by_id)
-            # a record whose findings list is malformed is as unreadable as one that does not parse
-            usable = parsed if parsed is not None and _findings_listed(parsed) else None
+            # a record whose findings list is malformed, or whose parsing raises, is as unreadable as one that does not parse
+            usable = _usable(c, by_id)
+            parsed = usable if usable is not None else _parsed(c, by_id)
             # axis: every earlier record code could not check (unreadable, changed in transit, or holding redacted
             # text) is listed on each new record, so a later write never hides it from the vet, who reads only the
             # latest record — see bite-proof record wo1_2121_redacted
@@ -4001,8 +4188,14 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
+                # axis: an unreadable latest record is the newest history entry, so the history walks stop at it instead of reading past it — see bite-proof record i2658_review_record_links
+                if usable is None:
+                    history.append(_unreadable_entry(c.get("url"), _unreadable_summary(c, by_id)))
+            # axis: an earlier record that could not be read stays in the history as an unreadable entry, so no consumer reads past it — see bite-proof record i2658_review_record_links (G8)
             elif usable is not None:
                 history.append(usable)
+            else:
+                history.append(_unreadable_entry(c.get("url"), _unreadable_summary(c, by_id)))
         missing = _unaccounted(prior, a["findings"])
         if missing:
             raise Refusal("review-record-unaccounted",
@@ -4010,7 +4203,8 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
         # the earlier readable records, newest first: the latest one this write reads, then the older ones
-        earlier = ([prior] if prior else []) + list(reversed(history))
+        # (an unreadable entry in the history holds no findings: it is left out here, and `earlier_unreadable` says so)
+        earlier = ([prior] if prior else []) + [h for h in reversed(history) if not _is_unreadable_entry(h)]
         earlier_unreadable = any(n["why"] == "unreadable" for n in not_checked)
         record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified,
                               derive_raiser=not from_session, earlier=earlier, earlier_unreadable=earlier_unreadable)
@@ -4057,17 +4251,20 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *,
 
 
 def read_history(pr, repo=None, readers=None):
-    """The readable records older than the latest one, oldest first, as [] when there are none or the comments cannot be
-    listed. The session writer asks it only to look through its own carried record (`carry_source`)."""
+    """Every record older than the latest one, oldest first: a record that reads (`_usable`) as its parsed dict, any
+    other as an unreadable entry (`_unreadable_entry`) in its place, so a consumer never reads past it. [] only when
+    the PR has no record older than the latest. When the comments cannot be listed, or any other fault occurs, the
+    answer is one unreadable entry, never []. The session writer asks it only to look through its own carried record
+    (`carry_source`)."""
     try:
         rd = _readers(readers)
         comments = _comments(rd, pr, repo)
         found = _marker_comments(comments)
         by_id = {c["id"]: c for c in comments}
-        parsed = [_parse_body(c["body"], by_id) for c in found[:-1]]
-        return [p for p in parsed if isinstance(p, dict)]
-    except Exception:  # noqa: BLE001 — fail closed: no history means no looking through
-        return []
+        # axis: an earlier record that does not read stays in the history as an unreadable entry, never dropped — see bite-proof record i2658_review_record_links (G8)
+        return [_usable(c, by_id) or _unreadable_entry(c.get("url"), _unreadable_summary(c, by_id)) for c in found[:-1]]
+    except Exception:  # noqa: BLE001 — fail closed: a history that cannot be read is one unreadable record, never none
+        return [_unreadable_entry(None, "the review record comments could not be listed")]
 
 
 def read(pr, repo=None, readers=None):
